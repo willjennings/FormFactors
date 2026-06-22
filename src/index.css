@@ -1,0 +1,125 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=Inter:wght@400;700&family=Roboto+Mono:ital,wght@0,100..700;1,100..700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-dm: "DM Sans", sans-serif;
+  --font-inter: "Inter", sans-serif;
+  --font-mono: "Roboto Mono", monospace;
+  --color-box-bg: #1C2938;
+}
+
+@variant dark (&:where(.dark, .dark *));
+
+:root {
+  --bg-color: #F8F9FC;
+  --card-bg: #ffffff;
+  --card-border: #E5E5E5;
+  --text-primary: #0f172a;
+  --text-secondary: #64748b;
+  --inverse-bg: #1a1a1a;
+  --inverse-text: #ffffff;
+  --dot-color: rgba(26, 26, 26, 0.15);
+  --accent-color: #1A74E8;
+  --inner-box-bg: #F8F9FC;
+}
+
+.dark {
+  --bg-color: #121212;
+  --card-bg: #1C2938;
+  --card-border: #2d3748;
+  --text-primary: #ffffff;
+  --text-secondary: #94a3b8;
+  --inverse-bg: #ffffff;
+  --inverse-text: #121212;
+  --dot-color: rgba(255, 255, 255, 0.15);
+  --accent-color: #0076F0;
+  --inner-box-bg: #0B1829;
+}
+
+body {
+  background-color: var(--bg-color);
+  color: var(--text-primary);
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+.bg-dots {
+  background-image: radial-gradient(var(--dot-color) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+.custom-cursor-active, .custom-cursor-active * {
+  cursor: none !important;
+}
+
+@keyframes glow-custom {
+  0% {
+    transform: scale(1);
+    opacity: 0.5;
+    filter: blur(12px) brightness(1);
+  }
+  50% {
+    transform: scale(1.15);
+    opacity: 0.8;
+    filter: blur(16px) brightness(1.2);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 0.5;
+    filter: blur(12px) brightness(1);
+  }
+}
+
+.cursor-glow-layer {
+  position: absolute;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  
+  /* Style 3 Gradient: Cyan -> Blue -> Purple */
+  background: linear-gradient(
+    to top right, 
+    #22d3ee, /* cyan-400 */
+    #3b82f6, /* blue-500 */
+    #a855f7  /* purple-500 */
+  );
+  
+  /* Apply the animation */
+  animation: glow-custom 3s ease-in-out infinite;
+  
+  /* Ensure it doesn't block mouse events */
+  pointer-events: none;
+  z-index: -1;
+  
+  /* Initial offset to align with the cursor tip */
+  left: 7px;
+  top: 7px;
+}
+
+@keyframes pulse-strong {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.1;
+  }
+}
+
+.animate-pulse-strong {
+  animation: pulse-strong 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@layer utilities {
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 4px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.2);
+  }
+}

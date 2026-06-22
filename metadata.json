@@ -1,0 +1,8 @@
+{
+  "name": "Remix: Remix: AI-Pointer: Find",
+  "description": "An interactive application using Gemini Live to interpret voice and pointing gestures to search for places visible within images",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": []
+}
