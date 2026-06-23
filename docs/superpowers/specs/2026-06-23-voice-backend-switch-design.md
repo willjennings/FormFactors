@@ -17,6 +17,8 @@ underneath swaps.
 ## Goals
 - A dropdown that switches the live session between **Gemini** and **RTV2 (OpenAI Realtime)**.
 - Both backends **speak** (re-enable Gemini voice playback) so the comparison is fair.
+- **Vision parity:** the model "sees" the annotated scene (photos/map + gold M1/M2 markers) on *both*
+  backends, so marker-based spatial reasoning ("from here to there", "from M1 to M2") works on each.
 - The honest-mode behavior layer is provider-agnostic — written once, driven by either backend.
 - OpenAI key stays **server-side**; the browser uses short-lived ephemeral tokens.
 
@@ -53,10 +55,13 @@ interface VoiceCallbacks {
 interface VoiceProvider {
   connect(config: VoiceSessionConfig, cb: VoiceCallbacks): Promise<void>;
   sendTextHint(text: string): void;          // inject context; MUST NOT force a model response
+  sendVideoFrame(jpegBase64: string): void;  // current annotated scene (markers); cadence is the adapter's call
   sendToolResponse(id: string, name: string, result: any): void;
   close(): void;
 }
 ```
+`sendVideoFrame` is called by the app's existing ~150ms frame loop at a fixed cadence; **each adapter
+decides what to do with it** (Gemini streams every frame; OpenAI samples — see Vision parity).
 
 ### Provider-agnostic layer (what stays put in App.tsx)
 - The system prompt builder (`POINTING_TRUTH_CONFIDENT/HONEST`, `CONFIDENT/HONEST_VERB_RULES`,
@@ -69,9 +74,23 @@ interface VoiceProvider {
   fed by `onToolCall`, responds via `providerRef.current.sendToolResponse(...)`.
 - Marker rendering, proposal card, share card, the S1–S7 task cards — unchanged.
 
-**App.tsx call-site changes (the only edits to existing logic):** route the ~6 `sessionRef.current.*`
+**App.tsx call-site changes (the only edits to existing logic):** route the existing `sessionRef.current.*`
 sites through the interface — text hints (deixis hints, `[SYSTEM UPDATE: layout]`,
-`[SYSTEM: TRIP PATTERN]`, the map-pointing system message), `sendToolResponse`, and `close()`.
+`[SYSTEM: TRIP PATTERN]`, the map-pointing system message), the ~150ms annotated-frame loop
+(`sendRealtimeInput({video})` → `sendVideoFrame`), `sendToolResponse`, and `close()`.
+
+### Vision parity (how each backend "sees" the markers)
+Today the app composites an offscreen canvas (the photos/map layout + gold **M1/M2** marker rings/labels)
+and streams it as JPEG **video** to Gemini Live every ~150ms (`sendFrequency`). That is how the model
+reads markers for spatial commands. The two backends consume this very differently:
+- **Gemini (`gemini.ts`):** unchanged — forward every `sendVideoFrame` as `sendRealtimeInput({ video:
+  { data, mimeType: 'image/jpeg' } })` at the current cadence.
+- **OpenAI (`openai.ts`):** the Realtime API takes **discrete images**, not a video stream, so the adapter
+  **buffers the latest frame** and emits it sparsely as a `conversation.item.create` `input_image`:
+  (a) a low-frequency heartbeat (≈ every 1.5–2 s), and (b) **coupled to deixis** — when `sendTextHint`
+  fires for a pointing hint, attach the latest buffered frame so the model sees the markers at the exact
+  moment the command is interpreted. This keeps the model visually grounded without flooding the
+  conversation with ~6 images/second. Cadence/coupling constants are tunable.
 
 ### OpenAI Realtime adapter (`openai.ts`, WebRTC)
 Auth + connect flow:
@@ -124,11 +143,20 @@ reaches the client. Returns a clear error if `OPENAI_API_KEY` is unset (the drop
   structured `fc.args`. The adapter normalizes both to `onToolCall({args})` as a parsed object.
 - **WebRTC setup fragility:** mic permissions, SDP exchange, autoplay policy for the `<audio>` element.
   Handle errors through `onError` and surface them in the existing error UI.
+- **Vision on OpenAI (second-biggest risk):** Realtime image input support, the right send cadence, added
+  latency, and token cost of frames. Mitigation: sparse heartbeat + deixis-coupled frames (above), keep
+  frames small (the existing JPEG is already low-res/quality 0.6), and verify image-in-Realtime against
+  current OpenAI docs at implementation time. If continuous-enough vision proves impractical, fall back to
+  deixis-coupled snapshots only — the text hints already carry the resolved landmark, so spatial commands
+  still function, just with less live visual grounding.
 
 ## Verification / testing
 - `npm run lint` (`tsc --noEmit`) clean and `npm run build` green after each step.
 - Live A/B: flip the dropdown and re-run **S1** (London Eye, acts immediately) and **S2** (St Pancras,
   asks) on **each** backend; confirm both speak.
+- **Vision check on both backends:** run **S4** ("from here to there", two markers) and confirm the model
+  resolves the markers / endpoints — i.e., the annotated frame is actually reaching and being used by each
+  model. On OpenAI, confirm frames are sent (debug panel) and not flooding.
 - Debug panel: confirm on RTV2 that input transcripts arrive, hints are sent, and tool calls
   (`update_map`/`show_directions`/`explain`/`synthesize`/`share`) fire and get responses.
 - Confirm the OpenAI key never appears in browser network traffic (only the ephemeral token does).
