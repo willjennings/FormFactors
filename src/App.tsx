@@ -22,7 +22,9 @@ import {
   MoreVertical,
   Sun,
   Moon,
-  Laptop
+  Laptop,
+  Shield,
+  ShieldCheck
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { CursorTrail, CursorResources } from './components/CursorEffects';
@@ -35,6 +37,9 @@ interface Marker {
   displayLabel: string;
   identifiedObject?: string;
   isConsumed?: boolean;
+  // Honest-mode rendering: a guess must never look like a confident success.
+  confidence?: 'high' | 'low';
+  candidates?: string[];
 }
 
 interface BBox {
@@ -66,27 +71,71 @@ const KEYWORD_MAP: Record<string, string> = {
   "they're": "there"
 };
 
+// Scenario cards the user scrolls through. The first three are the baseline capabilities;
+// the rest exercise the honest-mode behaviors (toggle Honest mode to see the contrast).
 const TASKS = [
   {
     id: 1,
     title: "Pinpointing",
-    description: "Find a location by pointing at an image and asking where it is.",
-    hint: 'Say "Where\'s this?"',
-    image: "https://www.gstatic.com/aistudio/ai-pointer-find/map_task_1.png"
+    description: "Point at a photo and ask where it is. When it's sure, it just shows you — no friction.",
+    hint: 'Say "Show me this on the map"',
+    image: "https://www.gstatic.com/aistudio/ai-pointer-find/the_london_eye.png"
   },
   {
     id: 2,
     title: "Discover what's nearby",
-    description: "Point at an image and ask to find locations nearby.",
-    hint: 'Say "Show me restaurants near here"',
+    description: "Point at a place and ask what's around it.",
+    hint: 'Say "Find hotels near here"',
     image: "https://www.gstatic.com/aistudio/ai-pointer-find/map_task_3.png"
   },
   {
     id: 3,
     title: "Point A to Point B",
-    description: "Pick two images. Point or circle them as you speak to get directions between them.",
-    hint: 'Say "How do I go from here, to there?"',
+    description: "Point at two photos as you speak. Directions send you walking, so Honest mode confirms both ends before routing.",
+    hint: 'Say "How do I get from here to there?"',
     image: "https://www.gstatic.com/aistudio/ai-pointer-find/circle-item.png"
+  },
+  {
+    id: 4,
+    title: "What is this?",
+    description: "Point at a photo and ask it to identify the landmark. It names it — and hedges when it isn't certain.",
+    hint: 'Say "What am I looking at?"',
+    image: "https://www.gstatic.com/aistudio/ai-pointer-find/westminster-abbey.png"
+  },
+  {
+    id: 5,
+    title: "The look-alike",
+    description: "St Pancras and King's Cross are near-identical neighbours. Point at St Pancras for directions — Honest mode asks which one you mean instead of silently guessing.",
+    hint: 'Say "Directions here from the London Eye"',
+    image: "https://www.gstatic.com/aistudio/ai-pointer-find/st_pancras_station.png"
+  },
+  {
+    id: 6,
+    title: "When it can't tell",
+    description: "Point at empty space or a cluttered spot and ask what it is. Instead of inventing an answer, it admits it isn't sure.",
+    hint: 'Say "What\'s that?"',
+    image: "https://www.gstatic.com/aistudio/ai-pointer-find/map_task_1.png"
+  },
+  {
+    id: 7,
+    title: "Plan a day",
+    description: "Point across a few photos and ask for a day plan. It proposes an itinerary as a suggestion and waits before building it.",
+    hint: 'Say "Plan me a day from these"',
+    image: "https://www.gstatic.com/aistudio/ai-pointer-find/hyde_park.png"
+  },
+  {
+    id: 8,
+    title: "It spots a pattern",
+    description: "Point at three or more places without asking for anything. Honest mode notices, offers to make an itinerary — and never builds it unless you say yes.",
+    hint: 'When it offers, say "Yes please"',
+    image: "https://www.gstatic.com/aistudio/ai-pointer-find/map_task_1.png"
+  },
+  {
+    id: 9,
+    title: "Share it",
+    description: "Ask it to send your plan to someone. Outward actions show exactly who and what before anything goes out.",
+    hint: 'Say "Share this with Lia"',
+    image: "https://www.gstatic.com/aistudio/ai-pointer-find/map_task_3.png"
   }
 ];
 
@@ -104,6 +153,67 @@ const INTERACTIVE_OBJECTS = [
   { name: "St Pancras Station", bbox: [0, 0, 0, 0] },
   { name: "Google Maps", bbox: [0, 0, 0, 0] }
 ];
+
+// --- DIFF 1: pointing confidence (demo-grade proxy) ---
+// This is NOT a perception-confidence model. It's a synthesized signal — a geometric
+// margin plus a seeded confusable-pairs table — sufficient to demonstrate the interaction
+// grammar (hint carries confidence → low confidence triggers an honest ask). See README.
+//
+// Seeded look-alike landmarks. St Pancras and King's Cross are adjacent, near-identical
+// Gothic façades — the real ambiguity that makes the honest-mode showcase honest.
+const CONFUSABLE_PAIRS: Record<string, string[]> = {
+  "St Pancras Station": ["King's Cross"],
+};
+
+type PointingConfidence = { level: 'high' | 'low'; candidates: string[]; reason: string };
+
+function computePointingConfidence(
+  foundObject: { name: string; bbox: number[] },
+  hX: number,
+  hY: number,
+  objects: { name: string; bbox: number[] }[]
+): PointingConfidence {
+  // 1. Seeded confusable pairs — the headline ambiguity (St Pancras ↔ King's Cross).
+  const confusables = CONFUSABLE_PAIRS[foundObject.name];
+  if (confusables && confusables.length) {
+    return {
+      level: 'low',
+      candidates: [foundObject.name, ...confusables],
+      reason: `seeded confusable — ${foundObject.name} looks like ${confusables.join(', ')}`,
+    };
+  }
+
+  // 2. Geometric: cursor sits inside more than one photo region → ambiguous overlap.
+  const containing = objects.filter(o => {
+    if (o.name === 'Google Maps') return false;
+    const [ymin, xmin, ymax, xmax] = o.bbox;
+    return hX >= xmin && hX <= xmax && hY >= ymin && hY <= ymax;
+  });
+  if (containing.length > 1) {
+    return {
+      level: 'low',
+      candidates: containing.map(o => o.name),
+      reason: `cursor inside ${containing.length} overlapping regions`,
+    };
+  }
+
+  // 3. Geometric: cursor near the edge of its region → shaky hit.
+  const [ymin, xmin, ymax, xmax] = foundObject.bbox;
+  const w = Math.max(1, xmax - xmin);
+  const h = Math.max(1, ymax - ymin);
+  const margin = Math.min(hX - xmin, xmax - hX, hY - ymin, ymax - hY);
+  const edgeThreshold = 0.1 * Math.min(w, h);
+  if (margin < edgeThreshold) {
+    return {
+      level: 'low',
+      candidates: [foundObject.name],
+      reason: `near region edge (margin ${Math.round(margin)} < ${Math.round(edgeThreshold)})`,
+    };
+  }
+
+  // 4. Clean hit inside a single region, no confusable → high.
+  return { level: 'high', candidates: [foundObject.name], reason: 'clean hit inside a single region' };
+}
 
 const PaintLayer = ({ paths, activePath, containerSize }: { paths: { x: number, y: number }[][], activePath: { x: number, y: number }[], containerSize: { width: number, height: number } }) => {
   const allPaths = [...paths];
@@ -210,6 +320,9 @@ export default function App() {
     }
   }, [isDarkMode]);
   const [showMarkings, setShowMarkings] = useState(false);
+  // honestMode === false → confident Google baseline (byte-for-byte unchanged).
+  // honestMode === true  → honest variant: hints carry confidence, ask when unsure.
+  const [honestMode, setHonestMode] = useState(false);
   const [enableVoiceFeedback, setEnableVoiceFeedback] = useState(true);
   const [voiceVolume, setVoiceVolume] = useState(1.0);
   const [audioStatus, setAudioStatus] = useState<'suspended' | 'running' | 'closed'>('suspended');
@@ -261,6 +374,22 @@ export default function App() {
     showMobileOverlayRef.current = showMobileOverlay;
   }, [showWelcome, showOnboarding, showRotateOverlay, showMobileOverlay]);
 
+  // honestMode is read live by the hint builder (Diff 1) and at connect time by the
+  // prompt selector (Diffs 2/3). Mirror it into a ref so both can read it without
+  // stale closures. If the user flips it mid-session, reconnect so the (system) prompt
+  // variant matches — the hint confidence already updates live.
+  const honestModeRef = useRef(honestMode);
+  const isInitialHonestSync = useRef(true);
+  useEffect(() => {
+    honestModeRef.current = honestMode;
+    if (isInitialHonestSync.current) { isInitialHonestSync.current = false; return; }
+    if (isLive && sessionRef.current) {
+      addLog('info', `Honest mode ${honestMode ? 'ON' : 'OFF'} — reconnecting to apply prompt variant...`);
+      sessionRef.current.close(); // onclose sets isLive=false
+      setTimeout(() => { startLiveSession(); }, 800);
+    }
+  }, [honestMode]);
+
   // Refs for logic
   const persistentCanvasRef = useRef<HTMLCanvasElement>(null);
   const traceCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -283,6 +412,10 @@ export default function App() {
   const hasPendingEditRef = useRef(false);
   const lastProcessedTranscriptionRef = useRef<string>("");
   const spatialDescriptionRef = useRef<string | null>(null);
+  // PHASE F (S6): distinct landmarks pointed at this session, + a one-shot guard so the proactive
+  // trip-pattern offer fires at most once.
+  const identifiedLandmarksRef = useRef<Set<string>>(new Set());
+  const hasOfferedTripRef = useRef(false);
 
   const [sendFrequency, setSendFrequency] = useState(150); // Increased frequency for better AI responsiveness
   const [currentTaskIndex, setCurrentTaskIndex] = useState(0);
@@ -291,6 +424,10 @@ export default function App() {
   const [mapQuery, setMapQuery] = useState("London");
   const [mapType, setMapType] = useState<'search' | 'directions'>('search');
   const [directions, setDirections] = useState<{ origin: string; destination: string } | null>(null);
+  // PHASE E: a synthesized itinerary proposed as a hypothesis, awaiting the user's confirm.
+  const [proposedItinerary, setProposedItinerary] = useState<{ places: string[]; plan?: string } | null>(null);
+  // PHASE G: an outward share request — witness recipient + payload before sending.
+  const [shareRequest, setShareRequest] = useState<{ recipient: string; payload?: string; confirmed: boolean } | null>(null);
   const [layoutBounds, setLayoutBounds] = useState<{
     photos: BBox;
     map: BBox;
@@ -1080,7 +1217,10 @@ CRITICAL CONSTRAINTS - ABSOLUTELY NO ZOOMING OR CROPPING:
   const startLiveSession = async () => {
     if (isLive) return; // Prevent multiple sessions
     lastTranscriptionTimeRef.current = 0;
-    
+    // PHASE F: fresh session → reset the trip-pattern tracking.
+    identifiedLandmarksRef.current = new Set();
+    hasOfferedTripRef.current = false;
+
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
         addLog('info', 'Missing GEMINI_API_KEY');
@@ -1109,6 +1249,31 @@ CRITICAL CONSTRAINTS - ABSOLUTELY NO ZOOMING OR CROPPING:
 
       const modelName = 'gemini-2.5-flash-native-audio-preview-12-2025';
       addLog('info', `Connecting to model: ${modelName}`);
+
+      // --- honestMode A/B harness: choose the POINTING LOGIC variant at connect time ---
+      const honest = honestModeRef.current;
+      addLog('info', `Prompt variant: ${honest ? 'HONEST (carries confidence, asks when unsure)' : 'CONFIDENT (Google baseline)'}`);
+
+      // The confident baseline: the hint is treated as ground truth (preserved unchanged).
+      const POINTING_TRUTH_CONFIDENT = `- The hints are the ABSOLUTE SOURCE OF TRUTH. If it says "London Eye", the user IS pointing at the London Eye.`;
+      // The honest variant (Diffs 2 + 3). Honesty scales with the situation along two axes:
+      // CONFIDENCE (how sure the hint is) and COMMITMENT (how consequential the verb is).
+      const POINTING_TRUTH_HONEST = `- The hints now carry a CONFIDENCE, e.g. "(confidence: high)" or "(confidence: low — could also be King's Cross)". Treat confidence as a first-class signal, NOT as absolute truth.
+- HIGH CONFIDENCE + a low-stakes "locate" request ("show me this", "where is this", "hotels near here"): act EXACTLY as you would normally — call update_map immediately with one short confirmation ("Here's the London Eye"). Do NOT ask, do NOT hedge. Being sure means staying fluid; asking when you already know is annoying.
+- LOW CONFIDENCE, or a hint that lists multiple candidates: do NOT call any tool yet. Ask ONE short disambiguating question in your tour-guide voice — e.g. "I think that's St Pancras — or did you mean King's Cross next door?" — then act on the user's answer. Never silently pick one of two plausible candidates.
+- HONEST UNCERTAINTY is a valid, first-class answer. You MAY say "I'm not certain which photo you mean" or "I think this is X, but I'm not sure." If the hint says "Nothing (Empty Space)" or you genuinely cannot tell what is being pointed at, give a brief honest shrug — "I'm not sure what you're pointing at — could you point again?" — and do NOT invent a landmark.
+- GRICEAN QUALITY (do not assert what you are unsure of): when confidence is low, HEDGE — say "I think that's St Pancras" rather than the flat assertion "Here's St Pancras."
+- COMMITMENT scales the friction, not just confidence. "show_directions" is HIGH-COMMITMENT — it sends the user walking — so before you call it, WITNESS-RENDER your interpretation: state BOTH resolved endpoints and get a quick confirm ("From Westminster to Hyde Park?") even when you are reasonably confident. If either endpoint is low-confidence, fold the disambiguation into that same question. Low-commitment "locate" requests do NOT get this gate — gating them would be nagging.`;
+
+      // Deeper-inference + proactivity rules, per mode.
+      const CONFIDENT_VERB_RULES = `DEEPER REQUESTS:
+- If the user sweeps across photos and asks to "plan a day" or "plan a trip from these", call synthesize(places, confirm=true) and build the itinerary right away.
+- If the user asks to "share this with <name>", call share(recipient, payload, confirm=true) and send it.`;
+      const HONEST_VERB_RULES = `DEEPER REQUESTS (honest — inference scales the verification loop UPSTREAM):
+- "Plan a day from these": call synthesize(places) WITHOUT confirm to PROPOSE an ordered itinerary as a hypothesis. Speak it briefly — e.g. "Rough order: Westminster, then the London Eye, then Hyde Park — about 5 hours. Want me to build it?" — then STOP. The proposal IS the answer. Only after the user explicitly says yes, call synthesize(places, confirm=true) to build. A synthesized plan is unverifiable until built, so confirm the PLAN before spending the work, because the inference is the part most likely to be wrong.
+- NEVER build or commit a plan unprompted.
+- PROACTIVE OFFERS: you normally stay silent until spoken to. The ONE exception: if you receive a [SYSTEM: TRIP PATTERN ...] message, you MAY make a single transparent offer that states your reasoning — e.g. "Looks like you're planning a London trip — want me to pull these into an itinerary?" — then STOP and wait. Notice → hypothesize transparently → ASK. Never act on an inferred intention without an explicit yes. Make this offer at most once.
+- OUTWARD ACTIONS are the highest commitment of all — they act on another person and can't be taken back. For "share this with <name>", call share(recipient, payload) WITHOUT confirm first to witness-render exactly WHO and WHAT goes out — "Send the London day plan to Lia?" — and wait. Only after an explicit yes, call share(recipient, payload, confirm=true). Never send to a person without showing the recipient and payload first.`;
 
       const sessionPromise = ai.live.connect({
         model: modelName,
@@ -1199,6 +1364,67 @@ CRITICAL CONSTRAINTS - ABSOLUTELY NO ZOOMING OR CROPPING:
                     id: fc.id,
                     name: fc.name,
                     receivedAt: Date.now()
+                  });
+                } else if (fc.name === 'explain') {
+                  // PHASE D: low-commitment, verbal-only. No map mutation. Ack immediately so the
+                  // model keeps speaking; the honest hedging lives in the prompt + the spoken answer.
+                  const args = fc.args as any;
+                  addLog('tool', `Tool Call: explain(${args.subject ?? ''}) - verbal only, no map change`);
+                  sessionRef.current?.sendToolResponse({
+                    functionResponses: [{ id: fc.id, name: fc.name, response: { success: true } }]
+                  });
+                } else if (fc.name === 'synthesize') {
+                  // PHASE E: propose -> confirm -> build. Without confirm, render the itinerary as a
+                  // hypothesis and DO NOT route. With confirm (after explicit user yes), build it.
+                  const args = fc.args as any;
+                  const places: string[] = Array.isArray(args.places) ? args.places.filter((p: any) => typeof p === 'string') : [];
+                  const plan: string | undefined = typeof args.plan === 'string' ? args.plan : undefined;
+                  const confirmed = args.confirm === true;
+
+                  if (!confirmed) {
+                    addLog('tool', `Tool Call: synthesize(propose) - ${places.join(' → ')}`);
+                    setProposedItinerary({ places, plan });
+                    sessionRef.current?.sendToolResponse({
+                      functionResponses: [{ id: fc.id, name: fc.name, response: { success: true, proposed: true } }]
+                    });
+                  } else {
+                    addLog('tool', `Tool Call: synthesize(build) - ${places.join(' → ')}`);
+                    const knownLocations = ["London Eye", "Hyde Park", "Westminster Abbey", "St Pancras Station"];
+                    const withCity = (p: string) =>
+                      knownLocations.some(loc => p.toLowerCase().includes(loc.toLowerCase())) && !p.toLowerCase().includes("london")
+                        ? `${p}, London` : p;
+                    if (places.length >= 2) {
+                      // Classic maps daddr supports a "to:" waypoint chain for the middle stops.
+                      const origin = withCity(places[0]);
+                      const destination = places.slice(1).map(withCity).join(' to: ');
+                      setMapType('directions');
+                      setDirections({ origin, destination });
+                    } else if (places.length === 1) {
+                      setMapType('search');
+                      setMapQuery(withCity(places[0]));
+                    }
+                    setProposedItinerary(null);
+                    markersRef.current = [];
+                    sessionRef.current?.sendToolResponse({
+                      functionResponses: [{ id: fc.id, name: fc.name, response: { success: true, built: true } }]
+                    });
+                  }
+                } else if (fc.name === 'share') {
+                  // PHASE G: outward action. Witness recipient + payload before sending; commit only
+                  // on explicit confirm. (Sending itself is simulated — no real outward integration.)
+                  const args = fc.args as any;
+                  const recipient = typeof args.recipient === 'string' ? args.recipient : '';
+                  const payload = typeof args.payload === 'string' ? args.payload : undefined;
+                  const confirmed = args.confirm === true;
+                  if (!confirmed) {
+                    addLog('tool', `Tool Call: share(witness) - to ${recipient}${payload ? `: ${payload}` : ''}`);
+                    setShareRequest({ recipient, payload, confirmed: false });
+                  } else {
+                    addLog('event', `Shared ${payload ?? 'item'} with ${recipient}`);
+                    setShareRequest({ recipient, payload, confirmed: true });
+                  }
+                  sessionRef.current?.sendToolResponse({
+                    functionResponses: [{ id: fc.id, name: fc.name, response: { success: true, sent: confirmed } }]
                   });
                 }
               }
@@ -1426,11 +1652,55 @@ CRITICAL CONSTRAINTS - ABSOLUTELY NO ZOOMING OR CROPPING:
                     addLog('info', `Identified: ${foundObject.name}`);
                   }
 
+                  // DIFF 1: compute a (demo-grade) confidence for this resolution and log it.
+                  // Computed in both modes so the signal is visible in the debug panel even on
+                  // the confident baseline (which deliberately ignores it).
+                  const confidence = computePointingConfidence(foundObject, hX, hY, interactiveObjectsRef.current);
+                  const otherCandidates = confidence.candidates.filter(c => c !== foundObject!.name);
+                  addLog('info', `Confidence: ${confidence.level.toUpperCase()} — ${confidence.reason}${otherCandidates.length ? ` (vs ${otherCandidates.join(', ')})` : ''}`);
+
+                  // PHASE B: thread confidence onto the most recent marker so the canvas can
+                  // render a guess differently from a confident hit (honest mode only).
+                  const markerForConfidence = markersRef.current[0];
+                  if (markerForConfidence && (Date.now() - markerForConfidence.timestamp < 1000)) {
+                    markerForConfidence.confidence = confidence.level;
+                    markerForConfidence.candidates = confidence.candidates;
+                  }
+
+                  // PHASE F (S6): accumulate distinct real landmarks. In honest mode, once enough
+                  // have been pointed at with no plan yet, authorize the model to make ONE
+                  // transparent itinerary offer (notice → hypothesize → ask, never build).
+                  if (foundObject.name !== 'Google Maps') {
+                    identifiedLandmarksRef.current.add(foundObject.name);
+                  }
+                  if (
+                    honestModeRef.current &&
+                    !hasOfferedTripRef.current &&
+                    !proposedItinerary &&
+                    identifiedLandmarksRef.current.size >= 3 &&
+                    sessionRef.current
+                  ) {
+                    hasOfferedTripRef.current = true;
+                    const tripPlaces = Array.from(identifiedLandmarksRef.current);
+                    addLog('event', `Trip pattern noticed: ${tripPlaces.join(', ')} — offering once`);
+                    sessionRef.current.sendRealtimeInput({
+                      text: `[SYSTEM: TRIP PATTERN — the user has now pointed at ${tripPlaces.join(', ')} without asking for a plan. You MAY make ONE short, transparent offer that states your reasoning, e.g. "Looks like you're planning a London trip — want me to pull these into an itinerary?", then STOP and wait. Do NOT build anything yet.]`
+                    });
+                  }
+
                   // SEND HINT TO GEMINI (CRITICAL: This was missing!)
                   if (sessionRef.current) {
                     const commandWords = ["show", "go", "directions", "where", "what", "search", "find", "how", "get", "near"];
                     const isCommand = commandWords.some(w => lowerText.includes(w));
-                    const hintText = `[USER JUST SAID "${kw.toUpperCase()}" WHILE POINTING AT: ${foundObject.name}. ${isCommand ? "NOTE: This is part of an explicit command." : "NOTE: This is just a mention, stay silent unless they give a command."}]`;
+                    // Honest mode threads confidence into the hint; the baseline hint is unchanged.
+                    const confidenceTag = honestModeRef.current
+                      ? (confidence.level === 'high'
+                          ? ' (confidence: high)'
+                          : otherCandidates.length
+                            ? ` (confidence: low — could also be ${otherCandidates.join(' or ')})`
+                            : ' (confidence: low — not certain this is the right photo)')
+                      : '';
+                    const hintText = `[USER JUST SAID "${kw.toUpperCase()}" WHILE POINTING AT: ${foundObject.name}${confidenceTag}. ${isCommand ? "NOTE: This is part of an explicit command." : "NOTE: This is just a mention, stay silent unless they give a command."}]`;
                     sessionRef.current.sendRealtimeInput({ text: hintText });
                   }
                 } else {
@@ -1489,6 +1759,43 @@ CRITICAL CONSTRAINTS - ABSOLUTELY NO ZOOMING OR CROPPING:
                   },
                   required: ['origin', 'destination']
                 }
+              },
+              {
+                name: 'explain',
+                description: 'Verbally name or describe what the user is pointing at (e.g. "what is this?", "what am I looking at?"). LOW-COMMITMENT: it does NOT change the map. Call it when the user asks to identify something rather than navigate.',
+                parameters: {
+                  type: Type.OBJECT,
+                  properties: {
+                    subject: { type: Type.STRING, description: 'The landmark or thing being identified.' }
+                  },
+                  required: ['subject']
+                }
+              },
+              {
+                name: 'synthesize',
+                description: 'Plan a multi-stop day itinerary from several landmarks (e.g. "plan a day from these"). Call WITHOUT confirm to PROPOSE the plan as a hypothesis first; call with confirm=true only after the user explicitly approves, to build the route.',
+                parameters: {
+                  type: Type.OBJECT,
+                  properties: {
+                    places: { type: Type.ARRAY, items: { type: Type.STRING }, description: 'Ordered list of stops for the day.' },
+                    plan: { type: Type.STRING, description: 'A short human-readable description of the proposed day (e.g. duration, order).' },
+                    confirm: { type: Type.BOOLEAN, description: 'Set true ONLY after the user has explicitly confirmed they want it built. Omit/false to first propose.' }
+                  },
+                  required: ['places']
+                }
+              },
+              {
+                name: 'share',
+                description: 'Share something (e.g. an itinerary) with another person (e.g. "share this with Lia"). OUTWARD, high-commitment action. Call WITHOUT confirm to witness-render the recipient and payload first; call with confirm=true only after the user explicitly approves sending.',
+                parameters: {
+                  type: Type.OBJECT,
+                  properties: {
+                    recipient: { type: Type.STRING, description: 'Who to send to.' },
+                    payload: { type: Type.STRING, description: 'A short description of what is being shared.' },
+                    confirm: { type: Type.BOOLEAN, description: 'Set true ONLY after the user has explicitly confirmed they want it sent. Omit/false to first witness-render.' }
+                  },
+                  required: ['recipient']
+                }
               }
             ]
           }],
@@ -1534,12 +1841,15 @@ USER CAPABILITIES:
 1. Point at a photo and ask "show me this on a map". You MUST identify which photo they are pointing at and call update_map(location_name).
 2. Point at two photos (e.g., "from here to there") and ask for directions. You MUST track the sequence of pointing and call show_directions(origin, destination).
 3. Point at a location (photo or map) and ask for nearby places (e.g., "hotels near here"). You MUST call update_map(query) with a query like "hotels near [Location Name]" or "hotels near [Current Map View]".
+4. Point at a photo and ask "what is this?" / "what am I looking at?". This is an IDENTIFICATION request — call explain(subject) and answer verbally by naming the landmark. Do NOT change the map for this.
+5. Sweep across several photos and ask to "plan a day" / "plan a trip from these". This is a SYNTHESIS request — call synthesize(places). See DEEPER REQUESTS below for how to handle it.
+6. Ask to "share this with <name>". This is an OUTWARD request — call share(recipient, payload). See DEEPER REQUESTS below for how to handle it.
 
 CRITICAL - POINTING LOGIC:
 - You will receive hints in the format: [USER JUST SAID "THIS" WHILE POINTING AT: Landmark Name].
 - When the user says "this", "here", "that", or "there", they are ALWAYS referring to the landmark mentioned in the [USER JUST SAID ...] message that arrived MOST RECENTLY BEFORE or DURING that specific word.
 - If the user is pointing at "Google Maps", they are referring to the area currently shown on the map (e.g., "hotels near here" means hotels near the current map view).
-- The hints are the ABSOLUTE SOURCE OF TRUTH. If it says "London Eye", the user IS pointing at the London Eye.
+${honest ? POINTING_TRUTH_HONEST : POINTING_TRUTH_CONFIDENT}
 - CRITICAL: For directions "from here to there", "here" is the landmark from the hint preceding "here", and "there" is the landmark from the hint preceding "there".
 - ALWAYS ignore landmarks from previous requests. Each time the user speaks a new command, start fresh with the pointing hints. Do NOT reuse locations from previous direction requests unless the user explicitly asks to "go back" or "use the same start".
 - If the hint says "Nothing (Empty Space)", ask the user to point at a photo.
@@ -1550,6 +1860,8 @@ CRITICAL - POINTING LOGIC:
 - CRITICAL: After you receive a tool response (success: true), do NOT speak again to confirm that you've done it. One verbal confirmation per action is enough.
 - If the user asks for directions, ensure you have both an origin and a destination.
 - DO NOT REPEAT YOURSELF. If you just confirmed an action, do not confirm it again.
+
+${honest ? HONEST_VERB_RULES : CONFIDENT_VERB_RULES}
 
 COORDINATE SYSTEM:
 - The entire view is 1000x1000.
@@ -1692,48 +2004,91 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
 
       // Markers no longer expire by time, they are cleared on image change
       // Keep markers visible during processing so the user sees where they pointed
-      markersRef.current.forEach(m => {
+      markersRef.current.forEach((m, mi) => {
           if (!m.displayLabel) return; // Hide markers without labels (e.g. from painting)
-          
+
           const age = now - m.timestamp;
           // Instant appearance as requested
           const alpha = 1;
-          const pulse = Math.sin(age * 0.008) * 8;
-          
+          // PHASE B: in honest mode, a low-confidence resolution is a GUESS, and a guess must
+          // never render like a confident success. Uncertain markers are amber, dashed, and
+          // carry a "?" + both candidate names; confident markers are today's solid gold.
+          const isUncertain = honestModeRef.current && m.confidence === 'low';
+          const pulse = Math.sin(age * (isUncertain ? 0.006 : 0.008)) * (isUncertain ? 12 : 8);
+
           // Map 0-1000 back to current canvas pixels
           // We use canvas.width/height directly to avoid stale closures
           const mx = (m.x / 1000) * canvas.width;
           const my = (m.y / 1000) * canvas.height;
 
-          // Glow field (#857FE7 - matching cursor trail)
-          const grad = ctx.createRadialGradient(mx, my, 2, mx, my, 35 + pulse);
-          grad.addColorStop(0, `rgba(255, 230, 0, ${alpha * 0.6})`);
-          grad.addColorStop(1, `rgba(255, 230, 0, 0)`);
-          ctx.fillStyle = grad;
-          ctx.beginPath();
-          ctx.arc(mx, my, 35 + pulse, 0, Math.PI * 2);
-          ctx.fill();
-
-          // Fireflies
-          for(let i=0; i<8; i++) {
-            const orbit = 12 + Math.sin(age * 0.003 + i) * 10;
-            const px = mx + Math.cos(age * 0.004 + i) * orbit;
-            const py = my + Math.sin(age * 0.004 + i * 1.2) * orbit;
+          if (isUncertain) {
+            const amber = '245, 158, 11';
+            // Soft amber glow (dimmer than the confident gold — this is a hedge, not a hit)
+            const grad = ctx.createRadialGradient(mx, my, 2, mx, my, 34 + pulse);
+            grad.addColorStop(0, `rgba(${amber}, ${alpha * 0.35})`);
+            grad.addColorStop(1, `rgba(${amber}, 0)`);
+            ctx.fillStyle = grad;
             ctx.beginPath();
-            ctx.arc(px, py, 1.2, 0, Math.PI * 2);
-            ctx.fillStyle = `rgba(255, 255, 200, ${alpha})`;
-            ctx.shadowBlur = 8;
-            ctx.shadowColor = "yellow";
+            ctx.arc(mx, my, 34 + pulse, 0, Math.PI * 2);
             ctx.fill();
-          }
-          ctx.shadowBlur = 0; // Reset shadow after fireflies
 
-          // Label - disappears after 2 seconds
-          if (age < 2000 && m.displayLabel) {
+            // Dashed, slowly rotating ring — reads as "searching / not sure", not "locked on"
+            ctx.save();
+            ctx.translate(mx, my);
+            ctx.rotate((age * 0.0006) % (Math.PI * 2));
+            ctx.setLineDash([6, 6]);
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = `rgba(${amber}, ${alpha})`;
+            ctx.beginPath();
+            ctx.arc(0, 0, 18 + Math.sin(age * 0.006) * 3, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.restore();
+            ctx.setLineDash([]);
+
+            // "?" badge at the center
+            ctx.fillStyle = `rgba(${amber}, ${alpha})`;
+            ctx.font = "bold 16px 'Roboto Mono', monospace";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText("?", mx, my);
+          } else {
+            // CONFIDENT (and the entire confident baseline): today's gold glow + fireflies.
+            const grad = ctx.createRadialGradient(mx, my, 2, mx, my, 35 + pulse);
+            grad.addColorStop(0, `rgba(255, 230, 0, ${alpha * 0.6})`);
+            grad.addColorStop(1, `rgba(255, 230, 0, 0)`);
+            ctx.fillStyle = grad;
+            ctx.beginPath();
+            ctx.arc(mx, my, 35 + pulse, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Fireflies
+            for(let i=0; i<8; i++) {
+              const orbit = 12 + Math.sin(age * 0.003 + i) * 10;
+              const px = mx + Math.cos(age * 0.004 + i) * orbit;
+              const py = my + Math.sin(age * 0.004 + i * 1.2) * orbit;
+              ctx.beginPath();
+              ctx.arc(px, py, 1.2, 0, Math.PI * 2);
+              ctx.fillStyle = `rgba(255, 255, 200, ${alpha})`;
+              ctx.shadowBlur = 8;
+              ctx.shadowColor = "yellow";
+              ctx.fill();
+            }
+            ctx.shadowBlur = 0; // Reset shadow after fireflies
+          }
+
+          // Label. Confident: the single displayLabel, fades after 2s. Uncertain: BOTH candidate
+          // names, each with a "?", and it persists while this is the active marker so it
+          // survives the disambiguating question.
+          const labelText = isUncertain
+            ? ((m.candidates && m.candidates.length)
+                ? m.candidates.map(c => `${c.toUpperCase()}?`).join('   ·   ')
+                : `${m.displayLabel.toUpperCase()}?`)
+            : m.displayLabel.toUpperCase();
+          const labelVisible = isUncertain ? (mi === 0) : (age < 2000);
+          if (labelVisible && m.displayLabel) {
             ctx.shadowBlur = 0;
-            const label = m.displayLabel.toUpperCase();
             ctx.font = "bold 9px 'Roboto Mono', monospace";
-            const textMetrics = ctx.measureText(label);
+            const textMetrics = ctx.measureText(labelText);
             const px = 6;
             const py = 3;
             const bw = textMetrics.width + px * 2;
@@ -1741,17 +2096,22 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
             const bx = mx - bw / 2;
             const by = my - 40;
 
-            // Rounded Box (#1a1a1a)
-            ctx.fillStyle = `rgba(26, 26, 26, ${alpha})`; 
+            // Rounded Box: near-black for confident, deep amber for uncertain.
+            ctx.fillStyle = isUncertain ? `rgba(120, 53, 15, ${alpha})` : `rgba(26, 26, 26, ${alpha})`;
             ctx.beginPath();
             const r = 4;
             ctx.roundRect(bx, by, bw, bh, r);
             ctx.fill();
+            if (isUncertain) {
+              ctx.lineWidth = 1;
+              ctx.strokeStyle = `rgba(245, 158, 11, ${alpha})`;
+              ctx.stroke();
+            }
 
-            ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+            ctx.fillStyle = isUncertain ? `rgba(254, 243, 199, ${alpha})` : `rgba(255, 255, 255, ${alpha})`;
             ctx.textAlign = "center";
             ctx.textBaseline = "middle";
-            ctx.fillText(label, mx, by + bh / 2);
+            ctx.fillText(labelText, mx, by + bh / 2);
           }
         });
 
@@ -2132,7 +2492,9 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
     setMapQuery("London");
     setMapType('search');
     setDirections(null);
-    
+    setProposedItinerary(null);
+    setShareRequest(null);
+
     const pCanvas = persistentCanvasRef.current;
     if (pCanvas) {
       const ctx = pCanvas.getContext('2d');
@@ -2400,6 +2762,33 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
 
           {/* Session Controls Box - Buttons */}
           <section className="shrink-0 bg-[var(--card-bg)] border border-[var(--card-border)] rounded-2xl p-6">
+            {/* Honest Mode toggle — the A/B switch (confident Google baseline vs honest) */}
+            <button
+              onClick={() => setHonestMode(h => !h)}
+              title={honestMode
+                ? "Honest mode ON — carries confidence, asks when a photo is ambiguous"
+                : "Confident baseline — treats every hint as absolute truth (Google default)"}
+              className={`w-full mb-4 flex items-center justify-between gap-3 px-4 py-3 rounded-2xl border transition-all ${
+                honestMode
+                  ? 'bg-green-500/10 border-green-500/40'
+                  : 'bg-[var(--inner-box-bg)] border-[var(--card-border)] hover:border-[var(--accent-color)]'
+              }`}
+            >
+              <div className="flex items-center gap-2.5 min-w-0">
+                {honestMode
+                  ? <ShieldCheck size={18} className="text-green-500 shrink-0" />
+                  : <Shield size={18} className="text-[var(--text-secondary)] shrink-0" />}
+                <div className="flex flex-col items-start min-w-0">
+                  <span className="text-[12px] font-bold text-[var(--text-primary)] leading-tight">Honest mode</span>
+                  <span className="text-[10px] font-mono text-[var(--text-secondary)] leading-tight truncate">
+                    {honestMode ? 'Asks when unsure' : 'Confident (Google baseline)'}
+                  </span>
+                </div>
+              </div>
+              <div className={`relative w-11 h-6 rounded-full shrink-0 transition-colors ${honestMode ? 'bg-green-500' : 'bg-slate-300 dark:bg-slate-600'}`}>
+                <div className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${honestMode ? 'translate-x-5' : 'translate-x-0'}`} />
+              </div>
+            </button>
             {!isLive ? (
               <button 
                 onClick={startLiveSession}
@@ -2449,6 +2838,56 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
               </p>
             </div>
           </section>
+
+          {/* PHASE E: Proposed itinerary — a hypothesis rendered as a visible artifact, awaiting
+              an explicit verbal confirm ("build it"). The output is the question, not the answer. */}
+          {proposedItinerary && (
+            <section className="shrink-0 bg-[var(--card-bg)] border border-amber-500/40 rounded-2xl p-6 animate-in fade-in slide-in-from-top-2 duration-300">
+              <div className="flex items-center gap-2 mb-3">
+                <Shield size={16} className="text-amber-500" />
+                <span className="text-[11px] font-mono font-bold uppercase tracking-widest text-amber-500">Proposed plan — not built yet</span>
+              </div>
+              <ol className="flex flex-col gap-2 mb-3">
+                {proposedItinerary.places.map((place, i) => (
+                  <li key={`${place}-${i}`} className="flex items-center gap-3 text-[var(--text-primary)]">
+                    <span className="w-5 h-5 shrink-0 rounded-full bg-amber-500/15 text-amber-500 text-[10px] font-mono font-bold flex items-center justify-center">{i + 1}</span>
+                    <span className="text-sm">{place}</span>
+                  </li>
+                ))}
+              </ol>
+              {proposedItinerary.plan && (
+                <p className="text-[11px] font-mono text-[var(--text-secondary)] mb-3 italic">{proposedItinerary.plan}</p>
+              )}
+              <p className="text-[11px] font-mono text-[var(--text-secondary)]">Say <span className="text-amber-500 font-bold">"build it"</span> to confirm, or keep talking to change it.</p>
+            </section>
+          )}
+
+          {/* PHASE G: Outward share — witness recipient + payload before sending (or a sent receipt). */}
+          {shareRequest && (
+            <section className={`shrink-0 bg-[var(--card-bg)] border rounded-2xl p-6 animate-in fade-in slide-in-from-top-2 duration-300 ${shareRequest.confirmed ? 'border-green-500/50' : 'border-amber-500/40'}`}>
+              <div className="flex items-center gap-2 mb-3">
+                {shareRequest.confirmed
+                  ? <CheckCircle size={16} className="text-green-500" />
+                  : <Shield size={16} className="text-amber-500" />}
+                <span className={`text-[11px] font-mono font-bold uppercase tracking-widest ${shareRequest.confirmed ? 'text-green-500' : 'text-amber-500'}`}>
+                  {shareRequest.confirmed ? 'Sent' : 'About to send — confirm'}
+                </span>
+              </div>
+              <div className="flex flex-col gap-1.5 mb-3">
+                <div className="flex items-center gap-2 text-sm text-[var(--text-primary)]">
+                  <span className="text-[10px] font-mono uppercase text-[var(--text-secondary)] w-16 shrink-0">To</span>
+                  <span className="font-semibold">{shareRequest.recipient}</span>
+                </div>
+                <div className="flex items-center gap-2 text-sm text-[var(--text-primary)]">
+                  <span className="text-[10px] font-mono uppercase text-[var(--text-secondary)] w-16 shrink-0">Payload</span>
+                  <span>{shareRequest.payload ?? 'this'}</span>
+                </div>
+              </div>
+              {!shareRequest.confirmed && (
+                <p className="text-[11px] font-mono text-[var(--text-secondary)]">Say <span className="text-amber-500 font-bold">"yes, send it"</span> to confirm.</p>
+              )}
+            </section>
+          )}
 
           {/* Control Center Box - Minimizable (Hidden for now) */}
             <div className={`hidden flex-col bg-[var(--card-bg)] border border-[var(--card-border)] shadow-lg rounded-2xl overflow-hidden transition-all duration-500 ease-in-out ${isDebugOpen ? 'flex-1' : 'h-[72px] shrink-0'}`}>
