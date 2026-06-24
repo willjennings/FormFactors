@@ -31,6 +31,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { CursorTrail, CursorResources } from './components/CursorEffects';
 import { createGeminiProvider } from './voice/gemini';
 import { createOpenAIRealtimeProvider } from './voice/openai';
+import { createAzureRealtimeProvider } from './voice/azure';
 
 // --- Types ---
 interface Marker {
@@ -1714,6 +1715,12 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
         console.error('Missing GEMINI_API_KEY');
         return;
     }
+    if (voiceBackendRef.current === 'azure' && (!process.env.AZURE_OPENAI_API_KEY || !process.env.AZURE_OPENAI_ENDPOINT)) {
+        const msg = 'Missing AZURE_OPENAI_API_KEY / AZURE_OPENAI_ENDPOINT — set them in .env.local and restart the dev server.';
+        setLastError(msg);
+        addLog('info', msg);
+        return;
+    }
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         const msg = "Your browser does not support microphone access or is blocking it. Please use a modern browser like Chrome or Edge over HTTPS.";
@@ -1734,10 +1741,19 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
       // GeminiProvider owns the live session + mic; audio playback and response/interruption
       // UI stay in this component via the callbacks below. onSessionReady mirrors the raw
       // session into sessionRef so the Gemini-only auxiliary features keep working.
-      providerRef.current = voiceBackendRef.current === 'openai'
-        ? createOpenAIRealtimeProvider()
-        : createGeminiProvider(apiKey!, (s) => { sessionRef.current = s; });
-      const voice = voiceBackendRef.current === 'openai' ? 'marin' : 'Zephyr';
+      const backend = voiceBackendRef.current;
+      providerRef.current =
+        backend === 'azure'
+          ? createAzureRealtimeProvider(
+              process.env.AZURE_OPENAI_ENDPOINT || '',
+              process.env.AZURE_REALTIME_DEPLOYMENT || 'gpt-realtime-2',
+              process.env.AZURE_OPENAI_API_KEY || '',
+              process.env.AZURE_TRANSCRIBE_DEPLOYMENT || undefined,
+            )
+          : backend === 'openai'
+            ? createOpenAIRealtimeProvider()
+            : createGeminiProvider(apiKey!, (s) => { sessionRef.current = s; });
+      const voice = backend === 'gemini' ? 'Zephyr' : backend === 'azure' ? 'alloy' : 'marin';
       await providerRef.current.connect(
         { instructions: buildInstructions(honest), tools: VOICE_TOOLS, voice },
         {
@@ -2695,7 +2711,7 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
                 className="text-[12px] font-mono bg-[var(--card-bg)] border border-[var(--card-border)] rounded-lg px-2 py-1 text-[var(--text-primary)]"
               >
                 <option value="gemini">Gemini</option>
-                <option value="openai">RTV2 (OpenAI Realtime)</option>
+                <option value="azure">RTV2 (Azure Realtime)</option>
               </select>
             </div>
             {!isLive ? (

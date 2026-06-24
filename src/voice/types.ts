@@ -41,4 +41,4 @@ export interface VoiceProvider {
   close: () => void;
 }
 
-export type ProviderKind = 'gemini' | 'openai';
+export type ProviderKind = 'gemini' | 'openai' | 'azure';

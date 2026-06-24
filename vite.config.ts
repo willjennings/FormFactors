@@ -9,6 +9,10 @@ export default defineConfig(({mode}) => {
     plugins: [react(), tailwindcss()],
     define: {
       'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
+      'process.env.AZURE_OPENAI_API_KEY': JSON.stringify(env.AZURE_OPENAI_API_KEY),
+      'process.env.AZURE_OPENAI_ENDPOINT': JSON.stringify(env.AZURE_OPENAI_ENDPOINT),
+      'process.env.AZURE_REALTIME_DEPLOYMENT': JSON.stringify(env.AZURE_REALTIME_DEPLOYMENT),
+      'process.env.AZURE_TRANSCRIBE_DEPLOYMENT': JSON.stringify(env.AZURE_TRANSCRIBE_DEPLOYMENT),
     },
     resolve: {
       alias: {
