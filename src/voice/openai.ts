@@ -68,6 +68,11 @@ export function createOpenAIRealtimeProvider(): VoiceProvider {
   return {
     async connect(config: VoiceSessionConfig, cb: VoiceCallbacks) {
       closed = false;
+      // Defensive: tear down any prior connection if connect() is called again without close().
+      try { dc?.close(); } catch { /* noop */ }
+      try { micStream?.getTracks().forEach((t) => t.stop()); } catch { /* noop */ }
+      try { pc?.close(); } catch { /* noop */ }
+      pc = null; dc = null;
       try {
         const tokenRes = await fetch('/api/realtime/session', {
           method: 'POST',

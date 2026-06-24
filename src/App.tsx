@@ -609,12 +609,10 @@ export default function App() {
         setInteractiveObjects(newInteractiveObjects);
         interactiveObjectsRef.current = newInteractiveObjects;
 
-        // Notify AI of the new layout if session is active
-        if (sessionRef.current) {
+        // Notify AI of the new layout if session is active (core context — both backends).
+        if (providerRef.current) {
           const layoutInfo = newInteractiveObjects.map(obj => `${obj.name}: [${obj.bbox.map(Math.round).join(', ')}]`).join('\n');
-          sessionRef.current.sendRealtimeInput({
-            text: `[SYSTEM UPDATE: The gallery photos have been rearranged and now overlap the Google Maps box. Here are their new coordinates (ymin, xmin, ymax, xmax):\n${layoutInfo}\nIMPORTANT: The photos are ON TOP of the map. If the user points at or circles an area that contains both a photo and the map, they are referring to the PHOTO. Use these to identify what the user is pointing at when they say "this" or "here". DO NOT RESPOND TO THIS UPDATE. STAY SILENT UNTIL THE USER SPEAKS.]`
-          });
+          providerRef.current.sendTextHint(`[SYSTEM UPDATE: The gallery photos have been rearranged and now overlap the Google Maps box. Here are their new coordinates (ymin, xmin, ymax, xmax):\n${layoutInfo}\nIMPORTANT: The photos are ON TOP of the map. If the user points at or circles an area that contains both a photo and the map, they are referring to the PHOTO. Use these to identify what the user is pointing at when they say "this" or "here". DO NOT RESPOND TO THIS UPDATE. STAY SILENT UNTIL THE USER SPEAKS.]`);
         }
       }
     };
@@ -2170,15 +2168,15 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
           const centerY = box.y + box.height / 2;
           addMarker("", centerX, centerY);
           
-          // Send a hint to Gemini about the marker
-          if (sessionRef.current) {
+          // Send a circle-gesture hint to whichever backend is live (core context).
+          if (providerRef.current) {
             const markerIndex = markersRef.current.length; // Approximate index
-            sessionRef.current.sendRealtimeInput({
-              text: `[SYSTEM: User circled an area on ${hoveredName} and a marker M${markerIndex} has been placed at [${Math.round(centerX)}, ${Math.round(centerY)}].]`
-            });
+            providerRef.current.sendTextHint(`[SYSTEM: User circled an area on ${hoveredName} and a marker M${markerIndex} has been placed at [${Math.round(centerX)}, ${Math.round(centerY)}].]`);
           }
 
-          // 3. Send to Gemini Live Session
+          // 3. Send the cropped circled region as an image turn. Gemini-only: this uses
+          // sendClientContent (no provider-interface equivalent); OpenAI relies on the
+          // sparse vision frames instead.
           if (sessionRef.current) {
             const [mime, data] = croppedUrl.split(',');
             const mimeType = mime.split(':')[1].split(';')[0];
