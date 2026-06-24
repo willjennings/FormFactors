@@ -645,11 +645,6 @@ export default function App() {
     return () => window.removeEventListener('resize', checkDevice);
   }, []);
 
-  useEffect(() => {
-    if (isLive && sessionRef.current) {
-      // Focus updates removed to prevent proactive map updates
-    }
-  }, [hoveredObject, isLive]);
 
   const mapUrl = mapType === 'search' 
     ? `https://www.google.com/maps?q=${encodeURIComponent(mapQuery)}&output=embed`
@@ -864,10 +859,8 @@ export default function App() {
     const isOnMap = topObject?.name === 'Google Maps';
     
     if (isOnMap) {
-      if (!isIdentification && sessionRef.current) {
-        sessionRef.current.sendRealtimeInput({
-          text: "[SYSTEM: The user tried to point at the map. Tell them: 'That's the map, try pointing at the camera roll instead'.]"
-        });
+      if (!isIdentification && providerRef.current) {
+        providerRef.current.sendTextHint("[SYSTEM: The user tried to point at the map. Tell them: 'That's the map, try pointing at the camera roll instead'.]");
       }
       return;
     }
@@ -1795,9 +1788,7 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
         if (lastTranscriptionTimeRef.current > 0 && timeSinceTranscription > 1500 && timeSinceReceived > 1000) {
           setActivePrompt(pendingEdit.prompt);
           executeImageEdit(pendingEdit.prompt, pendingEdit.bbox, pendingEdit.marker, pendingEdit.destMarker, pendingEdit.objectName);
-          sessionRef.current?.sendToolResponse({
-            functionResponses: [{ id: pendingEdit.id, name: pendingEdit.name, response: { result: "ok" } }]
-          });
+          providerRef.current?.sendToolResponse(pendingEdit.id, pendingEdit.name, { result: "ok" });
           setPendingEdit(null);
         }
       }
@@ -2110,10 +2101,8 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
     }
 
     if (isActuallyOnMap) {
-      if (sessionRef.current) {
-        sessionRef.current.sendRealtimeInput({
-          text: "[SYSTEM: The user tried to interact with the map directly. Tell them: 'That's the map, try pointing at the camera roll instead'.]"
-        });
+      if (providerRef.current) {
+        providerRef.current.sendTextHint("[SYSTEM: The user tried to interact with the map directly. Tell them: 'That's the map, try pointing at the camera roll instead'.]");
       }
       return;
     }
