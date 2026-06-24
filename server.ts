@@ -20,23 +20,29 @@ async function startServer() {
       const r = await fetch("https://api.openai.com/v1/realtime/client_secrets", {
         method: "POST",
         headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+        // GA Realtime API: the session config must be nested under a `session`
+        // object with `type: "realtime"`. (Older/beta shape put these at the top
+        // level of the body, which the GA client_secrets endpoint rejects.)
         body: JSON.stringify({
-          model: req.body?.model ?? "gpt-realtime-2",
-          instructions: req.body?.instructions,
-          tools: (req.body?.tools ?? []).map((t: any) => ({
-            type: "function",
-            name: t.name,
-            description: t.description,
-            parameters: t.parameters,
-          })),
-          output_modalities: ["audio", "text"],
-          audio: {
-            input: {
-              transcription: { model: "gpt-4o-transcribe" },
-              turn_detection: { type: "server_vad" },
-            },
-            output: {
-              voice: req.body?.voice ?? "marin",
+          session: {
+            type: "realtime",
+            model: req.body?.model ?? "gpt-realtime-2",
+            instructions: req.body?.instructions,
+            tools: (req.body?.tools ?? []).map((t: any) => ({
+              type: "function",
+              name: t.name,
+              description: t.description,
+              parameters: t.parameters,
+            })),
+            output_modalities: ["audio", "text"],
+            audio: {
+              input: {
+                transcription: { model: "gpt-4o-transcribe" },
+                turn_detection: { type: "server_vad" },
+              },
+              output: {
+                voice: req.body?.voice ?? "marin",
+              },
             },
           },
         }),
