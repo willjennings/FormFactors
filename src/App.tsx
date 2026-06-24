@@ -6,7 +6,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import confetti from 'canvas-confetti';
 import { GoogleGenAI, Modality, Type, GenerateContentResponse } from '@google/genai';
-import type { VoiceTool } from './voice/types';
+import type { VoiceTool, VoiceProvider } from './voice/types';
 import { 
   Mic, 
   MicOff, 
@@ -427,6 +427,7 @@ export default function App() {
   const cursorHistoryRef = useRef<{x: number, y: number, t: number, hovered: string | null}[]>([]);
   const markersRef = useRef<Marker[]>([]);
   const sessionRef = useRef<any>(null);
+  const providerRef = useRef<VoiceProvider | null>(null);
   const lastTranscriptionTimeRef = useRef(0);
   const lastMarkerTimeRef = useRef<Record<string, number>>({});
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -1338,6 +1339,362 @@ COORDINATE SYSTEM:
 When the user points and speaks a command, respond cheerfully like a tour guide and use the tools to update the map.`;
   };
 
+  const handleVoiceToolCall = (call: { id: string; name: string; args: any }) => {
+    const fc = { id: call.id, name: call.name, args: call.args };
+    if (fc.name === 'update_map') {
+      const args = fc.args as any;
+      let query = args.query;
+      // Append London to known locations for better search accuracy
+      const knownLocations = ["London Eye", "Hyde Park", "Westminster Abbey", "St Pancras Station"];
+      if (knownLocations.some(loc => query.toLowerCase().includes(loc.toLowerCase()))) {
+        if (!query.toLowerCase().includes("london")) {
+          query += ", London";
+        }
+      }
+
+      addLog('tool', `Tool Call: update_map(${query}) - Queued for silence`);
+
+      setPendingMapUpdate({
+        type: 'search',
+        query,
+        id: fc.id,
+        name: fc.name,
+        receivedAt: Date.now()
+      });
+    } else if (fc.name === 'show_directions') {
+      const args = fc.args as any;
+      let origin = args.origin;
+      let destination = args.destination;
+      const knownLocations = ["London Eye", "Hyde Park", "Westminster Abbey", "St Pancras Station"];
+
+      if (knownLocations.some(loc => origin.toLowerCase().includes(loc.toLowerCase())) && !origin.toLowerCase().includes("london")) {
+        origin += ", London";
+      }
+      if (knownLocations.some(loc => destination.toLowerCase().includes(loc.toLowerCase())) && !destination.toLowerCase().includes("london")) {
+        destination += ", London";
+      }
+
+      addLog('tool', `Tool Call: show_directions(${origin} to ${destination}) - Queued for silence`);
+
+      setPendingMapUpdate({
+        type: 'directions',
+        origin,
+        destination,
+        id: fc.id,
+        name: fc.name,
+        receivedAt: Date.now()
+      });
+    } else if (fc.name === 'explain') {
+      // PHASE D: low-commitment, verbal-only. No map mutation. Ack immediately so the
+      // model keeps speaking; the honest hedging lives in the prompt + the spoken answer.
+      const args = fc.args as any;
+      addLog('tool', `Tool Call: explain(${args.subject ?? ''}) - verbal only, no map change`);
+      providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true });
+    } else if (fc.name === 'synthesize') {
+      // PHASE E: propose -> confirm -> build. Without confirm, render the itinerary as a
+      // hypothesis and DO NOT route. With confirm (after explicit user yes), build it.
+      const args = fc.args as any;
+      const places: string[] = Array.isArray(args.places) ? args.places.filter((p: any) => typeof p === 'string') : [];
+      const plan: string | undefined = typeof args.plan === 'string' ? args.plan : undefined;
+      const confirmed = args.confirm === true;
+
+      if (!confirmed) {
+        addLog('tool', `Tool Call: synthesize(propose) - ${places.join(' → ')}`);
+        setProposedItinerary({ places, plan });
+        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true, proposed: true });
+      } else {
+        addLog('tool', `Tool Call: synthesize(build) - ${places.join(' → ')}`);
+        const knownLocations = ["London Eye", "Hyde Park", "Westminster Abbey", "St Pancras Station"];
+        const withCity = (p: string) =>
+          knownLocations.some(loc => p.toLowerCase().includes(loc.toLowerCase())) && !p.toLowerCase().includes("london")
+            ? `${p}, London` : p;
+        if (places.length >= 2) {
+          // Classic maps daddr supports a "to:" waypoint chain for the middle stops.
+          const origin = withCity(places[0]);
+          const destination = places.slice(1).map(withCity).join(' to: ');
+          setMapType('directions');
+          setDirections({ origin, destination });
+        } else if (places.length === 1) {
+          setMapType('search');
+          setMapQuery(withCity(places[0]));
+        }
+        setProposedItinerary(null);
+        markersRef.current = [];
+        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true, built: true });
+      }
+    } else if (fc.name === 'share') {
+      // PHASE G: outward action. Witness recipient + payload before sending; commit only
+      // on explicit confirm. (Sending itself is simulated — no real outward integration.)
+      const args = fc.args as any;
+      const recipient = typeof args.recipient === 'string' ? args.recipient : '';
+      const payload = typeof args.payload === 'string' ? args.payload : undefined;
+      const confirmed = args.confirm === true;
+      if (!confirmed) {
+        addLog('tool', `Tool Call: share(witness) - to ${recipient}${payload ? `: ${payload}` : ''}`);
+        setShareRequest({ recipient, payload, confirmed: false });
+      } else {
+        addLog('event', `Shared ${payload ?? 'item'} with ${recipient}`);
+        setShareRequest({ recipient, payload, confirmed: true });
+      }
+      providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true, sent: confirmed });
+    }
+  };
+
+  const processInputTranscript = (text: string) => {
+    addLog('info', `User: "${text}"`);
+    lastTranscriptionTimeRef.current = Date.now();
+
+    // Clean transcription: remove <noise>, [noise], (noise), *noise*, etc.
+    const cleanedText = text
+      .replace(/<[^>]*>/g, '')
+      .replace(/\[[^\]]*\]/g, '')
+      .replace(/\([^)]*\)/g, '')
+      .replace(/\*[^*]*\*/g, '')
+      // Only allow English letters, numbers, spaces, and standard punctuation
+      .replace(/[^a-zA-Z0-9\s.,?!'":;-]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (!cleanedText) return;
+
+    // Smart accumulation: show the whole sentence instead of flashing words
+    const prevText = lastProcessedTranscriptionRef.current || "";
+    let currentText = cleanedText;
+
+    const lowerPrev = prevText.toLowerCase().trim();
+    const lowerNext = cleanedText.toLowerCase().trim();
+
+    // If the new text doesn't already start with the old text, append it
+    if (lowerPrev && !lowerNext.startsWith(lowerPrev)) {
+      currentText = prevText + " " + cleanedText;
+    }
+
+    setLiveTranscription(currentText);
+
+    if (transcriptionTimeoutRef.current) clearTimeout(transcriptionTimeoutRef.current);
+    transcriptionTimeoutRef.current = setTimeout(() => {
+      setLiveTranscription("");
+      lastProcessedTranscriptionRef.current = "";
+    }, 3000);
+
+    const lowerText = currentText.toLowerCase();
+    const prevLowerText = lowerPrev;
+
+    // Update ref for next turn comparison
+    lastProcessedTranscriptionRef.current = currentText;
+
+    const detectedKeywords: string[] = [];
+    let tempText = lowerText;
+    let tempPrevText = prevLowerText;
+
+    const countOccurrences = (str: string, word: string) => {
+      const regex = new RegExp(`\\b${word}\\b`, 'g');
+      return (str.match(regex) || []).length;
+    };
+
+    // Only detect keywords that are NEW in this transcription update
+    SORTED_KEYWORDS.forEach(kw => {
+      const currentCount = countOccurrences(tempText, kw);
+      const prevCount = countOccurrences(tempPrevText, kw);
+      const newCount = Math.max(0, currentCount - prevCount);
+
+      for (let i = 0; i < newCount; i++) {
+        detectedKeywords.push(kw);
+      }
+
+      // "Consume" this keyword so shorter ones don't match the same text
+      const regex = new RegExp(`\\b${kw}\\b`, 'g');
+      tempText = tempText.replace(regex, ' '.repeat(kw.length));
+      tempPrevText = tempPrevText.replace(regex, ' '.repeat(kw.length));
+    });
+
+    lastProcessedTranscriptionRef.current = text;
+
+    detectedKeywords.forEach((kw, index) => {
+      const canonicalLabel = KEYWORD_MAP[kw] || kw;
+
+      // COORDINATE DETECTION (Density-based Focus Point Algorithm):
+      // Transcription arrives with latency (usually 1-2 seconds).
+      // We look for the "Focus Point" - the place where the user's cursor was most
+      // concentrated in a sliding window.
+      // If multiple keywords arrive, we offset the windows to match the temporal order of speech.
+      const now = Date.now();
+      const totalKws = detectedKeywords.length;
+      const offset = (totalKws - 1 - index) * 1000; // Increased to 1s for better separation of "here" and "there"
+      const lookbackStart = now - 2500 - offset;   // Slightly wider lookback for latency
+      const lookbackEnd = now - offset;
+
+      const windowEntries = cursorHistoryRef.current.filter(h => h.t >= lookbackStart && h.t <= lookbackEnd);
+
+      // 1. HISTORY PURPLE TEXT CHECK (Prioritize what was hovered DURING the speech window)
+      const hoveredCounts: Record<string, number> = {};
+      windowEntries.forEach(entry => {
+        if (entry.hovered && entry.hovered !== 'Google Maps') {
+          hoveredCounts[entry.hovered] = (hoveredCounts[entry.hovered] || 0) + 1;
+        }
+      });
+
+      let mostFrequentHovered: string | null = null;
+      let maxCount = 0;
+      for (const [name, count] of Object.entries(hoveredCounts)) {
+        if (count > maxCount) {
+          maxCount = count;
+          mostFrequentHovered = name;
+        }
+      }
+
+      let foundObject = mostFrequentHovered
+        ? interactiveObjectsRef.current.find(obj => obj.name === mostFrequentHovered) || null
+        : null;
+
+      if (foundObject) {
+        addLog('info', `Using historical "Purple Text": ${foundObject.name}`);
+      }
+
+      // 2. DIRECT PURPLE TEXT CHECK (Only for the very latest keyword if history is sparse)
+      if (!foundObject && index === totalKws - 1 && hoveredObjectRef.current && hoveredObjectRef.current !== 'Google Maps') {
+        foundObject = interactiveObjectsRef.current.find(obj => obj.name === hoveredObjectRef.current) || null;
+        if (foundObject) {
+          addLog('info', `Using current "Purple Text" for latest keyword: ${foundObject.name}`);
+        }
+      }
+
+      let focusPoint = cursorRef.current;
+
+      // PREFER ACTIVE PAINTING (Maximum accuracy for "drawn over/circled")
+      if (isPainting && pointerPath.length > 0) {
+        focusPoint = pointerPath[pointerPath.length - 1];
+        addLog('info', 'Using active painting point for marker');
+      } else if (persistentPaths.length > 0) {
+        // Use center of most recent persistent path if it's very recent
+        const lastPath = persistentPaths[persistentPaths.length - 1];
+        const centerX = lastPath.reduce((sum, p) => sum + p.x, 0) / lastPath.length;
+        const centerY = lastPath.reduce((sum, p) => sum + p.y, 0) / lastPath.length;
+        focusPoint = { x: centerX, y: centerY };
+        addLog('info', 'Using center of recent persistent path for marker');
+      } else if (windowEntries.length > 0) {
+        // Fallback to density-based focus point if no hovered object found
+        let maxNeighbors = -1;
+        let bestPoint = windowEntries[windowEntries.length - 1];
+
+        for (let i = 0; i < windowEntries.length; i++) {
+          let neighbors = 0;
+          for (let j = 0; j < windowEntries.length; j++) {
+            const dist = Math.sqrt(
+              Math.pow(windowEntries[i].x - windowEntries[j].x, 2) +
+              Math.pow(windowEntries[i].y - windowEntries[j].y, 2)
+            );
+            if (dist < 15) neighbors++;
+          }
+          if (neighbors > maxNeighbors) {
+            maxNeighbors = neighbors;
+            bestPoint = windowEntries[i];
+          }
+        }
+        focusPoint = bestPoint;
+      } else if (cursorHistoryRef.current.length > 0) {
+        // Fallback to last known point if no history in window
+        focusPoint = cursorHistoryRef.current[cursorHistoryRef.current.length - 1];
+      }
+
+      // ADD MARKER IMMEDIATELY
+      addMarker(canonicalLabel, focusPoint.x, focusPoint.y);
+      addLog('info', `Marker added for "${kw}"`);
+
+      const isDestination = [
+        "here", "there", "hear", "hair", "their", "they're", "that",
+        "this spot", "that spot", "right here", "right there"
+      ].includes(kw);
+
+      // RESET SPATIAL DESCRIPTION IF NEW INTERACTION STARTS
+      if (!isDestination) {
+        spatialDescriptionRef.current = null;
+      }
+
+      const hX = Math.round(focusPoint.x);
+      const hY = Math.round(focusPoint.y);
+
+      // Final check for object at focus point if still unknown
+      if (!foundObject) {
+        foundObject = interactiveObjectsRef.current.find(obj => {
+          const [ymin, xmin, ymax, xmax] = obj.bbox;
+          const padding = 5; // Reduced from 15 for stricter, non-guessy detection
+          return hX >= (xmin - padding) && hX <= (xmax + padding) && hY >= (ymin - padding) && hY <= (ymax + padding);
+        });
+      }
+
+      if (foundObject) {
+        // Attach the object name to the marker
+        const lastM = markersRef.current[0];
+        if (lastM && (Date.now() - lastM.timestamp < 1000)) {
+          lastM.identifiedObject = foundObject.name;
+          addLog('info', `Identified: ${foundObject.name}`);
+        }
+
+        // DIFF 1: compute a (demo-grade) confidence for this resolution and log it.
+        // Computed in both modes so the signal is visible in the debug panel even on
+        // the confident baseline (which deliberately ignores it).
+        const confidence = computePointingConfidence(foundObject, hX, hY, interactiveObjectsRef.current);
+        const otherCandidates = confidence.candidates.filter(c => c !== foundObject!.name);
+        addLog('info', `Confidence: ${confidence.level.toUpperCase()} — ${confidence.reason}${otherCandidates.length ? ` (vs ${otherCandidates.join(', ')})` : ''}`);
+
+        // PHASE B: thread confidence onto the most recent marker so the canvas can
+        // render a guess differently from a confident hit (honest mode only).
+        const markerForConfidence = markersRef.current[0];
+        if (markerForConfidence && (Date.now() - markerForConfidence.timestamp < 1000)) {
+          markerForConfidence.confidence = confidence.level;
+          markerForConfidence.candidates = confidence.candidates;
+        }
+
+        // PHASE F (S6): accumulate distinct real landmarks. In honest mode, once enough
+        // have been pointed at with no plan yet, authorize the model to make ONE
+        // transparent itinerary offer (notice → hypothesize → ask, never build).
+        if (foundObject.name !== 'Google Maps') {
+          identifiedLandmarksRef.current.add(foundObject.name);
+        }
+        if (
+          honestModeRef.current &&
+          !hasOfferedTripRef.current &&
+          !proposedItinerary &&
+          identifiedLandmarksRef.current.size >= 3 &&
+          sessionRef.current
+        ) {
+          hasOfferedTripRef.current = true;
+          const tripPlaces = Array.from(identifiedLandmarksRef.current);
+          addLog('event', `Trip pattern noticed: ${tripPlaces.join(', ')} — offering once`);
+          providerRef.current?.sendTextHint(`[SYSTEM: TRIP PATTERN — the user has now pointed at ${tripPlaces.join(', ')} without asking for a plan. You MAY make ONE short, transparent offer that states your reasoning, e.g. "Looks like you're planning a London trip — want me to pull these into an itinerary?", then STOP and wait. Do NOT build anything yet.]`);
+        }
+
+        // SEND HINT TO GEMINI (CRITICAL: This was missing!)
+        if (sessionRef.current) {
+          const commandWords = ["show", "go", "directions", "where", "what", "search", "find", "how", "get", "near"];
+          const isCommand = commandWords.some(w => lowerText.includes(w));
+          // Honest mode threads confidence into the hint; the baseline hint is unchanged.
+          const confidenceTag = honestModeRef.current
+            ? (confidence.level === 'high'
+                ? ' (confidence: high)'
+                : otherCandidates.length
+                  ? ` (confidence: low — could also be ${otherCandidates.join(' or ')})`
+                  : ' (confidence: low — not certain this is the right photo)')
+            : '';
+          const hintText = `[USER JUST SAID "${kw.toUpperCase()}" WHILE POINTING AT: ${foundObject.name}${confidenceTag}. ${isCommand ? "NOTE: This is part of an explicit command." : "NOTE: This is just a mention, stay silent unless they give a command."}]`;
+          providerRef.current?.sendTextHint(hintText);
+        }
+      } else {
+        // SEND "NOTHING" HINT TO PREVENT GUESSING
+        if (sessionRef.current) {
+          providerRef.current?.sendTextHint(`[USER JUST SAID "${kw.toUpperCase()}" WHILE POINTING AT: Nothing (Empty Space). Ask them to point at a photo or the map.]`);
+        }
+      }
+
+      // AGENT 1: SPATIAL ANALYST REMOVED
+      // (This was for image editing which is not used in this map/gallery app)
+      if (isDestination) {
+        spatialDescriptionRef.current = null;
+      }
+    });
+  };
+
   const startLiveSession = async () => {
     if (isLive) return; // Prevent multiple sessions
     lastTranscriptionTimeRef.current = 0;
@@ -1424,113 +1781,7 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
                 addLog('info', 'Ignoring tool call before first transcription');
                 return;
               }
-              for (const fc of msg.toolCall.functionCalls) {
-                if (fc.name === 'update_map') {
-                  const args = fc.args as any;
-                  let query = args.query;
-                  // Append London to known locations for better search accuracy
-                  const knownLocations = ["London Eye", "Hyde Park", "Westminster Abbey", "St Pancras Station"];
-                  if (knownLocations.some(loc => query.toLowerCase().includes(loc.toLowerCase()))) {
-                    if (!query.toLowerCase().includes("london")) {
-                      query += ", London";
-                    }
-                  }
-                  
-                  addLog('tool', `Tool Call: update_map(${query}) - Queued for silence`);
-
-                  setPendingMapUpdate({
-                    type: 'search',
-                    query,
-                    id: fc.id,
-                    name: fc.name,
-                    receivedAt: Date.now()
-                  });
-                } else if (fc.name === 'show_directions') {
-                  const args = fc.args as any;
-                  let origin = args.origin;
-                  let destination = args.destination;
-                  const knownLocations = ["London Eye", "Hyde Park", "Westminster Abbey", "St Pancras Station"];
-                  
-                  if (knownLocations.some(loc => origin.toLowerCase().includes(loc.toLowerCase())) && !origin.toLowerCase().includes("london")) {
-                    origin += ", London";
-                  }
-                  if (knownLocations.some(loc => destination.toLowerCase().includes(loc.toLowerCase())) && !destination.toLowerCase().includes("london")) {
-                    destination += ", London";
-                  }
-
-                  addLog('tool', `Tool Call: show_directions(${origin} to ${destination}) - Queued for silence`);
-
-                  setPendingMapUpdate({
-                    type: 'directions',
-                    origin,
-                    destination,
-                    id: fc.id,
-                    name: fc.name,
-                    receivedAt: Date.now()
-                  });
-                } else if (fc.name === 'explain') {
-                  // PHASE D: low-commitment, verbal-only. No map mutation. Ack immediately so the
-                  // model keeps speaking; the honest hedging lives in the prompt + the spoken answer.
-                  const args = fc.args as any;
-                  addLog('tool', `Tool Call: explain(${args.subject ?? ''}) - verbal only, no map change`);
-                  sessionRef.current?.sendToolResponse({
-                    functionResponses: [{ id: fc.id, name: fc.name, response: { success: true } }]
-                  });
-                } else if (fc.name === 'synthesize') {
-                  // PHASE E: propose -> confirm -> build. Without confirm, render the itinerary as a
-                  // hypothesis and DO NOT route. With confirm (after explicit user yes), build it.
-                  const args = fc.args as any;
-                  const places: string[] = Array.isArray(args.places) ? args.places.filter((p: any) => typeof p === 'string') : [];
-                  const plan: string | undefined = typeof args.plan === 'string' ? args.plan : undefined;
-                  const confirmed = args.confirm === true;
-
-                  if (!confirmed) {
-                    addLog('tool', `Tool Call: synthesize(propose) - ${places.join(' → ')}`);
-                    setProposedItinerary({ places, plan });
-                    sessionRef.current?.sendToolResponse({
-                      functionResponses: [{ id: fc.id, name: fc.name, response: { success: true, proposed: true } }]
-                    });
-                  } else {
-                    addLog('tool', `Tool Call: synthesize(build) - ${places.join(' → ')}`);
-                    const knownLocations = ["London Eye", "Hyde Park", "Westminster Abbey", "St Pancras Station"];
-                    const withCity = (p: string) =>
-                      knownLocations.some(loc => p.toLowerCase().includes(loc.toLowerCase())) && !p.toLowerCase().includes("london")
-                        ? `${p}, London` : p;
-                    if (places.length >= 2) {
-                      // Classic maps daddr supports a "to:" waypoint chain for the middle stops.
-                      const origin = withCity(places[0]);
-                      const destination = places.slice(1).map(withCity).join(' to: ');
-                      setMapType('directions');
-                      setDirections({ origin, destination });
-                    } else if (places.length === 1) {
-                      setMapType('search');
-                      setMapQuery(withCity(places[0]));
-                    }
-                    setProposedItinerary(null);
-                    markersRef.current = [];
-                    sessionRef.current?.sendToolResponse({
-                      functionResponses: [{ id: fc.id, name: fc.name, response: { success: true, built: true } }]
-                    });
-                  }
-                } else if (fc.name === 'share') {
-                  // PHASE G: outward action. Witness recipient + payload before sending; commit only
-                  // on explicit confirm. (Sending itself is simulated — no real outward integration.)
-                  const args = fc.args as any;
-                  const recipient = typeof args.recipient === 'string' ? args.recipient : '';
-                  const payload = typeof args.payload === 'string' ? args.payload : undefined;
-                  const confirmed = args.confirm === true;
-                  if (!confirmed) {
-                    addLog('tool', `Tool Call: share(witness) - to ${recipient}${payload ? `: ${payload}` : ''}`);
-                    setShareRequest({ recipient, payload, confirmed: false });
-                  } else {
-                    addLog('event', `Shared ${payload ?? 'item'} with ${recipient}`);
-                    setShareRequest({ recipient, payload, confirmed: true });
-                  }
-                  sessionRef.current?.sendToolResponse({
-                    functionResponses: [{ id: fc.id, name: fc.name, response: { success: true, sent: confirmed } }]
-                  });
-                }
-              }
+              for (const fc of msg.toolCall.functionCalls) { handleVoiceToolCall({ id: fc.id, name: fc.name, args: fc.args }); }
             }
 
             // Handle model turn (start of response)
@@ -1564,263 +1815,7 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
 
             // Drop marker if user says keyword (Manual fallback with slight lookback)
             if (msg.serverContent?.inputTranscription) {
-              const text = msg.serverContent.inputTranscription.text;
-              addLog('info', `User: "${text}"`);
-              lastTranscriptionTimeRef.current = Date.now();
-              
-              // Clean transcription: remove <noise>, [noise], (noise), *noise*, etc.
-              const cleanedText = text
-                .replace(/<[^>]*>/g, '')
-                .replace(/\[[^\]]*\]/g, '')
-                .replace(/\([^)]*\)/g, '')
-                .replace(/\*[^*]*\*/g, '')
-                // Only allow English letters, numbers, spaces, and standard punctuation
-                .replace(/[^a-zA-Z0-9\s.,?!'":;-]/g, '')
-                .replace(/\s+/g, ' ')
-                .trim();
-
-              if (!cleanedText) return;
-
-              // Smart accumulation: show the whole sentence instead of flashing words
-              const prevText = lastProcessedTranscriptionRef.current || "";
-              let currentText = cleanedText;
-              
-              const lowerPrev = prevText.toLowerCase().trim();
-              const lowerNext = cleanedText.toLowerCase().trim();
-              
-              // If the new text doesn't already start with the old text, append it
-              if (lowerPrev && !lowerNext.startsWith(lowerPrev)) {
-                currentText = prevText + " " + cleanedText;
-              }
-              
-              setLiveTranscription(currentText);
-              
-              if (transcriptionTimeoutRef.current) clearTimeout(transcriptionTimeoutRef.current);
-              transcriptionTimeoutRef.current = setTimeout(() => {
-                setLiveTranscription("");
-                lastProcessedTranscriptionRef.current = "";
-              }, 3000);
-
-              const lowerText = currentText.toLowerCase();
-              const prevLowerText = lowerPrev;
-              
-              // Update ref for next turn comparison
-              lastProcessedTranscriptionRef.current = currentText;
-              
-              const detectedKeywords: string[] = [];
-              let tempText = lowerText;
-              let tempPrevText = prevLowerText;
-
-              const countOccurrences = (str: string, word: string) => {
-                const regex = new RegExp(`\\b${word}\\b`, 'g');
-                return (str.match(regex) || []).length;
-              };
-
-              // Only detect keywords that are NEW in this transcription update
-              SORTED_KEYWORDS.forEach(kw => {
-                const currentCount = countOccurrences(tempText, kw);
-                const prevCount = countOccurrences(tempPrevText, kw);
-                const newCount = Math.max(0, currentCount - prevCount);
-                
-                for (let i = 0; i < newCount; i++) {
-                  detectedKeywords.push(kw);
-                }
-                
-                // "Consume" this keyword so shorter ones don't match the same text
-                const regex = new RegExp(`\\b${kw}\\b`, 'g');
-                tempText = tempText.replace(regex, ' '.repeat(kw.length));
-                tempPrevText = tempPrevText.replace(regex, ' '.repeat(kw.length));
-              });
-              
-              lastProcessedTranscriptionRef.current = text;
-
-              detectedKeywords.forEach((kw, index) => {
-                const canonicalLabel = KEYWORD_MAP[kw] || kw;
-                
-                // COORDINATE DETECTION (Density-based Focus Point Algorithm):
-                // Transcription arrives with latency (usually 1-2 seconds).
-                // We look for the "Focus Point" - the place where the user's cursor was most 
-                // concentrated in a sliding window.
-                // If multiple keywords arrive, we offset the windows to match the temporal order of speech.
-                const now = Date.now();
-                const totalKws = detectedKeywords.length;
-                const offset = (totalKws - 1 - index) * 1000; // Increased to 1s for better separation of "here" and "there"
-                const lookbackStart = now - 2500 - offset;   // Slightly wider lookback for latency
-                const lookbackEnd = now - offset;            
-                
-                const windowEntries = cursorHistoryRef.current.filter(h => h.t >= lookbackStart && h.t <= lookbackEnd);
-                
-                // 1. HISTORY PURPLE TEXT CHECK (Prioritize what was hovered DURING the speech window)
-                const hoveredCounts: Record<string, number> = {};
-                windowEntries.forEach(entry => {
-                  if (entry.hovered && entry.hovered !== 'Google Maps') {
-                    hoveredCounts[entry.hovered] = (hoveredCounts[entry.hovered] || 0) + 1;
-                  }
-                });
-                
-                let mostFrequentHovered: string | null = null;
-                let maxCount = 0;
-                for (const [name, count] of Object.entries(hoveredCounts)) {
-                  if (count > maxCount) {
-                    maxCount = count;
-                    mostFrequentHovered = name;
-                  }
-                }
-                
-                let foundObject = mostFrequentHovered 
-                  ? interactiveObjectsRef.current.find(obj => obj.name === mostFrequentHovered) || null
-                  : null;
-
-                if (foundObject) {
-                  addLog('info', `Using historical "Purple Text": ${foundObject.name}`);
-                }
-
-                // 2. DIRECT PURPLE TEXT CHECK (Only for the very latest keyword if history is sparse)
-                if (!foundObject && index === totalKws - 1 && hoveredObjectRef.current && hoveredObjectRef.current !== 'Google Maps') {
-                  foundObject = interactiveObjectsRef.current.find(obj => obj.name === hoveredObjectRef.current) || null;
-                  if (foundObject) {
-                    addLog('info', `Using current "Purple Text" for latest keyword: ${foundObject.name}`);
-                  }
-                }
-
-                let focusPoint = cursorRef.current;
-                
-                // PREFER ACTIVE PAINTING (Maximum accuracy for "drawn over/circled")
-                if (isPainting && pointerPath.length > 0) {
-                  focusPoint = pointerPath[pointerPath.length - 1];
-                  addLog('info', 'Using active painting point for marker');
-                } else if (persistentPaths.length > 0) {
-                  // Use center of most recent persistent path if it's very recent
-                  const lastPath = persistentPaths[persistentPaths.length - 1];
-                  const centerX = lastPath.reduce((sum, p) => sum + p.x, 0) / lastPath.length;
-                  const centerY = lastPath.reduce((sum, p) => sum + p.y, 0) / lastPath.length;
-                  focusPoint = { x: centerX, y: centerY };
-                  addLog('info', 'Using center of recent persistent path for marker');
-                } else if (windowEntries.length > 0) {
-                  // Fallback to density-based focus point if no hovered object found
-                  let maxNeighbors = -1;
-                  let bestPoint = windowEntries[windowEntries.length - 1];
-                  
-                  for (let i = 0; i < windowEntries.length; i++) {
-                    let neighbors = 0;
-                    for (let j = 0; j < windowEntries.length; j++) {
-                      const dist = Math.sqrt(
-                        Math.pow(windowEntries[i].x - windowEntries[j].x, 2) + 
-                        Math.pow(windowEntries[i].y - windowEntries[j].y, 2)
-                      );
-                      if (dist < 15) neighbors++;
-                    }
-                    if (neighbors > maxNeighbors) {
-                      maxNeighbors = neighbors;
-                      bestPoint = windowEntries[i];
-                    }
-                  }
-                  focusPoint = bestPoint;
-                } else if (cursorHistoryRef.current.length > 0) {
-                  // Fallback to last known point if no history in window
-                  focusPoint = cursorHistoryRef.current[cursorHistoryRef.current.length - 1];
-                }
-                
-                // ADD MARKER IMMEDIATELY
-                addMarker(canonicalLabel, focusPoint.x, focusPoint.y);
-                addLog('info', `Marker added for "${kw}"`);
-
-                const isDestination = [
-                  "here", "there", "hear", "hair", "their", "they're", "that", 
-                  "this spot", "that spot", "right here", "right there"
-                ].includes(kw);
-                
-                // RESET SPATIAL DESCRIPTION IF NEW INTERACTION STARTS
-                if (!isDestination) {
-                  spatialDescriptionRef.current = null;
-                }
-
-                const hX = Math.round(focusPoint.x);
-                const hY = Math.round(focusPoint.y);
-
-                // Final check for object at focus point if still unknown
-                if (!foundObject) {
-                  foundObject = interactiveObjectsRef.current.find(obj => {
-                    const [ymin, xmin, ymax, xmax] = obj.bbox;
-                    const padding = 5; // Reduced from 15 for stricter, non-guessy detection
-                    return hX >= (xmin - padding) && hX <= (xmax + padding) && hY >= (ymin - padding) && hY <= (ymax + padding);
-                  });
-                }
-
-                if (foundObject) {
-                  // Attach the object name to the marker
-                  const lastM = markersRef.current[0];
-                  if (lastM && (Date.now() - lastM.timestamp < 1000)) {
-                    lastM.identifiedObject = foundObject.name;
-                    addLog('info', `Identified: ${foundObject.name}`);
-                  }
-
-                  // DIFF 1: compute a (demo-grade) confidence for this resolution and log it.
-                  // Computed in both modes so the signal is visible in the debug panel even on
-                  // the confident baseline (which deliberately ignores it).
-                  const confidence = computePointingConfidence(foundObject, hX, hY, interactiveObjectsRef.current);
-                  const otherCandidates = confidence.candidates.filter(c => c !== foundObject!.name);
-                  addLog('info', `Confidence: ${confidence.level.toUpperCase()} — ${confidence.reason}${otherCandidates.length ? ` (vs ${otherCandidates.join(', ')})` : ''}`);
-
-                  // PHASE B: thread confidence onto the most recent marker so the canvas can
-                  // render a guess differently from a confident hit (honest mode only).
-                  const markerForConfidence = markersRef.current[0];
-                  if (markerForConfidence && (Date.now() - markerForConfidence.timestamp < 1000)) {
-                    markerForConfidence.confidence = confidence.level;
-                    markerForConfidence.candidates = confidence.candidates;
-                  }
-
-                  // PHASE F (S6): accumulate distinct real landmarks. In honest mode, once enough
-                  // have been pointed at with no plan yet, authorize the model to make ONE
-                  // transparent itinerary offer (notice → hypothesize → ask, never build).
-                  if (foundObject.name !== 'Google Maps') {
-                    identifiedLandmarksRef.current.add(foundObject.name);
-                  }
-                  if (
-                    honestModeRef.current &&
-                    !hasOfferedTripRef.current &&
-                    !proposedItinerary &&
-                    identifiedLandmarksRef.current.size >= 3 &&
-                    sessionRef.current
-                  ) {
-                    hasOfferedTripRef.current = true;
-                    const tripPlaces = Array.from(identifiedLandmarksRef.current);
-                    addLog('event', `Trip pattern noticed: ${tripPlaces.join(', ')} — offering once`);
-                    sessionRef.current.sendRealtimeInput({
-                      text: `[SYSTEM: TRIP PATTERN — the user has now pointed at ${tripPlaces.join(', ')} without asking for a plan. You MAY make ONE short, transparent offer that states your reasoning, e.g. "Looks like you're planning a London trip — want me to pull these into an itinerary?", then STOP and wait. Do NOT build anything yet.]`
-                    });
-                  }
-
-                  // SEND HINT TO GEMINI (CRITICAL: This was missing!)
-                  if (sessionRef.current) {
-                    const commandWords = ["show", "go", "directions", "where", "what", "search", "find", "how", "get", "near"];
-                    const isCommand = commandWords.some(w => lowerText.includes(w));
-                    // Honest mode threads confidence into the hint; the baseline hint is unchanged.
-                    const confidenceTag = honestModeRef.current
-                      ? (confidence.level === 'high'
-                          ? ' (confidence: high)'
-                          : otherCandidates.length
-                            ? ` (confidence: low — could also be ${otherCandidates.join(' or ')})`
-                            : ' (confidence: low — not certain this is the right photo)')
-                      : '';
-                    const hintText = `[USER JUST SAID "${kw.toUpperCase()}" WHILE POINTING AT: ${foundObject.name}${confidenceTag}. ${isCommand ? "NOTE: This is part of an explicit command." : "NOTE: This is just a mention, stay silent unless they give a command."}]`;
-                    sessionRef.current.sendRealtimeInput({ text: hintText });
-                  }
-                } else {
-                  // SEND "NOTHING" HINT TO PREVENT GUESSING
-                  if (sessionRef.current) {
-                    sessionRef.current.sendRealtimeInput({
-                      text: `[USER JUST SAID "${kw.toUpperCase()}" WHILE POINTING AT: Nothing (Empty Space). Ask them to point at a photo or the map.]`
-                    });
-                  }
-                }
-
-                // AGENT 1: SPATIAL ANALYST REMOVED
-                // (This was for image editing which is not used in this map/gallery app)
-                if (isDestination) {
-                  spatialDescriptionRef.current = null;
-                }
-              });
+              processInputTranscript(msg.serverContent.inputTranscription.text);
             }
 
             // Audio playback removed as per user request
