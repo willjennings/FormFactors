@@ -29,6 +29,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { CursorTrail, CursorResources } from './components/CursorEffects';
+import { createGeminiProvider } from './voice/gemini';
 
 // --- Types ---
 interface Marker {
@@ -412,9 +413,9 @@ export default function App() {
   useEffect(() => {
     honestModeRef.current = honestMode;
     if (isInitialHonestSync.current) { isInitialHonestSync.current = false; return; }
-    if (isLive && sessionRef.current) {
+    if (isLive && providerRef.current) {
       addLog('info', `Honest mode ${honestMode ? 'ON' : 'OFF'} — reconnecting to apply prompt variant...`);
-      sessionRef.current.close(); // onclose sets isLive=false
+      providerRef.current.close(); // onClose sets isLive=false
       setTimeout(() => { startLiveSession(); }, 800);
     }
   }, [honestMode]);
@@ -1657,7 +1658,7 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
           !hasOfferedTripRef.current &&
           !proposedItinerary &&
           identifiedLandmarksRef.current.size >= 3 &&
-          sessionRef.current
+          providerRef.current
         ) {
           hasOfferedTripRef.current = true;
           const tripPlaces = Array.from(identifiedLandmarksRef.current);
@@ -1665,8 +1666,8 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
           providerRef.current?.sendTextHint(`[SYSTEM: TRIP PATTERN — the user has now pointed at ${tripPlaces.join(', ')} without asking for a plan. You MAY make ONE short, transparent offer that states your reasoning, e.g. "Looks like you're planning a London trip — want me to pull these into an itinerary?", then STOP and wait. Do NOT build anything yet.]`);
         }
 
-        // SEND HINT TO GEMINI (CRITICAL: This was missing!)
-        if (sessionRef.current) {
+        // SEND DEIXIS HINT to whichever backend is live.
+        if (providerRef.current) {
           const commandWords = ["show", "go", "directions", "where", "what", "search", "find", "how", "get", "near"];
           const isCommand = commandWords.some(w => lowerText.includes(w));
           // Honest mode threads confidence into the hint; the baseline hint is unchanged.
@@ -1682,7 +1683,7 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
         }
       } else {
         // SEND "NOTHING" HINT TO PREVENT GUESSING
-        if (sessionRef.current) {
+        if (providerRef.current) {
           providerRef.current?.sendTextHint(`[USER JUST SAID "${kw.toUpperCase()}" WHILE POINTING AT: Nothing (Empty Space). Ask them to point at a photo or the map.]`);
         }
       }
@@ -1718,189 +1719,56 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
 
     addLog('info', 'Starting Live Session...');
     try {
-      const ai = new GoogleGenAI({ apiKey });
-
       addLog('info', 'Initializing AudioContext...');
       audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
       await audioContextRef.current.resume();
 
-      addLog('info', 'Requesting Microphone Access...');
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      addLog('info', 'Microphone Access Granted');
-
-      const modelName = 'gemini-2.5-flash-native-audio-preview-12-2025';
-      addLog('info', `Connecting to model: ${modelName}`);
-
-      // --- honestMode A/B harness: choose the POINTING LOGIC variant at connect time ---
       const honest = honestModeRef.current;
       addLog('info', `Prompt variant: ${honest ? 'HONEST (carries confidence, asks when unsure)' : 'CONFIDENT (Google baseline)'}`);
 
-      const sessionPromise = ai.live.connect({
-        model: modelName,
-        callbacks: {
-          onopen: () => {
-            setIsLive(true);
-            addLog('info', 'Live Link Established');
-            
-            // Set sessionRef.current when connection is open
-            sessionPromise.then(session => {
-              sessionRef.current = session;
-            });
-
-            const inputCtx = new AudioContext({ sampleRate: 16000 });
-            const source = inputCtx.createMediaStreamSource(stream);
-            const processor = inputCtx.createScriptProcessor(4096, 1, 1);
-            
-            const silentGain = inputCtx.createGain();
-            silentGain.gain.value = 0;
-            
-            processor.onaudioprocess = (e) => {
-              const inputData = e.inputBuffer.getChannelData(0);
-              const int16 = new Int16Array(inputData.length);
-              for (let i = 0; i < inputData.length; i++) int16[i] = inputData[i] * 32768;
-              const binary = String.fromCharCode(...new Uint8Array(int16.buffer));
-              sessionPromise.then(s => s.sendRealtimeInput({
-                audio: { data: btoa(binary), mimeType: 'audio/pcm;rate=16000' }
-              }));
-            };
-            source.connect(processor);
-            processor.connect(silentGain);
-            silentGain.connect(inputCtx.destination);
+      // GeminiProvider owns the live session + mic; audio playback and response/interruption
+      // UI stay in this component via the callbacks below. onSessionReady mirrors the raw
+      // session into sessionRef so the Gemini-only auxiliary features keep working.
+      providerRef.current = createGeminiProvider(apiKey, (s) => { sessionRef.current = s; });
+      await providerRef.current.connect(
+        { instructions: buildInstructions(honest), tools: VOICE_TOOLS, voice: 'Zephyr' },
+        {
+          onOpen: () => { setIsLive(true); addLog('info', 'Live Link Established'); },
+          onClose: () => { setIsLive(false); sessionRef.current = null; providerRef.current = null; addLog('info', 'Live Link Closed'); },
+          onError: (m: string) => {
+            let errMsg = m;
+            if (errMsg.includes('Permission denied') || errMsg.includes('NotAllowedError')) {
+              errMsg = "Microphone access denied. Please check your browser settings and ensure this site has permission to use your microphone.";
+            }
+            setLastError(errMsg);
+            addLog('info', `Session Error: ${errMsg}`);
           },
-          onmessage: async (msg) => {
-            // Ignore AI responses while overlays are active to prevent background noise from triggering actions
-            if (showOnboardingRef.current || showWelcomeRef.current || showRotateOverlayRef.current || showMobileOverlayRef.current) {
-              if (msg.toolCall || msg.serverContent?.modelTurn) {
-                return;
-              }
-            }
-
-            // Handle tool calls first to ensure state is ready for model turn
-            if (msg.toolCall) {
-              if (lastTranscriptionTimeRef.current === 0) {
-                addLog('info', 'Ignoring tool call before first transcription');
-                return;
-              }
-              for (const fc of msg.toolCall.functionCalls) { handleVoiceToolCall({ id: fc.id, name: fc.name, args: fc.args }); }
-            }
-
-            // Handle model turn (start of response)
-            if (msg.serverContent?.modelTurn) {
-              if (lastTranscriptionTimeRef.current === 0) {
-                addLog('info', 'Ignoring model turn before first transcription');
-                return;
-              }
-              setPersistentPaths([]); // Clear paint when AI starts responding
-              setLiveTranscription(""); // Clear transcription when AI starts responding
-              lastProcessedTranscriptionRef.current = "";
-              const audioData = msg.serverContent.modelTurn.parts?.find(p => p.inlineData)?.inlineData?.data;
-              if (audioData) {
-                handleLiveAudio(audioData);
-              }
-            }
-
-            // Handle interruption
-            if (msg.serverContent?.interrupted) {
-              activeSourcesRef.current.forEach(s => {
-                try { s.stop(); } catch(e) {}
-              });
-              activeSourcesRef.current = [];
-              audioQueueRef.current = [];
-              nextStartTimeRef.current = 0;
-              lastAudioTimeRef.current = 0; // Ensure next audio is treated as a new turn
-              setLiveTranscription("");
-              lastProcessedTranscriptionRef.current = "";
-              addLog('event', 'Model interrupted');
-            }
-
-            // Drop marker if user says keyword (Manual fallback with slight lookback)
-            if (msg.serverContent?.inputTranscription) {
-              processInputTranscript(msg.serverContent.inputTranscription.text);
-            }
-
-            // Audio playback removed as per user request
+          onInputTranscript: (text: string) => { processInputTranscript(text); },
+          onToolCall: (call) => {
+            if (showOnboardingRef.current || showWelcomeRef.current || showRotateOverlayRef.current || showMobileOverlayRef.current) return;
+            if (lastTranscriptionTimeRef.current === 0) { addLog('info', 'Ignoring tool call before first transcription'); return; }
+            handleVoiceToolCall(call);
           },
-          onclose: () => {
-              setIsLive(false);
-              sessionRef.current = null;
-              addLog('info', 'Live Link Closed');
-          }
+          onResponseStart: () => {
+            if (showOnboardingRef.current || showWelcomeRef.current || showRotateOverlayRef.current || showMobileOverlayRef.current) return;
+            if (lastTranscriptionTimeRef.current === 0) { addLog('info', 'Ignoring model turn before first transcription'); return; }
+            setPersistentPaths([]);
+            setLiveTranscription("");
+            lastProcessedTranscriptionRef.current = "";
+          },
+          onModelAudio: (b64: string) => { handleLiveAudio(b64); },
+          onInterrupted: () => {
+            activeSourcesRef.current.forEach(s => { try { s.stop(); } catch (e) {} });
+            activeSourcesRef.current = [];
+            audioQueueRef.current = [];
+            nextStartTimeRef.current = 0;
+            lastAudioTimeRef.current = 0;
+            setLiveTranscription("");
+            lastProcessedTranscriptionRef.current = "";
+            addLog('event', 'Model interrupted');
+          },
         },
-        config: {
-          responseModalities: [Modality.AUDIO],
-          inputAudioTranscription: {},
-          outputAudioTranscription: {},
-          speechConfig: {
-            voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } },
-          },
-          tools: [{
-            functionDeclarations: [
-              {
-                name: 'update_map',
-                description: 'Update the map to show a specific location or search for nearby places. ONLY call this tool if the user EXPLICITLY asks you to update the map or search for something verbally.',
-                parameters: {
-                  type: Type.OBJECT,
-                  properties: {
-                    query: { type: Type.STRING, description: 'The location name or search query.' }
-                  },
-                  required: ['query']
-                }
-              },
-              {
-                name: 'show_directions',
-                description: 'Show directions between two locations on the map. ONLY call this tool if the user EXPLICITLY asks you for directions or how to get somewhere verbally.',
-                parameters: {
-                  type: Type.OBJECT,
-                  properties: {
-                    origin: { type: Type.STRING, description: 'The starting location.' },
-                    destination: { type: Type.STRING, description: 'The destination location.' }
-                  },
-                  required: ['origin', 'destination']
-                }
-              },
-              {
-                name: 'explain',
-                description: 'Verbally name or describe what the user is pointing at (e.g. "what is this?", "what am I looking at?"). LOW-COMMITMENT: it does NOT change the map. Call it when the user asks to identify something rather than navigate.',
-                parameters: {
-                  type: Type.OBJECT,
-                  properties: {
-                    subject: { type: Type.STRING, description: 'The landmark or thing being identified.' }
-                  },
-                  required: ['subject']
-                }
-              },
-              {
-                name: 'synthesize',
-                description: 'Plan a multi-stop day itinerary from several landmarks (e.g. "plan a day from these"). Call WITHOUT confirm to PROPOSE the plan as a hypothesis first; call with confirm=true only after the user explicitly approves, to build the route.',
-                parameters: {
-                  type: Type.OBJECT,
-                  properties: {
-                    places: { type: Type.ARRAY, items: { type: Type.STRING }, description: 'Ordered list of stops for the day.' },
-                    plan: { type: Type.STRING, description: 'A short human-readable description of the proposed day (e.g. duration, order).' },
-                    confirm: { type: Type.BOOLEAN, description: 'Set true ONLY after the user has explicitly confirmed they want it built. Omit/false to first propose.' }
-                  },
-                  required: ['places']
-                }
-              },
-              {
-                name: 'share',
-                description: 'Share something (e.g. an itinerary) with another person (e.g. "share this with Lia"). OUTWARD, high-commitment action. Call WITHOUT confirm to witness-render the recipient and payload first; call with confirm=true only after the user explicitly approves sending.',
-                parameters: {
-                  type: Type.OBJECT,
-                  properties: {
-                    recipient: { type: Type.STRING, description: 'Who to send to.' },
-                    payload: { type: Type.STRING, description: 'A short description of what is being shared.' },
-                    confirm: { type: Type.BOOLEAN, description: 'Set true ONLY after the user has explicitly confirmed they want it sent. Omit/false to first witness-render.' }
-                  },
-                  required: ['recipient']
-                }
-              }
-            ]
-          }],
-          systemInstruction: buildInstructions(honestModeRef.current)
-        }
-      });
-      sessionRef.current = await sessionPromise;
+      );
     } catch (err) { 
       let errMsg = err instanceof Error ? err.message : String(err);
       if (errMsg.includes('Permission denied') || errMsg.includes('NotAllowedError')) {
@@ -1952,18 +1820,16 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
           lastMarkerTimeRef.current = {};
           setPersistentPaths([]);
 
-          sessionRef.current?.sendToolResponse({
-            functionResponses: [{ 
-              id: pendingMapUpdate.id, 
-              name: pendingMapUpdate.name, 
-              response: { 
-                success: true, 
+          providerRef.current?.sendToolResponse(
+            pendingMapUpdate.id,
+            pendingMapUpdate.name,
+            {
+                success: true,
                 query: pendingMapUpdate.query,
                 origin: pendingMapUpdate.origin,
                 destination: pendingMapUpdate.destination
-              } 
-            }]
-          });
+              }
+          );
           setPendingMapUpdate(null);
         }
       }
@@ -2462,7 +2328,7 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
         const reader = new FileReader();
         reader.onloadend = () => {
           const base64 = (reader.result as string).split(',')[1];
-          sessionRef.current?.sendRealtimeInput({ video: { data: base64, mimeType: 'image/jpeg' } });
+          providerRef.current?.sendVideoFrame(base64);
         };
         reader.readAsDataURL(blob);
       }, 'image/jpeg', 0.6);
@@ -2827,7 +2693,7 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
             ) : (
               <div className="flex gap-2">
                 <button 
-                  onClick={() => sessionRef.current?.close()}
+                  onClick={() => providerRef.current?.close()}
                   className="flex-1 h-[60px] rounded-full font-dm font-bold text-[15px] tracking-[-0.025em] leading-[28px] transition-all shadow-lg bg-[var(--inverse-bg)] text-[var(--inverse-text)] hover:opacity-90 hover:scale-[1.02] active:scale-98 flex items-center justify-center gap-3"
                 >
                   End Session

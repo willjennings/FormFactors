@@ -23,6 +23,12 @@ export interface VoiceCallbacks {
   onInputTranscript: (text: string, isFinal: boolean) => void;
   /** The model called one of the declared tools. args is already parsed to an object. */
   onToolCall: (call: { id: string; name: string; args: any }) => void;
+  /** The model started a response turn (used to clear pending UI). */
+  onResponseStart?: () => void;
+  /** Raw model audio chunk (base64 PCM). Providers with native audio playback (WebRTC) omit this. */
+  onModelAudio?: (base64: string) => void;
+  /** The model's turn was interrupted (barge-in). */
+  onInterrupted?: () => void;
 }
 
 export interface VoiceProvider {
