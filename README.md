@@ -59,3 +59,40 @@ on-thesis: the artifact demonstrates the *interaction grammar* (a hint carries c
 triggers an honest ask), not a novel confidence estimator. Being upfront that the confidence is synthesized
 is the honesty thesis applied to the prototype itself. The `share` verb is likewise simulated (no real
 outward integration) — it exists to demonstrate the outward-commitment witness-render.
+
+---
+
+## Voice backend — Gemini vs RTV2 (OpenAI Realtime)
+
+A **Voice backend** dropdown (in the Session Controls panel, under the Honest-mode toggle) runs the *same*
+point-and-speak interaction — identical hints, tools, confidence logic, and honest-mode behavior — on
+either of two live voice models, so you can A/B the experience:
+
+- **Gemini** (default) — Google's Gemini Live API.
+- **RTV2 (OpenAI Realtime)** — OpenAI's Realtime API over WebRTC.
+
+Both backends speak. Switching the dropdown while live reconnects on the new backend automatically.
+
+### Setup for RTV2
+Add your OpenAI key (with Realtime access) to `.env.local`:
+
+```
+OPENAI_API_KEY="sk-..."
+```
+
+The key stays **server-side**: `server.ts` exposes `POST /api/realtime/session`, which mints a short-lived
+**ephemeral token** the browser uses to open the WebRTC connection. The real key never reaches the client.
+
+### Architecture
+Both backends sit behind a small `VoiceProvider` interface (`src/voice/types.ts`); the honest-mode logic
+in `App.tsx` is provider-agnostic. Adapters: `src/voice/gemini.ts`, `src/voice/openai.ts`.
+
+### Known caveats
+- **Hint timing.** Gemini streams partial transcripts mid-speech; OpenAI's transcription tends to arrive
+  at end-of-turn, so the cursor↔hint correlation can differ — the two backends may not feel identical.
+- **Vision.** Gemini receives the annotated marker frame as continuous video; OpenAI takes discrete
+  `input_image` snapshots (a sparse heartbeat + a frame coupled to each deixis hint).
+- **Secondary cues.** A few Gemini-specific context injections (image-evolve, painting/layout hints) flow
+  only to Gemini; the core deixis/honest-mode loop works on both.
+- The OpenAI path is implemented against the current GA Realtime API and verified against the docs, but
+  should be confirmed with a live key.
