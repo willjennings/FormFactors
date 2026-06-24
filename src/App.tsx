@@ -6,7 +6,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import confetti from 'canvas-confetti';
 import { GoogleGenAI, Modality, Type, GenerateContentResponse } from '@google/genai';
-import type { VoiceTool, VoiceProvider } from './voice/types';
+import type { VoiceTool, VoiceProvider, ProviderKind } from './voice/types';
 import { 
   Mic, 
   MicOff, 
@@ -30,6 +30,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { CursorTrail, CursorResources } from './components/CursorEffects';
 import { createGeminiProvider } from './voice/gemini';
+import { createOpenAIRealtimeProvider } from './voice/openai';
 
 // --- Types ---
 interface Marker {
@@ -353,6 +354,8 @@ export default function App() {
   // honestMode === false → confident Google baseline (byte-for-byte unchanged).
   // honestMode === true  → honest variant: hints carry confidence, ask when unsure.
   const [honestMode, setHonestMode] = useState(false);
+  const [voiceBackend, setVoiceBackend] = useState<ProviderKind>('gemini');
+  const voiceBackendRef = useRef<ProviderKind>(voiceBackend);
   const [enableVoiceFeedback, setEnableVoiceFeedback] = useState(true);
   const [voiceVolume, setVoiceVolume] = useState(1.0);
   const [audioStatus, setAudioStatus] = useState<'suspended' | 'running' | 'closed'>('suspended');
@@ -419,6 +422,17 @@ export default function App() {
       setTimeout(() => { startLiveSession(); }, 800);
     }
   }, [honestMode]);
+
+  const isInitialBackendSync = useRef(true);
+  useEffect(() => {
+    voiceBackendRef.current = voiceBackend;
+    if (isInitialBackendSync.current) { isInitialBackendSync.current = false; return; }
+    if (isLive && providerRef.current) {
+      addLog('info', `Switching voice backend to ${voiceBackend} — reconnecting...`);
+      providerRef.current.close();
+      setTimeout(() => { startLiveSession(); }, 800);
+    }
+  }, [voiceBackend]);
 
   // Refs for logic
   const persistentCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -1697,7 +1711,7 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
     hasOfferedTripRef.current = false;
 
     const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
+    if (voiceBackendRef.current === 'gemini' && !apiKey) {
         addLog('info', 'Missing GEMINI_API_KEY');
         console.error('Missing GEMINI_API_KEY');
         return;
@@ -1722,9 +1736,12 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
       // GeminiProvider owns the live session + mic; audio playback and response/interruption
       // UI stay in this component via the callbacks below. onSessionReady mirrors the raw
       // session into sessionRef so the Gemini-only auxiliary features keep working.
-      providerRef.current = createGeminiProvider(apiKey, (s) => { sessionRef.current = s; });
+      providerRef.current = voiceBackendRef.current === 'openai'
+        ? createOpenAIRealtimeProvider()
+        : createGeminiProvider(apiKey!, (s) => { sessionRef.current = s; });
+      const voice = voiceBackendRef.current === 'openai' ? 'marin' : 'Zephyr';
       await providerRef.current.connect(
-        { instructions: buildInstructions(honest), tools: VOICE_TOOLS, voice: 'Zephyr' },
+        { instructions: buildInstructions(honest), tools: VOICE_TOOLS, voice },
         {
           onOpen: () => { setIsLive(true); addLog('info', 'Live Link Established'); },
           onClose: () => { setIsLive(false); sessionRef.current = null; providerRef.current = null; addLog('info', 'Live Link Closed'); },
@@ -2672,8 +2689,19 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
                 <div className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${honestMode ? 'translate-x-5' : 'translate-x-0'}`} />
               </div>
             </button>
+            <div className="w-full mb-4 flex items-center justify-between gap-3 px-4 py-3 rounded-2xl border bg-[var(--inner-box-bg)] border-[var(--card-border)]">
+              <span className="text-[12px] font-bold text-[var(--text-primary)]">Voice backend</span>
+              <select
+                value={voiceBackend}
+                onChange={(e) => setVoiceBackend(e.target.value as ProviderKind)}
+                className="text-[12px] font-mono bg-[var(--card-bg)] border border-[var(--card-border)] rounded-lg px-2 py-1 text-[var(--text-primary)]"
+              >
+                <option value="gemini">Gemini</option>
+                <option value="openai">RTV2 (OpenAI Realtime)</option>
+              </select>
+            </div>
             {!isLive ? (
-              <button 
+              <button
                 onClick={startLiveSession}
                 className="w-full h-[60px] rounded-full font-dm font-bold text-[15px] tracking-[-0.025em] leading-[28px] transition-all shadow-lg bg-[var(--inverse-bg)] text-[var(--inverse-text)] hover:opacity-90 hover:scale-[1.02] active:scale-98 flex items-center justify-center gap-3"
               >
