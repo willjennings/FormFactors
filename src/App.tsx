@@ -32,6 +32,37 @@ import { CursorTrail, CursorResources } from './components/CursorEffects';
 import { createGeminiProvider } from './voice/gemini';
 import { createOpenAIRealtimeProvider } from './voice/openai';
 import { createAzureRealtimeProvider } from './voice/azure';
+import {
+  PROGRAMS,
+  DEFAULT_PROGRAM,
+  getProgram,
+  tasksForProgram,
+  CATEGORY_COLORS,
+  CATEGORY_LABELS,
+  DEFAULT_CATEGORY,
+  ACTION_CATEGORIES,
+  buildActionTools,
+  ACTION_VERB_NAMES,
+  initialMockDoc,
+  applyAction,
+  describeAction,
+  classOf,
+  decideCommit,
+  AUTONOMY_OPTIONS,
+  serializeMockDoc,
+  matchElement,
+} from './scenarios';
+import type { ProgramId, ElementCategory, InteractiveObject, MockDoc, Program, Autonomy } from './scenarios';
+import { MockPreview } from './components/MockPreview';
+import { emitFeedbackAudio, FEEDBACK_OPTIONS } from './feedback';
+import type { FeedbackMode, FeedbackEvent } from './feedback';
+import { primeEarcons, playEarcon, EARCON_KINDS } from './feedback/earcons';
+import { telemetry, detectDevice } from './telemetry';
+import { referents } from './referents';
+import { CallDeduper, argsKey, parseRepair } from './coherence';
+import { assignTargetNumbers, parseTargetSelection } from './input_targets';
+import { ocrImage, terminateOcr, clearOcrCache } from './ocr';
+import type { OcrWord } from './ocr';
 
 // --- Types ---
 interface Marker {
@@ -44,6 +75,8 @@ interface Marker {
   // Honest-mode rendering: a guess must never look like a confident success.
   confidence?: 'high' | 'low';
   candidates?: string[];
+  // Element category drives the highlight hue (program/os/ui/content).
+  category?: ElementCategory;
 }
 
 interface BBox {
@@ -75,99 +108,16 @@ const KEYWORD_MAP: Record<string, string> = {
   "they're": "there"
 };
 
-// Scenario cards the user scrolls through. The first three are the baseline capabilities;
-// the rest exercise the honest-mode behaviors (toggle Honest mode to see the contrast).
-const TASKS = [
-  {
-    id: 1,
-    title: "Pinpointing",
-    description: "Point at a photo and ask where it is. When it's sure, it just shows you — no friction.",
-    hint: 'Say "Show me this on the map"',
-    image: "https://www.gstatic.com/aistudio/ai-pointer-find/the_london_eye.png"
-  },
-  {
-    id: 2,
-    title: "Discover what's nearby",
-    description: "Point at a place and ask what's around it.",
-    hint: 'Say "Find hotels near here"',
-    image: "https://www.gstatic.com/aistudio/ai-pointer-find/map_task_3.png"
-  },
-  {
-    id: 3,
-    title: "Point A to Point B",
-    description: "Point at two photos as you speak. Directions send you walking, so Honest mode confirms both ends before routing.",
-    hint: 'Say "How do I get from here to there?"',
-    image: "https://www.gstatic.com/aistudio/ai-pointer-find/circle-item.png"
-  },
-  {
-    id: 4,
-    title: "What is this?",
-    description: "Point at a photo and ask it to identify the landmark. It names it — and hedges when it isn't certain.",
-    hint: 'Say "What am I looking at?"',
-    image: "https://www.gstatic.com/aistudio/ai-pointer-find/westminster-abbey.png"
-  },
-  {
-    id: 5,
-    title: "The look-alike",
-    description: "St Pancras and King's Cross are near-identical neighbours. Point at St Pancras for directions — Honest mode asks which one you mean instead of silently guessing.",
-    hint: 'Say "Directions here from the London Eye"',
-    image: "https://www.gstatic.com/aistudio/ai-pointer-find/st_pancras_station.png"
-  },
-  {
-    id: 6,
-    title: "When it can't tell",
-    description: "Point at empty space or a cluttered spot and ask what it is. Instead of inventing an answer, it admits it isn't sure.",
-    hint: 'Say "What\'s that?"',
-    image: "https://www.gstatic.com/aistudio/ai-pointer-find/map_task_1.png"
-  },
-  {
-    id: 7,
-    title: "Plan a day",
-    description: "Point across a few photos and ask for a day plan. It proposes an itinerary as a suggestion and waits before building it.",
-    hint: 'Say "Plan me a day from these"',
-    image: "https://www.gstatic.com/aistudio/ai-pointer-find/hyde_park.png"
-  },
-  {
-    id: 8,
-    title: "It spots a pattern",
-    description: "Point at three or more places without asking for anything. Honest mode notices, offers to make an itinerary — and never builds it unless you say yes.",
-    hint: 'When it offers, say "Yes please"',
-    image: "https://www.gstatic.com/aistudio/ai-pointer-find/map_task_1.png"
-  },
-  {
-    id: 9,
-    title: "Share it",
-    description: "Ask it to send your plan to someone. Outward actions show exactly who and what before anything goes out.",
-    hint: 'Say "Share this with Lia"',
-    image: "https://www.gstatic.com/aistudio/ai-pointer-find/map_task_3.png"
-  }
-];
-
-const PHOTOS = [
-  { id: 1, url: "https://www.gstatic.com/aistudio/ai-pointer-find/the_london_eye.png", title: "London Eye" },
-  { id: 2, url: "https://www.gstatic.com/aistudio/ai-pointer-find/hyde_park.png", title: "Hyde Park" },
-  { id: 3, url: "https://www.gstatic.com/aistudio/ai-pointer-find/westminster-abbey.png", title: "Westminster Abbey" },
-  { id: 4, url: "https://www.gstatic.com/aistudio/ai-pointer-find/st_pancras_station.png", title: "St Pancras Station" },
-];
-
-const INTERACTIVE_OBJECTS = [
-  { name: "London Eye", bbox: [0, 0, 0, 0] },
-  { name: "Hyde Park", bbox: [0, 0, 0, 0] },
-  { name: "Westminster Abbey", bbox: [0, 0, 0, 0] },
-  { name: "St Pancras Station", bbox: [0, 0, 0, 0] },
-  { name: "Google Maps", bbox: [0, 0, 0, 0] }
-];
+// Scenario content (TASKS / PHOTOS / interactive objects / confusable pairs) now lives
+// in src/scenarios.ts, bundled per program, and is derived from the active program inside
+// the App component. Swap programs (Word/Excel/PowerPoint) via the dropdown — or repoint
+// the whole demo by editing scenarios.ts.
 
 // --- DIFF 1: pointing confidence (demo-grade proxy) ---
 // This is NOT a perception-confidence model. It's a synthesized signal — a geometric
 // margin plus a seeded confusable-pairs table — sufficient to demonstrate the interaction
 // grammar (hint carries confidence → low confidence triggers an honest ask). See README.
-//
-// Seeded look-alike landmarks. St Pancras and King's Cross are adjacent, near-identical
-// Gothic façades — the real ambiguity that makes the honest-mode showcase honest.
-const CONFUSABLE_PAIRS: Record<string, string[]> = {
-  "St Pancras Station": ["King's Cross"],
-};
+// The confusable map is passed in from the active program (e.g. Save ↔ Save As).
 
 type PointingConfidence = { level: 'high' | 'low'; candidates: string[]; reason: string };
 
@@ -175,10 +125,11 @@ function computePointingConfidence(
   foundObject: { name: string; bbox: number[] },
   hX: number,
   hY: number,
-  objects: { name: string; bbox: number[] }[]
+  objects: { name: string; bbox: number[] }[],
+  confusablePairs: Record<string, string[]>
 ): PointingConfidence {
-  // 1. Seeded confusable pairs — the headline ambiguity (St Pancras ↔ King's Cross).
-  const confusables = CONFUSABLE_PAIRS[foundObject.name];
+  // 1. Seeded confusable pairs — the headline ambiguity (e.g. Save ↔ Save As).
+  const confusables = confusablePairs[foundObject.name];
   if (confusables && confusables.length) {
     return {
       level: 'low',
@@ -294,6 +245,10 @@ const MIN_DISTANCE = 1;          // px - Lowered for maximum precision
 const MAX_POINTS = 40;           // Hard limit to prevent memory issues
 const BASE_LIFETIME = 100;       // ms - Reduced 50%
 const MAX_LIFETIME = 400;        // ms - Reduced 50%
+// Backends without continuous video + streaming partial transcripts (Azure/OpenAI realtime)
+// get the pointing target proactively on hover-change, throttled, so "this/here" is grounded
+// before the transcript lands. Min gap between proactive hints.
+const HOVER_HINT_THROTTLE_MS = 700;
 
 const LaptopSmileyIcon = ({ size = 64, className = "" }: { size?: number, className?: string }) => (
   <svg 
@@ -320,12 +275,54 @@ const LaptopSmileyIcon = ({ size = 64, className = "" }: { size?: number, classN
 );
 
 export default function App() {
-  const [interactiveObjects, setInteractiveObjects] = useState(INTERACTIVE_OBJECTS);
-  const interactiveObjectsRef = useRef(INTERACTIVE_OBJECTS);
+  // --- Active program (Word / Excel / PowerPoint) — single source of truth for content ---
+  const [activeProgram, setActiveProgram] = useState<ProgramId>(DEFAULT_PROGRAM);
+  const program = React.useMemo(() => getProgram(activeProgram), [activeProgram]);
+  // Derive the legacy constant shapes from the active program so the rest of App is unchanged.
+  const PHOTOS = program.images;
+  // The carousel is built from the shared task library, filtered + ordered for this program.
+  const TASKS = React.useMemo(() => tasksForProgram(activeProgram), [activeProgram]);
+  // Tools offered to the voice model = the original tourism verbs + the action verbs this
+  // program exposes. Read at connect time; program swap reconnects (see handleProgramChange).
+  const voiceTools = React.useMemo(
+    () => [...VOICE_TOOLS, ...buildActionTools(activeProgram)],
+    [activeProgram],
+  );
+  const CONFUSABLE_PAIRS = React.useMemo(() => {
+    const map: Record<string, string[]> = {};
+    for (const img of program.images) {
+      if (img.confusableWith && img.confusableWith.length) map[img.title] = img.confusableWith;
+    }
+    return map;
+  }, [program]);
+  // Zero-bbox placeholder objects (real bboxes are filled in from the DOM layout below).
+  const INTERACTIVE_OBJECTS_BASE: InteractiveObject[] = React.useMemo(() => [
+    ...program.images.map(img => ({ name: img.title, bbox: [0, 0, 0, 0], category: img.category })),
+    { name: "Google Maps", bbox: [0, 0, 0, 0], category: DEFAULT_CATEGORY },
+  ], [program]);
+  // name → category, read live by the canvas renderer (kept in a ref to avoid stale closures).
+  const categoryMapRef = useRef<Record<string, ElementCategory>>({});
+  React.useEffect(() => {
+    const m: Record<string, ElementCategory> = {};
+    for (const img of program.images) m[img.title] = img.category;
+    categoryMapRef.current = m;
+  }, [program]);
+  const categoryOf = (name?: string): ElementCategory =>
+    (name && categoryMapRef.current[name]) || DEFAULT_CATEGORY;
+
+  // The active scenario's target element name, read live by the canvas renderer (ref avoids
+  // stale closures since the render loop's effect doesn't re-run on every task switch).
+  const focusTitleRef = useRef<string | undefined>(undefined);
+
+  const [interactiveObjects, setInteractiveObjects] = useState<InteractiveObject[]>([]);
+  const interactiveObjectsRef = useRef<InteractiveObject[]>([]);
   const [showWelcome, setShowWelcome] = useState(true);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showRotateOverlay, setShowRotateOverlay] = useState(false);
   const [showMobileOverlay, setShowMobileOverlay] = useState(false);
+  // Testbed: run on phone/tablet to evaluate the paradigm across form factors, bypassing the
+  // desktop-only gate + the mobile/rotate overlays.
+  const [bypassDeviceGate, setBypassDeviceGate] = useState(false);
 
   const handleDismissWelcome = (e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
@@ -361,8 +358,14 @@ export default function App() {
   const [voiceVolume, setVoiceVolume] = useState(1.0);
   const [audioStatus, setAudioStatus] = useState<'suspended' | 'running' | 'closed'>('suspended');
   const [isLive, setIsLive] = useState(false);
+  // Detect running inside an embedded preview iframe — such frames usually don't delegate
+  // microphone access, so we surface an "open in a new tab" escape hatch.
+  const [isEmbedded, setIsEmbedded] = useState(false);
+  useEffect(() => {
+    try { setIsEmbedded(window.self !== window.top); } catch { setIsEmbedded(true); }
+  }, []);
   const [currentImage, setCurrentImage] = useState(INITIAL_IMAGE);
-  const [history, setHistory] = useState<{ image: string; objects: typeof INTERACTIVE_OBJECTS }[]>([]);
+  const [history, setHistory] = useState<{ image: string; objects: InteractiveObject[] }[]>([]);
   const [dims, setDims] = useState({ width: BASE_SIZE, height: BASE_SIZE });
   const [mainSize, setMainSize] = useState({ width: 0, height: 0 });
   const [isProcessing, setIsProcessing] = useState(false);
@@ -395,6 +398,9 @@ export default function App() {
   const [trailMousePos, setTrailMousePos] = useState({ x: 0, y: 0 });
   const [hoveredObject, setHoveredObject] = useState<string | null>(null);
   const hoveredObjectRef = useRef<string | null>(null);
+  // Throttle state for proactive hover grounding (non-Gemini backends).
+  const lastHoverHintRef = useRef<string | null>(null);
+  const lastHoverHintAtRef = useRef(0);
 
   const showWelcomeRef = useRef(showWelcome);
   const showOnboardingRef = useRef(showOnboarding);
@@ -435,6 +441,18 @@ export default function App() {
     }
   }, [voiceBackend]);
 
+  // The active program now drives the tool list AND the system prompt, so a mid-session swap
+  // must reconnect to load them. Runs after re-render → captures the new program's closure.
+  const isInitialProgramSync = useRef(true);
+  useEffect(() => {
+    if (isInitialProgramSync.current) { isInitialProgramSync.current = false; return; }
+    if (isLive && providerRef.current) {
+      addLog('info', `Reconnecting to load ${program.label} tools + prompt...`);
+      providerRef.current.close();
+      setTimeout(() => { startLiveSession(); }, 800);
+    }
+  }, [activeProgram]);
+
   // Refs for logic
   const persistentCanvasRef = useRef<HTMLCanvasElement>(null);
   const traceCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -474,6 +492,73 @@ export default function App() {
   const [proposedItinerary, setProposedItinerary] = useState<{ places: string[]; plan?: string } | null>(null);
   // PHASE G: an outward share request — witness recipient + payload before sending.
   const [shareRequest, setShareRequest] = useState<{ recipient: string; payload?: string; confirmed: boolean } | null>(null);
+  // Action verbs (save/edit/format/insert/photo) mutate this mock document; a pending action
+  // is witness-rendered before it commits — the same grammar as `share`.
+  const [mockDoc, setMockDoc] = useState<MockDoc>(() => initialMockDoc(DEFAULT_PROGRAM));
+  // Live mirror so the tool-call closure can read the current doc without stale-closure risk.
+  const mockDocRef = useRef(mockDoc);
+  useEffect(() => { mockDocRef.current = mockDoc; }, [mockDoc]);
+  // Undo stack: pre-commit document snapshots (mementos). applyAction is pure, so undo = restore.
+  const [undoStack, setUndoStack] = useState<{ doc: MockDoc; label: string }[]>([]);
+  // G9: dedup duplicate tool calls. G7: a layout version stamped onto deixis hints so the
+  // model has temporal context (bumped on structural layout changes, e.g. program swap).
+  const callDeduperRef = useRef(new CallDeduper());
+  const layoutVersionRef = useRef(0);
+  // G3 OCR sub-elements: opt-in word-level pointing. ocrWordsRef[title] = normalized words.
+  const [ocrEnabled, setOcrEnabled] = useState(false);
+  const ocrWordsRef = useRef<Record<string, OcrWord[]>>({});
+  const [hoveredWord, setHoveredWord] = useState<string | null>(null);
+  const hoveredWordRef = useRef<string | null>(null);
+
+  // Find the OCR word (if any) under a normalized 0–1000 point, mapping each word's image-
+  // relative bbox into the live tile bbox. Returns the word text + its containing element.
+  const wordAt = (x: number, y: number): { word: string; photoTitle: string } | null => {
+    for (const obj of interactiveObjectsRef.current) {
+      if (obj.name === 'Google Maps') continue;
+      const [tymin, txmin, tymax, txmax] = obj.bbox;
+      if (x < txmin || x > txmax || y < tymin || y > tymax) continue;
+      const words = ocrWordsRef.current[obj.name];
+      if (!words || words.length === 0) return null;
+      const tw = txmax - txmin, th = tymax - tymin;
+      for (const w of words) {
+        const gx0 = txmin + w.nx0 * tw, gx1 = txmin + w.nx1 * tw;
+        const gy0 = tymin + w.ny0 * th, gy1 = tymin + w.ny1 * th;
+        if (x >= gx0 && x <= gx1 && y >= gy0 && y <= gy1) return { word: w.text, photoTitle: obj.name };
+      }
+      return null;
+    }
+    return null;
+  };
+  const [pendingAction, setPendingAction] = useState<{ verb: string; label: string; target: string; detail?: string; confirmed: boolean; note?: string } | null>(null);
+
+  // --- The two control dials ---
+  // DIAL A (autonomy/friction): how readily verbs commit vs. witness-render first.
+  const [autonomy, setAutonomy] = useState<Autonomy>('auto-safe');
+  const autonomyRef = useRef<Autonomy>(autonomy);
+  useEffect(() => { autonomyRef.current = autonomy; }, [autonomy]);
+  // DIAL B (feedback modality): silent / earcon / app-spoken. The model never self-confirms.
+  const [feedbackMode, setFeedbackMode] = useState<FeedbackMode>('earcon');
+  const feedbackModeRef = useRef<FeedbackMode>(feedbackMode);
+  useEffect(() => { feedbackModeRef.current = feedbackMode; }, [feedbackMode]);
+  // Visual feedback channel — always on (the minimum-feedback floor), independent of DIAL B.
+  const [feedbackToast, setFeedbackToast] = useState<{ outcome: FeedbackEvent['outcome']; label: string; at: number } | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Refresh tick so the live telemetry readout updates during a session.
+  const [telemetryTick, setTelemetryTick] = useState(0);
+  useEffect(() => {
+    if (!isLive) return;
+    const id = setInterval(() => setTelemetryTick(t => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [isLive]);
+
+  // Single entry point for action feedback: routes audio per DIAL B and always shows a toast.
+  const emitFeedback = (ev: FeedbackEvent) => {
+    emitFeedbackAudio(ev, feedbackModeRef.current);
+    addLog(ev.outcome === 'error' ? 'info' : 'event', `Feedback: ${ev.outcome} — ${ev.label}`);
+    setFeedbackToast({ outcome: ev.outcome, label: ev.label, at: Date.now() });
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setFeedbackToast(null), 2600);
+  };
   const [layoutBounds, setLayoutBounds] = useState<{
     photos: BBox;
     map: BBox;
@@ -597,13 +682,18 @@ export default function App() {
 
         // Update interactive objects for Gemini
         const mapBBox = toBBox(mRect);
-        const newInteractiveObjects = [
-          ...photoItems.map((item) => ({
-            name: PHOTOS.find(p => p.id === item.id)?.title || "Photo",
-            bbox: [item.bbox.ymin, item.bbox.xmin, item.bbox.ymax, item.bbox.xmax] as [number, number, number, number]
-          })),
+        const newInteractiveObjects: InteractiveObject[] = [
+          ...photoItems.map((item) => {
+            const img = PHOTOS.find(p => p.id === item.id);
+            return {
+              name: img?.title || "Photo",
+              category: img?.category ?? DEFAULT_CATEGORY,
+              bbox: [item.bbox.ymin, item.bbox.xmin, item.bbox.ymax, item.bbox.xmax] as [number, number, number, number]
+            };
+          }),
           {
             name: "Google Maps",
+            category: DEFAULT_CATEGORY,
             bbox: [mapBBox.ymin, mapBBox.xmin, mapBBox.ymax, mapBBox.xmax] as [number, number, number, number]
           }
         ];
@@ -636,7 +726,7 @@ export default function App() {
       window.removeEventListener('resize', updateLayout);
       window.removeEventListener('scroll', updateLayout, true);
     };
-  }, [isLive]); // Recalculate when live starts or layout changes
+  }, [isLive, activeProgram]); // Recalculate when live starts, layout changes, or program swaps
 
   useEffect(() => {
     const checkDevice = () => {
@@ -646,17 +736,17 @@ export default function App() {
       const isPortrait = window.matchMedia('(orientation: portrait)').matches;
       
       // Mobile: smallest dimension < 600px (covers phones in both orientations)
-      setShowMobileOverlay(minDimension < 600);
-      
+      setShowMobileOverlay(minDimension < 600 && !bypassDeviceGate);
+
       // Tablet range: smallest dimension >= 600px and width <= 1024px
       const isTabletWidth = width >= 600 && width <= 1024;
-      setShowRotateOverlay(isPortrait && isTabletWidth);
+      setShowRotateOverlay(isPortrait && isTabletWidth && !bypassDeviceGate);
     };
 
     checkDevice();
     window.addEventListener('resize', checkDevice);
     return () => window.removeEventListener('resize', checkDevice);
-  }, []);
+  }, [bypassDeviceGate]);
 
 
   const mapUrl = mapType === 'search' 
@@ -666,6 +756,36 @@ export default function App() {
   const allTasksCompleted = completedTaskIds.length === TASKS.length;
   const isCongratulationsPage = currentTaskIndex === TASKS.length;
   const isCurrentTaskDone = !isCongratulationsPage ? completedTaskIds.includes(TASKS[currentTaskIndex].id) : true;
+
+  // The active scenario is the single source of truth for "what the user should do now".
+  const activeTask = isCongratulationsPage ? null : TASKS[currentTaskIndex];
+  // The element this scenario wants the user to point at — highlighted in the gallery
+  // (DOM) and pre-focused on the trace canvas during a live session.
+  const focusTitle = activeTask?.targetElement;
+  useEffect(() => { focusTitleRef.current = focusTitle; }, [focusTitle]);
+
+  // Robust scenario switching: any task change (or program swap) is a deliberate context
+  // switch, so clear transient interaction state — markers, paint, and any pending action —
+  // so the new scenario starts from a clean slate.
+  useEffect(() => {
+    markersRef.current = [];
+    lastMarkerTimeRef.current = {};
+    setPersistentPaths([]);
+    setPendingAction(null);
+  }, [currentTaskIndex, activeProgram]);
+
+  // Bounds safety: if the program's task count shrinks below the current index, snap back.
+  useEffect(() => {
+    if (currentTaskIndex > TASKS.length) setCurrentTaskIndex(0);
+  }, [TASKS.length, currentTaskIndex]);
+
+  // Jump straight to a scenario (used by the scenario picker). Clamped + animated.
+  const goToTask = (index: number) => {
+    const maxIndex = allTasksCompleted ? TASKS.length : Math.max(0, TASKS.length - 1);
+    const clamped = Math.max(0, Math.min(index, maxIndex));
+    setSlideDirection(clamped >= currentTaskIndex ? 1 : -1);
+    setCurrentTaskIndex(clamped);
+  };
 
   useEffect(() => {
     const img = new Image();
@@ -953,10 +1073,9 @@ export default function App() {
     lastExecutedPromptRef.current = cleanEditPrompt;
     addLog('gemini', `Editing: ${cleanEditPrompt}`);
     
-    // Notify the AI that we are starting the generation
-    sessionRef.current?.sendRealtimeInput({
-      text: `[SYSTEM: Starting image generation for "${cleanEditPrompt}". Please wait for the result before giving further instructions.]`
-    });
+    // Notify the AI that we are starting the generation (provider-agnostic so Azure/OpenAI
+    // get the same context Gemini does, not just the raw Gemini session).
+    providerRef.current?.sendTextHint(`[SYSTEM: Starting image generation for "${cleanEditPrompt}". Please wait for the result before giving further instructions.]`);
 
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
@@ -1121,9 +1240,7 @@ CRITICAL CONSTRAINTS - ABSOLUTELY NO ZOOMING OR CROPPING:
             markersRef.current = [];
             spatialDescriptionRef.current = null; // CLEAR AGENT 1 MEMORY
             lastProcessedTranscriptionRef.current = "";
-            sessionRef.current?.sendRealtimeInput({
-              text: `[SYSTEM: IMAGE UPDATED. All previous markers, coordinates, and commands are now OBSOLETE. The scene has changed. Treat the current view as a completely fresh start. Forget all previous locations. DO NOT SPEAK OR ACKNOWLEDGE THIS MESSAGE.]`
-            });
+            providerRef.current?.sendTextHint(`[SYSTEM: IMAGE UPDATED. All previous markers, coordinates, and commands are now OBSOLETE. The scene has changed. Treat the current view as a completely fresh start. Forget all previous locations. DO NOT SPEAK OR ACKNOWLEDGE THIS MESSAGE.]`);
 
             // CRITICAL: Clear control state IMMEDIATELY to prevent repeat edits
             setActivePrompt(null);
@@ -1145,9 +1262,7 @@ CRITICAL CONSTRAINTS - ABSOLUTELY NO ZOOMING OR CROPPING:
             // Explicitly notify the live session that the image has changed
             // Use a very strong "HARD RESET" instruction to clear AI's mental state
             lastExecutedPromptRef.current = null; // Clear on success so the user can repeat a command if they want to
-            sessionRef.current?.sendRealtimeInput({
-              text: "[SYSTEM HARD RESET]: The image has evolved. FORGET all previous markers, coordinates, and object positions. The current video frame is the ONLY source of truth. Treat this as a brand new session with a new image. READY FOR NEW COMMAND. DO NOT SPEAK OR GREET THE USER. STAY SILENT UNTIL THE USER SPEAKS."
-            });
+            providerRef.current?.sendTextHint("[SYSTEM HARD RESET]: The image has evolved. FORGET all previous markers, coordinates, and object positions. The current video frame is the ONLY source of truth. Treat this as a brand new session with a new image. READY FOR NEW COMMAND. DO NOT SPEAK OR GREET THE USER. STAY SILENT UNTIL THE USER SPEAKS.");
           }
         };
         img.onerror = () => {
@@ -1242,16 +1357,28 @@ CRITICAL CONSTRAINTS - ABSOLUTELY NO ZOOMING OR CROPPING:
 
   useEffect(() => {
     const checkWidth = () => {
-      // Threshold for "laptop/desktop" experience - usually 1024px
-      setIsWideEnough(window.innerWidth >= 1024);
+      // Threshold for "laptop/desktop" experience - usually 1024px (overridable for the testbed)
+      setIsWideEnough(window.innerWidth >= 1024 || bypassDeviceGate);
     };
-    
+
     checkWidth();
     window.addEventListener('resize', checkWidth);
     return () => window.removeEventListener('resize', checkWidth);
-  }, []);
+  }, [bypassDeviceGate]);
 
-  const buildInstructions = (honest: boolean): string => {
+  const buildInstructions = (honest: boolean, program: Program): string => {
+    // Program-specific verbs the model may call in addition to the map tools.
+    const actionTools = buildActionTools(program.id);
+    const ACTIONS_SECTION = actionTools.length ? `
+
+${program.label.toUpperCase()} ACTIONS (in addition to the map tools above):
+${actionTools.map(t => `- ${t.name}: ${t.description}`).join('\n')}
+- Every action verb takes (target, detail, confirm). These are HIGH-COMMITMENT — they change the document. ${honest
+  ? 'WITNESS-RENDER your interpretation first: state WHAT you will do and WHERE (e.g. "Make the document body bold?") and WAIT for an explicit "yes". Only then call again with confirm=true. Never mutate the document on a low-confidence or unconfirmed guess.'
+  : 'Call the verb with confirm=true and do it immediately.'}
+- GROUNDING CHECK: if a tool response comes back with "grounding_mismatch": true, your read of the element disagreed with where the user is actually pointing (app_referent). Do NOT proceed — ask which one they mean, e.g. "You're pointing at the {app_referent}, but I thought you meant the {model_target} — which should I use?", then act on their answer.
+- The result appears in the on-screen preview panel.` : '';
+
     // The confident baseline: the hint is treated as ground truth (preserved unchanged).
     const POINTING_TRUTH_CONFIDENT = `- The hints are the ABSOLUTE SOURCE OF TRUTH. If it says "London Eye", the user IS pointing at the London Eye.`;
     // The honest variant (Diffs 2 + 3). Honesty scales with the situation along two axes:
@@ -1273,18 +1400,23 @@ CRITICAL CONSTRAINTS - ABSOLUTELY NO ZOOMING OR CROPPING:
 - PROACTIVE OFFERS: you normally stay silent until spoken to. The ONE exception: if you receive a [SYSTEM: TRIP PATTERN ...] message, you MAY make a single transparent offer that states your reasoning — e.g. "Looks like you're planning a London trip — want me to pull these into an itinerary?" — then STOP and wait. Notice → hypothesize transparently → ASK. Never act on an inferred intention without an explicit yes. Make this offer at most once.
 - OUTWARD ACTIONS are the highest commitment of all — they act on another person and can't be taken back. For "share this with <name>", call share(recipient, payload) WITHOUT confirm first to witness-render exactly WHO and WHAT goes out — "Send the London day plan to Lia?" — and wait. Only after an explicit yes, call share(recipient, payload, confirm=true). Never send to a person without showing the recipient and payload first.`;
 
-    return `You are a helpful London tour guide.
+    return `You are a point-and-speak assistant. The user is working in ${program.label}; you help them operate it by pointing and speaking, and you can also pull up a London map when they ask. Act on what they point at and explicitly ask for.
 CRITICAL: You MUST remain completely silent unless the user has explicitly spoken to you with a clear command or question. Do not initiate conversation, do not greet the user, and do not speak if there is only background noise or silence.
 Wait for the user to finish their instructions before responding. 
 CRITICAL: Do NOT repeat yourself or say the same sentence twice in a row. If you just said something, do not say it again immediately.
 Only speak after being asked to do something. Do not provide intros or ask if there's anything else you can help with.
 
+CRITICAL - CONFIRMATION POLICY (read first):
+- DO NOT verbally confirm or narrate successful actions. The APP signals success to the user (a sound + an on-screen cue) — your voice is NOT the confirmation channel.
+- After you call a tool and it succeeds, STAY SILENT. Do not say "Here's...", "Done", "Okay", or describe what you did.
+- Speak ONLY to: (a) ask a clarifying/disambiguating question, (b) honestly hedge when you are genuinely unsure, or (c) report a problem/error. In those cases, one short sentence.
+- This means most successful turns produce a tool call and NO speech. That is correct and intended.
+
 CRITICAL - RESPONSE STYLE:
 - ALWAYS respond in the same language the user uses. If the user speaks in English, you MUST respond in English.
-- Keep your verbal responses extremely short and direct.
-- Use phrases like "Here's Hyde Park" or "Here's the London Eye" instead of long explanations.
+- Keep any verbal responses (questions, hedges, errors) extremely short and direct.
 - Avoid filler words like "Perfect", "Sure", "Okay", or "I'm showing you".
-- Be concise. One short sentence is usually enough.
+- Be concise. One short sentence is the maximum.
 
 CRITICAL - ACTION LOGIC:
 - NEVER perform any actions (like updating the map or showing directions) based on just pointing or hovering.
@@ -1294,9 +1426,9 @@ CRITICAL - ACTION LOGIC:
 - If the user is just moving their cursor without speaking, stay silent.
 - Once you understand the command, call the tool immediately.
 - NEVER proactively update the map or suggest locations. ONLY update the map when the user EXPLICITLY asks you to.
-- CRITICAL: When you respond verbally (e.g., "Here's the London Eye"), you MUST double-check that you have also called the 'update_map' or 'show_directions' tool in the same turn. Never just say you are showing something without actually calling the tool.
+- CRITICAL: Whenever you act, you MUST call the corresponding tool ('update_map'/'show_directions'/an action verb). Never just say you are doing something without the tool call — and per the CONFIRMATION POLICY, do not narrate the success at all; just call the tool.
 
-The user is looking at a gallery of London photos on the left and a Google Map on the right.
+The user is looking at a gallery of ${program.label} screenshots on the left and a Google Map on the right.
 
 MARKERS (Visual Anchors):
 - When the user circles an item, a marker labeled M1, M2, etc., is placed at that location.
@@ -1305,11 +1437,8 @@ MARKERS (Visual Anchors):
 - Markers are persistent until the map is updated or the AI responds.
 - CRITICAL: When a new request starts, ignore all previous markers and landmarks. ALWAYS use the most recent visual information and pointing hints.
 
-GALLERY LOCATIONS (Use these names exactly):
-- London Eye
-- Hyde Park
-- Westminster Abbey
-- St Pancras Station
+ON-SCREEN ELEMENTS (the user points at these — use these names exactly):
+${program.images.map(i => `- ${i.title}`).join('\n')}
 
 USER CAPABILITIES:
 1. Point at a photo and ask "show me this on a map". You MUST identify which photo they are pointing at and call update_map(location_name).
@@ -1328,14 +1457,14 @@ ${honest ? POINTING_TRUTH_HONEST : POINTING_TRUTH_CONFIDENT}
 - ALWAYS ignore landmarks from previous requests. Each time the user speaks a new command, start fresh with the pointing hints. Do NOT reuse locations from previous direction requests unless the user explicitly asks to "go back" or "use the same start".
 - If the hint says "Nothing (Empty Space)", ask the user to point at a photo.
 - Listen carefully to the user's full request and ensure you understand their complete intent before calling any tools. For example, if they are describing a trip, wait until they specify a location they want to see on the map.
-- Once the intent is clear, call the tools to update the map. Do not just talk about it.
-- ALWAYS provide a verbal response (audio) confirming what you are doing in the SAME turn as the tool call.
-- CRITICAL: When you respond verbally (e.g., "Here's the London Eye"), you MUST double-check that you have also called the 'update_map' or 'show_directions' tool in the same turn. Never just say you are showing something without actually calling the tool.
-- CRITICAL: After you receive a tool response (success: true), do NOT speak again to confirm that you've done it. One verbal confirmation per action is enough.
+- Once the intent is clear, call the tools to act. Do not just talk about it — and per the CONFIRMATION POLICY, do not narrate it either; just call the tool and stay silent on success.
+- Always perform the action by CALLING THE TOOL; never merely say you are doing something without the tool call.
+- CRITICAL: After you receive a tool response (success: true), do NOT speak. The app has already confirmed it to the user.
 - If the user asks for directions, ensure you have both an origin and a destination.
-- DO NOT REPEAT YOURSELF. If you just confirmed an action, do not confirm it again.
+- DO NOT REPEAT YOURSELF.
 
 ${honest ? HONEST_VERB_RULES : CONFIDENT_VERB_RULES}
+${ACTIONS_SECTION}
 
 COORDINATE SYSTEM:
 - The entire view is 1000x1000.
@@ -1343,11 +1472,18 @@ COORDINATE SYSTEM:
 - The map is on the right side.
 - You will receive spatial information about the photos in the interactive objects list.
 
-When the user points and speaks a command, respond cheerfully like a tour guide and use the tools to update the map.`;
+When the user points and speaks a command, call the appropriate tool — a map tool to show a place, or a ${program.label} action verb to act on the document — and STAY SILENT on success (the app confirms). Speak only to ask, hedge, or report an error.`;
   };
 
   const handleVoiceToolCall = (call: { id: string; name: string; args: any }) => {
     const fc = { id: call.id, name: call.name, args: call.args };
+    // G9 IDEMPOTENCY: drop a duplicate tool call the model re-emitted within the window (a
+    // known agent failure mode — e.g. replaying a chain). Ack it so the model doesn't hang.
+    if (callDeduperRef.current.seen(fc.name, argsKey(fc.args), Date.now())) {
+      addLog('info', `Duplicate tool call skipped: ${fc.name}`);
+      providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true, deduped: true });
+      return;
+    }
     if (fc.name === 'update_map') {
       const args = fc.args as any;
       let query = args.query;
@@ -1439,12 +1575,84 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
       if (!confirmed) {
         addLog('tool', `Tool Call: share(witness) - to ${recipient}${payload ? `: ${payload}` : ''}`);
         setShareRequest({ recipient, payload, confirmed: false });
+        emitFeedback({ outcome: 'needs-confirm', verbClass: 'share', label: `Confirm: share with ${recipient}` });
       } else {
         addLog('event', `Shared ${payload ?? 'item'} with ${recipient}`);
         setShareRequest({ recipient, payload, confirmed: true });
+        emitFeedback({ outcome: 'committed', verbClass: 'share', label: `Shared with ${recipient}` });
       }
       providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true, sent: confirmed });
+    } else if (ACTION_VERB_NAMES.includes(fc.name)) {
+      // ACTION VERBS (save/edit/format/insert/photo). The Policy layer (DIAL A: autonomy ×
+      // verb class) decides commit-vs-witness; the Feedback layer (DIAL B) signals the
+      // outcome via earcon / app-speech / visual. The model never self-confirms — the app
+      // owns confirmation. The mock document mutates on commit; the preview shows the result.
+      const args = (fc.args ?? {}) as { target?: string; detail?: string; confirm?: boolean };
+      const { label, target, detail } = describeAction(fc.name, args);
+      const confirmed = args.confirm === true;
+      const verbClass = classOf(fc.name);
+      const phrase = `${label} ${target}${detail ? ` (${detail})` : ''}`;
+      const decision = decideCommit(verbClass, autonomyRef.current, confirmed);
+
+      // G5 GROUNDING RECONCILIATION: compare the model's read of the referent (args.target)
+      // against the app's pointer hit-test. A genuine disagreement is a *perceived* ambiguity
+      // (real low confidence) — in honest mode it forces a confirm, independent of the seeded
+      // confusable table. Logged so we can measure whether disagreement predicts corrections.
+      const appReferent = markersRef.current[0]?.identifiedObject ?? hoveredObjectRef.current ?? null;
+      const modelElement = matchElement(program.images, args.target);
+      const agree = (appReferent && modelElement) ? appReferent === modelElement : null;
+      telemetry.grounding(appReferent, args.target ?? null, agree);
+      const disagreement = honestModeRef.current && agree === false && !confirmed;
+      const effectiveDecision: 'commit' | 'witness' = disagreement ? 'witness' : decision;
+      const note = disagreement ? `You pointed at “${appReferent}”, but I read “${modelElement}”.` : undefined;
+
+      telemetry.action(fc.name, verbClass, effectiveDecision);
+      if (effectiveDecision === 'witness') {
+        addLog('tool', `Tool Call: ${fc.name}(witness${disagreement ? ', grounding mismatch' : ''}) — ${phrase}`);
+        setPendingAction({ verb: fc.name, label, target, detail, confirmed: false, note });
+        emitFeedback({ outcome: 'needs-confirm', verbClass, label: disagreement ? `Mismatch: ${appReferent} vs ${modelElement}` : `Confirm: ${phrase}` });
+        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true, witnessed: true, grounding_mismatch: disagreement, app_referent: appReferent, model_target: modelElement });
+      } else {
+        const prevDoc = mockDocRef.current;
+        const nextDoc = applyAction(prevDoc, fc.name, args);
+        mockDocRef.current = nextDoc;
+        setMockDoc(nextDoc);
+        setUndoStack(s => [...s, { doc: prevDoc, label: phrase }]); // memento for undo
+        setPendingAction({ verb: fc.name, label, target, detail, confirmed: true });
+        emitFeedback({ outcome: 'committed', verbClass, label: phrase });
+        // G4: register newly-created objects so "send the chart I just made" resolves later.
+        if (verbClass === 'create') {
+          const createdName = nextDoc.kind === 'excel' ? 'Chart'
+            : nextDoc.kind === 'powerpoint' ? (nextDoc.slides[nextDoc.slides.length - 1] ?? 'Slide')
+            : (modelElement ?? target);
+          referents.note(createdName, 'created');
+        }
+        // G2: feed the new document state back so the model can SEE the result of its edit
+        // (closes the action→result loop for multi-step work). Also drawn into the vision frame.
+        providerRef.current?.sendTextHint(`[DOCUMENT STATE after your edit: ${serializeMockDoc(nextDoc)}. DO NOT acknowledge this message.]`);
+        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true, done: true });
+      }
     }
+  };
+
+  // G8 INPUT FALLBACK: select a target by its number (voice "number two" / number key) — a
+  // pointer-free deixis. Simulates pointing at the element so a command resolves to it.
+  const selectTargetByNumber = (n: number) => {
+    const img = program.images[n - 1];
+    if (!img) return;
+    const obj = interactiveObjectsRef.current.find(o => o.name === img.title);
+    if (!obj) return;
+    const [ymin, xmin, ymax, xmax] = obj.bbox;
+    const cx = (xmin + xmax) / 2, cy = (ymin + ymax) / 2;
+    cursorRef.current = { x: cx, y: cy };
+    hoveredObjectRef.current = img.title;
+    setHoveredObject(img.title);
+    cursorHistoryRef.current.push({ x: cx, y: cy, t: Date.now(), hovered: img.title });
+    addMarker('THIS', cx, cy);
+    referents.note(img.title, 'pointed');
+    telemetry.deixis('number', img.title, focusTitleRef.current ?? null, 'high');
+    addLog('event', `Selected target ${n}: ${img.title}`);
+    providerRef.current?.sendTextHint(`[USER SELECTED target ${n}: ${img.title} (numbered selection). Treat this as what they are pointing at.]`);
   };
 
   const processInputTranscript = (text: string) => {
@@ -1463,6 +1671,30 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
       .trim();
 
     if (!cleanedText) return;
+
+    // G9 REPAIR GRAMMAR: handle conversational corrections app-side. "undo that" → undo;
+    // "cancel / never mind" → drop the pending action; "no, the other one" → swap to the
+    // alternative candidate of the last ambiguous point and re-offer it.
+    const repair = parseRepair(cleanedText);
+    if (repair === 'undo') {
+      handleUndo();
+    } else if (repair === 'cancel') {
+      setPendingAction(null);
+      markersRef.current = [];
+      providerRef.current?.sendTextHint('[SYSTEM: the user cancelled — drop the pending action and wait.]');
+    } else if (repair === 'other') {
+      const m = markersRef.current[0];
+      const alt = m?.candidates?.find(c => c !== m.identifiedObject);
+      if (alt && providerRef.current) {
+        if (m) m.identifiedObject = alt;
+        referents.note(alt, 'pointed');
+        providerRef.current.sendTextHint(`[SYSTEM: the user meant the OTHER one — they are pointing at "${alt}", not your previous guess. Use ${alt} now.]`);
+      }
+    }
+
+    // G8: pointer-free deixis by spoken number ("number two", "the second one").
+    const sel = parseTargetSelection(cleanedText, program.images.length);
+    if (sel !== null) selectTargetByNumber(sel);
 
     // Smart accumulation: show the whole sentence instead of flashing words
     const prevText = lastProcessedTranscriptionRef.current || "";
@@ -1641,7 +1873,7 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
         // DIFF 1: compute a (demo-grade) confidence for this resolution and log it.
         // Computed in both modes so the signal is visible in the debug panel even on
         // the confident baseline (which deliberately ignores it).
-        const confidence = computePointingConfidence(foundObject, hX, hY, interactiveObjectsRef.current);
+        const confidence = computePointingConfidence(foundObject, hX, hY, interactiveObjectsRef.current, CONFUSABLE_PAIRS);
         const otherCandidates = confidence.candidates.filter(c => c !== foundObject!.name);
         addLog('info', `Confidence: ${confidence.level.toUpperCase()} — ${confidence.reason}${otherCandidates.length ? ` (vs ${otherCandidates.join(', ')})` : ''}`);
 
@@ -1651,7 +1883,15 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
         if (markerForConfidence && (Date.now() - markerForConfidence.timestamp < 1000)) {
           markerForConfidence.confidence = confidence.level;
           markerForConfidence.candidates = confidence.candidates;
+          markerForConfidence.category = categoryOf(foundObject.name);
         }
+
+        // TESTBED: record this deixis resolution against the active scenario's target (ground
+        // truth) so we can measure pointing accuracy + confidence calibration per config/device.
+        telemetry.deixis(kw, foundObject.name, focusTitleRef.current ?? null, confidence.level);
+
+        // G4: remember this referent so later turns can resolve "make THAT bold" / "send IT".
+        if (foundObject.name !== 'Google Maps') referents.note(foundObject.name, 'pointed');
 
         // PHASE F (S6): accumulate distinct real landmarks. In honest mode, once enough
         // have been pointed at with no plan yet, authorize the model to make ONE
@@ -1684,8 +1924,15 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
                   ? ` (confidence: low — could also be ${otherCandidates.join(' or ')})`
                   : ' (confidence: low — not certain this is the right photo)')
             : '';
-          const hintText = `[USER JUST SAID "${kw.toUpperCase()}" WHILE POINTING AT: ${foundObject.name}${confidenceTag}. ${isCommand ? "NOTE: This is part of an explicit command." : "NOTE: This is just a mention, stay silent unless they give a command."}]`;
+          // G4: give the model recent referents so it can resolve cross-turn back-references
+          // ("make that bold", "the chart I just made") to a concrete element.
+          const refCtx = referents.promptContext();
+          // G3: if an OCR word sits under the focus point, refine the referent to that word.
+          const sub = wordAt(hX, hY);
+          const subTag = sub && sub.photoTitle === foundObject.name ? ` (specifically the word "${sub.word}")` : '';
+          const hintText = `[USER JUST SAID "${kw.toUpperCase()}" WHILE POINTING AT: ${foundObject.name}${subTag}${confidenceTag}. ${isCommand ? "NOTE: This is part of an explicit command." : "NOTE: This is just a mention, stay silent unless they give a command."}${refCtx ? ` ${refCtx}` : ''}]`;
           providerRef.current?.sendTextHint(hintText);
+          if (sub && sub.photoTitle === foundObject.name) referents.note(`"${sub.word}"`, 'pointed');
         }
       } else {
         // SEND "NOTHING" HINT TO PREVENT GUESSING
@@ -1722,11 +1969,34 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
         return;
     }
 
+    // Secure-context check: getUserMedia only exists over HTTPS or http://localhost.
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        const msg = "Your browser does not support microphone access or is blocking it. Please use a modern browser like Chrome or Edge over HTTPS.";
+        const msg = "This page can't reach the microphone API. It requires a secure context — open the app over HTTPS or http://localhost (a plain http forwarded URL will block it).";
         setLastError(msg);
         addLog('info', msg);
         return;
+    }
+
+    // Mic pre-flight: acquire the microphone up front so we fail fast with a precise,
+    // actionable reason (and surface the browser prompt) instead of opening a dead session.
+    // The provider re-acquires its own stream once connected, so release this one.
+    try {
+      const preflight = await navigator.mediaDevices.getUserMedia({ audio: true });
+      preflight.getTracks().forEach(t => t.stop());
+    } catch (err: any) {
+      let inIframe = false;
+      try { inIframe = window.self !== window.top; } catch { inIframe = true; } // cross-origin access throws ⇒ framed
+      const denied = err?.name === 'NotAllowedError' || /Permission denied|NotAllowed/.test(err?.message ?? '');
+      const msg = denied
+        ? (inIframe
+            ? "Microphone blocked: the app is running inside an embedded preview that doesn't allow mic access. Open it in a full browser tab (the HTTPS URL), then allow the microphone."
+            : "Microphone access was denied. Click the mic/lock icon in the address bar, set Microphone to Allow, then reload and try again.")
+        : (err?.name === 'NotFoundError'
+            ? "No microphone was found. Plug in or enable a mic and try again."
+            : `Microphone unavailable: ${err?.message ?? err}`);
+      setLastError(msg);
+      addLog('info', `Session Error: ${msg}`);
+      return;
     }
 
     addLog('info', 'Starting Live Session...');
@@ -1734,6 +2004,7 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
       addLog('info', 'Initializing AudioContext...');
       audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
       await audioContextRef.current.resume();
+      primeEarcons(); // unlock the earcon audio context on this user gesture
 
       const honest = honestModeRef.current;
       addLog('info', `Prompt variant: ${honest ? 'HONEST (carries confidence, asks when unsure)' : 'CONFIDENT (Google baseline)'}`);
@@ -1755,9 +2026,21 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
             : createGeminiProvider(apiKey!, (s) => { sessionRef.current = s; });
       const voice = backend === 'gemini' ? 'Zephyr' : backend === 'azure' ? 'alloy' : 'marin';
       await providerRef.current.connect(
-        { instructions: buildInstructions(honest), tools: VOICE_TOOLS, voice },
+        { instructions: buildInstructions(honest, program), tools: voiceTools, voice },
         {
-          onOpen: () => { setIsLive(true); addLog('info', 'Live Link Established'); },
+          onOpen: () => {
+            setIsLive(true);
+            addLog('info', 'Live Link Established');
+            // TESTBED: snapshot the config + device so this session's metrics are attributable.
+            telemetry.start({
+              backend: voiceBackendRef.current,
+              autonomy: autonomyRef.current,
+              feedback: feedbackModeRef.current,
+              program: activeProgram,
+              honest: honestModeRef.current,
+              device: detectDevice(),
+            });
+          },
           onClose: () => { setIsLive(false); sessionRef.current = null; providerRef.current = null; addLog('info', 'Live Link Closed'); },
           onError: (m: string) => {
             let errMsg = m;
@@ -1766,6 +2049,8 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
             }
             setLastError(errMsg);
             addLog('info', `Session Error: ${errMsg}`);
+            telemetry.error(errMsg);
+            emitFeedback({ outcome: 'error', label: errMsg });
           },
           onInputTranscript: (text: string) => { processInputTranscript(text); },
           onToolCall: (call) => {
@@ -1829,14 +2114,17 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
         const timeSinceReceived = now - pendingMapUpdate.receivedAt;
         // Snappier for maps: 600ms silence is enough to confirm command end
         if (lastTranscriptionTimeRef.current > 0 && timeSinceTranscription > 600 && timeSinceReceived > 300) {
+          telemetry.map(pendingMapUpdate.query ?? `${pendingMapUpdate.origin}→${pendingMapUpdate.destination}`);
           if (pendingMapUpdate.type === 'search') {
             setMapType('search');
             setMapQuery(pendingMapUpdate.query!);
+            emitFeedback({ outcome: 'committed', verbClass: 'control', label: `Showing ${pendingMapUpdate.query}` });
           } else {
             setMapType('directions');
             setDirections({ origin: pendingMapUpdate.origin!, destination: pendingMapUpdate.destination! });
+            emitFeedback({ outcome: 'committed', verbClass: 'control', label: `Directions to ${pendingMapUpdate.destination}` });
           }
-          
+
           // Clear markers and paint so the next "this" is fresh
           markersRef.current = [];
           lastMarkerTimeRef.current = {};
@@ -1867,10 +2155,12 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
       if (e.key === 't') addMarker("this");
       if (e.key === 'i') addMarker("it");
       if (e.key === 'h') addMarker("here");
+      // G8: number keys 1–9 select a numbered target (pointer-free deixis).
+      if (e.key >= '1' && e.key <= '9') selectTargetByNumber(Number(e.key));
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [isLive]);
+  }, [isLive, activeProgram]);
 
   // Visual Shimmering Loop
   useEffect(() => {
@@ -1932,17 +2222,21 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
           const isUncertain = honestModeRef.current && m.confidence === 'low';
           const pulse = Math.sin(age * (isUncertain ? 0.006 : 0.008)) * (isUncertain ? 12 : 8);
 
+          // HUE = element category (program/os/ui/content); ring STYLE = confidence.
+          // The two axes are orthogonal: a marker's colour tells you WHAT kind of thing was
+          // selected, while solid-vs-dashed + "?" tells you how SURE the resolution is.
+          const tone = CATEGORY_COLORS[m.category || categoryOf(m.identifiedObject)];
+
           // Map 0-1000 back to current canvas pixels
           // We use canvas.width/height directly to avoid stale closures
           const mx = (m.x / 1000) * canvas.width;
           const my = (m.y / 1000) * canvas.height;
 
           if (isUncertain) {
-            const amber = '245, 158, 11';
-            // Soft amber glow (dimmer than the confident gold — this is a hedge, not a hit)
+            // Soft glow (dimmer than a confident hit — this is a hedge, not a lock-on)
             const grad = ctx.createRadialGradient(mx, my, 2, mx, my, 34 + pulse);
-            grad.addColorStop(0, `rgba(${amber}, ${alpha * 0.35})`);
-            grad.addColorStop(1, `rgba(${amber}, 0)`);
+            grad.addColorStop(0, `rgba(${tone}, ${alpha * 0.35})`);
+            grad.addColorStop(1, `rgba(${tone}, 0)`);
             ctx.fillStyle = grad;
             ctx.beginPath();
             ctx.arc(mx, my, 34 + pulse, 0, Math.PI * 2);
@@ -1954,7 +2248,7 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
             ctx.rotate((age * 0.0006) % (Math.PI * 2));
             ctx.setLineDash([6, 6]);
             ctx.lineWidth = 2;
-            ctx.strokeStyle = `rgba(${amber}, ${alpha})`;
+            ctx.strokeStyle = `rgba(${tone}, ${alpha})`;
             ctx.beginPath();
             ctx.arc(0, 0, 18 + Math.sin(age * 0.006) * 3, 0, Math.PI * 2);
             ctx.stroke();
@@ -1962,31 +2256,31 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
             ctx.setLineDash([]);
 
             // "?" badge at the center
-            ctx.fillStyle = `rgba(${amber}, ${alpha})`;
+            ctx.fillStyle = `rgba(${tone}, ${alpha})`;
             ctx.font = "bold 16px 'Roboto Mono', monospace";
             ctx.textAlign = "center";
             ctx.textBaseline = "middle";
             ctx.fillText("?", mx, my);
           } else {
-            // CONFIDENT (and the entire confident baseline): today's gold glow + fireflies.
+            // CONFIDENT: solid category-coloured glow + fireflies (the lock-on).
             const grad = ctx.createRadialGradient(mx, my, 2, mx, my, 35 + pulse);
-            grad.addColorStop(0, `rgba(255, 230, 0, ${alpha * 0.6})`);
-            grad.addColorStop(1, `rgba(255, 230, 0, 0)`);
+            grad.addColorStop(0, `rgba(${tone}, ${alpha * 0.6})`);
+            grad.addColorStop(1, `rgba(${tone}, 0)`);
             ctx.fillStyle = grad;
             ctx.beginPath();
             ctx.arc(mx, my, 35 + pulse, 0, Math.PI * 2);
             ctx.fill();
 
-            // Fireflies
+            // Fireflies, tinted to the category hue
             for(let i=0; i<8; i++) {
               const orbit = 12 + Math.sin(age * 0.003 + i) * 10;
               const px = mx + Math.cos(age * 0.004 + i) * orbit;
               const py = my + Math.sin(age * 0.004 + i * 1.2) * orbit;
               ctx.beginPath();
               ctx.arc(px, py, 1.2, 0, Math.PI * 2);
-              ctx.fillStyle = `rgba(255, 255, 200, ${alpha})`;
+              ctx.fillStyle = `rgba(${tone}, ${alpha})`;
               ctx.shadowBlur = 8;
-              ctx.shadowColor = "yellow";
+              ctx.shadowColor = `rgba(${tone}, 1)`;
               ctx.fill();
             }
             ctx.shadowBlur = 0; // Reset shadow after fireflies
@@ -2012,43 +2306,89 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
             const bx = mx - bw / 2;
             const by = my - 40;
 
-            // Rounded Box: near-black for confident, deep amber for uncertain.
-            ctx.fillStyle = isUncertain ? `rgba(120, 53, 15, ${alpha})` : `rgba(26, 26, 26, ${alpha})`;
+            // Rounded Box: near-black backing; uncertain markers get a category-hued outline.
+            ctx.fillStyle = `rgba(26, 26, 26, ${alpha})`;
             ctx.beginPath();
             const r = 4;
             ctx.roundRect(bx, by, bw, bh, r);
             ctx.fill();
             if (isUncertain) {
               ctx.lineWidth = 1;
-              ctx.strokeStyle = `rgba(245, 158, 11, ${alpha})`;
+              ctx.strokeStyle = `rgba(${tone}, ${alpha})`;
               ctx.stroke();
             }
 
-            ctx.fillStyle = isUncertain ? `rgba(254, 243, 199, ${alpha})` : `rgba(255, 255, 255, ${alpha})`;
+            ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
             ctx.textAlign = "center";
             ctx.textBaseline = "middle";
             ctx.fillText(labelText, mx, by + bh / 2);
           }
         });
 
+      // PRE-FOCUS: highlight the element the active scenario wants the user to point at,
+      // so they know where to aim before they move the cursor. A soft pulsing ring in the
+      // element's category hue + a "POINT HERE" tag on its bbox.
+      if (focusTitleRef.current) {
+        const target = interactiveObjectsRef.current.find(o => o.name === focusTitleRef.current);
+        const [tymin, txmin, tymax, txmax] = target?.bbox ?? [0, 0, 0, 0];
+        if (target && (txmax - txmin) > 0 && (tymax - tymin) > 0) {
+          const x = (txmin / 1000) * canvas.width;
+          const y = (tymin / 1000) * canvas.height;
+          const w = ((txmax - txmin) / 1000) * canvas.width;
+          const h = ((tymax - tymin) / 1000) * canvas.height;
+          const tone = CATEGORY_COLORS[target.category || categoryOf(target.name)];
+          const pulse = (Math.sin(now * 0.004) + 1) / 2; // 0..1
+          const pad = 4 + pulse * 3;
+
+          ctx.save();
+          // Soft glow
+          ctx.shadowBlur = 12 + pulse * 10;
+          ctx.shadowColor = `rgba(${tone}, ${0.5 + pulse * 0.4})`;
+          ctx.strokeStyle = `rgba(${tone}, ${0.85})`;
+          ctx.lineWidth = 2.5;
+          ctx.beginPath();
+          ctx.roundRect(x - pad, y - pad, w + pad * 2, h + pad * 2, 10);
+          ctx.stroke();
+          ctx.restore();
+
+          // "POINT HERE" tag
+          const tag = 'POINT HERE';
+          ctx.font = "bold 10px 'Roboto Mono', monospace";
+          const tw = ctx.measureText(tag).width;
+          const tagX = x - pad;
+          const tagY = y - pad - 18;
+          ctx.fillStyle = `rgb(${tone})`;
+          ctx.beginPath();
+          ctx.roundRect(tagX, tagY, tw + 12, 16, 4);
+          ctx.fill();
+          ctx.fillStyle = 'white';
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(tag, tagX + 6, tagY + 8);
+        }
+      }
+
       // Draw Interactive Object Markings if enabled
       // Keep markings visible during processing for context
       if (showMarkings) {
-        interactiveObjects.forEach(obj => {
+        // Read from the ref so freshly-swapped programs colour correctly without re-running
+        // this animation effect. Each outline is hued by its element category.
+        interactiveObjectsRef.current.forEach(obj => {
           const [ymin, xmin, ymax, xmax] = obj.bbox;
           const x = (xmin / 1000) * canvas.width;
           const y = (ymin / 1000) * canvas.height;
           const w = ((xmax - xmin) / 1000) * canvas.width;
           const h = ((ymax - ymin) / 1000) * canvas.height;
 
-          ctx.strokeStyle = 'rgba(133, 127, 231, 0.8)';
+          const tone = CATEGORY_COLORS[obj.category || categoryOf(obj.name)];
+          ctx.strokeStyle = `rgba(${tone}, 0.85)`;
           ctx.lineWidth = 2;
           ctx.setLineDash([5, 5]);
           ctx.strokeRect(x, y, w, h);
           ctx.setLineDash([]);
 
           // Label
-          ctx.fillStyle = 'rgba(133, 127, 231, 0.8)';
+          ctx.fillStyle = `rgba(${tone}, 0.85)`;
           ctx.font = 'bold 10px sans-serif';
           ctx.textAlign = "left";
           ctx.textBaseline = "top";
@@ -2093,6 +2433,31 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
     setHoveredObject(hovered);
     hoveredObjectRef.current = hovered;
 
+    // G3: which OCR word (if any) is under the cursor — finer-grained referent + feedforward.
+    const sub = hovered && hovered !== 'Google Maps' ? wordAt(hX, hY) : null;
+    const wordName = sub?.word ?? null;
+    if (wordName !== hoveredWordRef.current) {
+      hoveredWordRef.current = wordName;
+      setHoveredWord(wordName);
+    }
+
+    // PROACTIVE GROUNDING (Azure/OpenAI realtime): Gemini sees continuous video + streaming
+    // partial transcripts, so it already knows what the cursor is over when the user speaks.
+    // The other backends get sparse frames + end-of-turn transcripts, so the deixis hint can
+    // land too late. Pre-inform them what's under the cursor the moment it changes (throttled,
+    // silent, no response forced) — so "this/here" is grounded regardless of transcript timing.
+    if (
+      providerRef.current &&
+      voiceBackendRef.current !== 'gemini' &&
+      hovered && hovered !== 'Google Maps' &&
+      hovered !== lastHoverHintRef.current &&
+      now - lastHoverHintAtRef.current > HOVER_HINT_THROTTLE_MS
+    ) {
+      lastHoverHintRef.current = hovered;
+      lastHoverHintAtRef.current = now;
+      providerRef.current.sendTextHint(`[CONTEXT: the cursor is currently over "${hovered}". If the user says "this", "here", or "that", they are pointing at ${hovered}. This is silent context — DO NOT RESPOND OR SPEAK.]`);
+    }
+
     // Only add to history if distance is enough (MIN_DISTANCE) to reduce jitter
     const lastPoint = cursorHistoryRef.current[cursorHistoryRef.current.length - 1];
     if (lastPoint) {
@@ -2129,6 +2494,15 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
         return x >= xmin && x <= xmax && y >= ymin && y <= ymax;
       });
       isActuallyOnMap = found?.name === 'Google Maps';
+
+      // TOUCH DEIXIS: touch has no hover — a tap is the point. Register the target at the
+      // down position (cursor + hovered + history) so saying "this" right after a tap resolves,
+      // even if no pointermove fired. (Mouse users already get this via hover; harmless there.)
+      cursorRef.current = { x, y };
+      const hovered = found ? found.name : null;
+      setHoveredObject(hovered);
+      hoveredObjectRef.current = hovered;
+      cursorHistoryRef.current.push({ x, y, t: Date.now(), hovered });
     }
 
     if (isActuallyOnMap) {
@@ -2247,23 +2621,65 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
     };
   }, [handlePointerMove, handlePointerUp]);
 
+  // CORS-loaded image cache for the vision frame (G1: real pixels, not a labeled schematic).
+  // Only successfully CORS-clean images are drawn — anything that won't load clean stays a
+  // labeled box, so the offscreen canvas never taints and toBlob keeps encoding.
+  const visionImgCacheRef = useRef<Record<string, HTMLImageElement | 'failed' | 'loading'>>({});
+  useEffect(() => {
+    if (!isLive) return;
+    for (const img of program.images) {
+      if (visionImgCacheRef.current[img.url]) continue;
+      visionImgCacheRef.current[img.url] = 'loading';
+      const el = new Image();
+      el.crossOrigin = 'anonymous';
+      el.onload = () => { visionImgCacheRef.current[img.url] = el; };
+      el.onerror = () => { visionImgCacheRef.current[img.url] = 'failed'; };
+      el.src = img.url;
+    }
+  }, [isLive, activeProgram]);
+
+  // G3 OCR: when enabled during a live session, recognize words in each gallery screenshot
+  // and tell the model the text content. Failures (offline / blocked model assets) are
+  // logged and ignored — the app falls back to whole-tile pointing.
+  useEffect(() => {
+    if (!ocrEnabled || !isLive) return;
+    let cancelled = false;
+    addLog('info', 'OCR enabled — recognizing screenshot text…');
+    for (const img of program.images) {
+      ocrImage(img.url)
+        .then(words => {
+          if (cancelled) return;
+          ocrWordsRef.current[img.title] = words;
+          addLog('info', `OCR: ${img.title} — ${words.length} words`);
+          if (words.length && providerRef.current) {
+            const txt = words.map(w => w.text).slice(0, 40).join(' ');
+            providerRef.current.sendTextHint(`[OCR: "${img.title}" contains the text: ${txt}. The user may point at individual words. DO NOT acknowledge this message.]`);
+          }
+        })
+        .catch(err => { if (!cancelled) addLog('info', `OCR unavailable for ${img.title}: ${err?.message ?? err}`); });
+    }
+    return () => { cancelled = true; };
+  }, [ocrEnabled, isLive, activeProgram]);
+
   // Vision pipeline
   useEffect(() => {
     if (!isLive) return;
-    
-    // AI Vision doesn't need full resolution. 400x400 is plenty and much faster to encode.
+
+    // AI Vision doesn't need full resolution. 400px scene is plenty; an 88px DOCUMENT strip
+    // below shows the live mock-doc state so the model sees the result of its own edits (G2).
     const VISION_SIZE = 400;
+    const DOC_STRIP = 88;
     const offscreenCanvas = document.createElement('canvas');
-    offscreenCanvas.width = VISION_SIZE; 
-    offscreenCanvas.height = VISION_SIZE;
+    offscreenCanvas.width = VISION_SIZE;
+    offscreenCanvas.height = VISION_SIZE + DOC_STRIP;
     const ctx = offscreenCanvas.getContext('2d', { alpha: false });
 
     const interval = setInterval(() => {
       if (!ctx || !layoutBounds) return;
       
-      // Clear and draw background
+      // Clear and draw background (full canvas incl. the doc strip)
       ctx.fillStyle = '#f8f9fc';
-      ctx.fillRect(0, 0, VISION_SIZE, VISION_SIZE);
+      ctx.fillRect(0, 0, VISION_SIZE, VISION_SIZE + DOC_STRIP);
 
       // Draw Photos Box
       const p = layoutBounds.photos;
@@ -2273,17 +2689,25 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
       ctx.fillRect((p.xmin/1000)*VISION_SIZE, (p.ymin/1000)*VISION_SIZE, ((p.xmax-p.xmin)/1000)*VISION_SIZE, ((p.ymax-p.ymin)/1000)*VISION_SIZE);
       ctx.strokeRect((p.xmin/1000)*VISION_SIZE, (p.ymin/1000)*VISION_SIZE, ((p.xmax-p.xmin)/1000)*VISION_SIZE, ((p.ymax-p.ymin)/1000)*VISION_SIZE);
 
-      // Draw Photo Items
+      // Draw Photo Items — REAL pixels when the CORS-clean image is loaded, else a labeled box.
       layoutBounds.photoItems.forEach((item, i) => {
         const b = item.bbox;
-        ctx.fillStyle = '#f1f5f9';
-        ctx.fillRect((b.xmin/1000)*VISION_SIZE, (b.ymin/1000)*VISION_SIZE, ((b.xmax-b.xmin)/1000)*VISION_SIZE, ((b.ymax-b.ymin)/1000)*VISION_SIZE);
-        ctx.strokeRect((b.xmin/1000)*VISION_SIZE, (b.ymin/1000)*VISION_SIZE, ((b.xmax-b.xmin)/1000)*VISION_SIZE, ((b.ymax-b.ymin)/1000)*VISION_SIZE);
-        
-        ctx.fillStyle = '#64748b';
-        ctx.font = 'bold 8px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText(PHOTOS[i].title, ((b.xmin+b.xmax)/2000)*VISION_SIZE, ((b.ymin+b.ymax)/2000)*VISION_SIZE);
+        const dx = (b.xmin/1000)*VISION_SIZE, dy = (b.ymin/1000)*VISION_SIZE;
+        const dw = ((b.xmax-b.xmin)/1000)*VISION_SIZE, dh = ((b.ymax-b.ymin)/1000)*VISION_SIZE;
+        const cached = visionImgCacheRef.current[PHOTOS[i]?.url ?? ''];
+        if (cached && cached !== 'failed' && cached !== 'loading') {
+          try { ctx.drawImage(cached, dx, dy, dw, dh); } catch { /* keep canvas clean */ }
+          ctx.strokeStyle = '#e5e5e5';
+          ctx.strokeRect(dx, dy, dw, dh);
+        } else {
+          ctx.fillStyle = '#f1f5f9';
+          ctx.fillRect(dx, dy, dw, dh);
+          ctx.strokeRect(dx, dy, dw, dh);
+          ctx.fillStyle = '#64748b';
+          ctx.font = 'bold 8px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText(PHOTOS[i].title, dx + dw / 2, dy + dh / 2);
+        }
       });
 
       // Draw Map Box
@@ -2342,6 +2766,33 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
         ctx.fillText(`M${i+1}`, mx, my - 15);
       });
 
+      // DOCUMENT STRIP (G2): render the live mock-doc state so the model sees the result of its
+      // own edits — closes the action→result loop for multi-step work.
+      ctx.fillStyle = '#0f172a';
+      ctx.fillRect(0, VISION_SIZE, VISION_SIZE, DOC_STRIP);
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = 'bold 9px monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText('DOCUMENT STATE', 6, VISION_SIZE + 14);
+      ctx.fillStyle = '#e2e8f0';
+      ctx.font = '9px monospace';
+      // simple word-wrap into the strip
+      const docWords = serializeMockDoc(mockDocRef.current).split(' ');
+      let line = '';
+      let ly = VISION_SIZE + 30;
+      for (const w of docWords) {
+        const test = line ? `${line} ${w}` : w;
+        if (ctx.measureText(test).width > VISION_SIZE - 12 && line) {
+          ctx.fillText(line, 6, ly);
+          line = w;
+          ly += 11;
+          if (ly > VISION_SIZE + DOC_STRIP - 4) { line = ''; break; }
+        } else {
+          line = test;
+        }
+      }
+      if (line) ctx.fillText(line, 6, ly);
+
       // Encode and send - use toBlob (async) to avoid blocking the main thread
       offscreenCanvas.toBlob((blob) => {
         if (!blob) return;
@@ -2354,13 +2805,14 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
       }, 'image/jpeg', 0.6);
     }, sendFrequency);
     return () => clearInterval(interval);
-  }, [isLive, sendFrequency, dims, layoutBounds]);
+  }, [isLive, sendFrequency, dims, layoutBounds, activeProgram]);
 
   // Cleanup timeouts on unmount
   useEffect(() => {
     return () => {
       if (transcriptionTimeoutRef.current) clearTimeout(transcriptionTimeoutRef.current);
       if (resetTimeoutRef.current) clearTimeout(resetTimeoutRef.current);
+      void terminateOcr(); // free the OCR worker
     };
   }, []);
   const resetCanvas = () => {
@@ -2388,7 +2840,8 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
         ctx.clearRect(0, 0, dims.width, dims.height);
         ctx.drawImage(img, sx, sy, sWidth, sHeight, 0, 0, dims.width, dims.height);
         setCurrentImage(persistentCanvasRef.current!.toDataURL('image/png'));
-        setInteractiveObjects(INTERACTIVE_OBJECTS);
+        setInteractiveObjects(INTERACTIVE_OBJECTS_BASE);
+        interactiveObjectsRef.current = INTERACTIVE_OBJECTS_BASE;
         setHistory([]); // Clear history on full reset
         addLog('info', 'Canvas Reset.');
         // Clear markers on reset
@@ -2398,16 +2851,65 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
     }
   };
 
+  // Swap the active program (Word/Excel/PowerPoint/Photo). Clears selection + task progress,
+  // resets the mock document, and lets the layout effect recompute bboxes for the new images.
+  // Because the program now drives the tools AND the prompt, reconnect if live so the model
+  // gets the right verbs/instructions (mirrors the honest-mode reconnect).
+  const handleProgramChange = (id: ProgramId) => {
+    if (id === activeProgram) return;
+    setActiveProgram(id);
+    markersRef.current = [];
+    setInteractiveObjects([]);
+    interactiveObjectsRef.current = [];
+    setCurrentTaskIndex(0);
+    setCompletedTaskIds([]);
+    identifiedLandmarksRef.current = new Set();
+    hasOfferedTripRef.current = false;
+    setPendingAction(null);
+    const fresh = initialMockDoc(id);
+    setMockDoc(fresh);
+    mockDocRef.current = fresh;
+    setUndoStack([]);
+    referents.clear();
+    callDeduperRef.current.reset();
+    ocrWordsRef.current = {};
+    clearOcrCache();
+    setHoveredWord(null);
+    layoutVersionRef.current++; // G7: structural layout change → bump scene version
+    addLog('info', `Program switched to ${getProgram(id).label}`);
+    // The reconnect (if live) happens in the [activeProgram] effect below, so it runs after
+    // re-render and captures the new program's tools + prompt.
+  };
+
+  // Undo the most recent committed document mutation (restore the memento).
+  const handleUndo = () => {
+    if (undoStack.length === 0) return;
+    const last = undoStack[undoStack.length - 1];
+    setMockDoc(last.doc);
+    mockDocRef.current = last.doc;
+    setUndoStack(undoStack.slice(0, -1));
+    setPendingAction(null);
+    telemetry.correction(); // undo = a correction signal for the testbed
+    emitFeedback({ outcome: 'undo', label: `Undid ${last.label}` });
+  };
+
   const handleReset = () => {
     setHistory([]);
     setPersistentPaths([]);
     setPointerPath([]);
-    setInteractiveObjects(INTERACTIVE_OBJECTS);
+    setInteractiveObjects(INTERACTIVE_OBJECTS_BASE);
+    interactiveObjectsRef.current = INTERACTIVE_OBJECTS_BASE;
     setMapQuery("London");
     setMapType('search');
     setDirections(null);
     setProposedItinerary(null);
     setShareRequest(null);
+    setPendingAction(null);
+    const freshDoc = initialMockDoc(activeProgram);
+    setMockDoc(freshDoc);
+    mockDocRef.current = freshDoc;
+    setUndoStack([]);
+    referents.clear();
 
     const pCanvas = persistentCanvasRef.current;
     if (pCanvas) {
@@ -2447,23 +2949,30 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
           <LaptopSmileyIcon size={180} className="text-gray-300 dark:text-gray-700" />
         </div>
         <h2 className="text-3xl font-bold mb-4 text-[#0f172a] dark:text-white">We can’t quite fit everything on your screen.</h2>
-        <p className="text-[#64748b] dark:text-slate-400 text-xl max-w-lg leading-relaxed">
+        <p className="text-[#64748b] dark:text-slate-400 text-xl max-w-lg leading-relaxed mb-8">
           please make this window wider and make sure to use a laptop or desktop device.
         </p>
+        <button
+          onClick={() => setBypassDeviceGate(true)}
+          className="px-5 py-3 rounded-full font-dm font-bold text-sm border border-[var(--card-border)] text-[var(--text-primary)] hover:border-[#0077F0] hover:text-[#0077F0] dark:hover:text-white transition-colors active:scale-95"
+        >
+          Continue anyway — testbed mode ↗
+        </button>
       </div>
     );
   }
 
   return (
     <div className={`flex flex-col h-screen bg-[var(--bg-color)] bg-dots text-[var(--text-primary)] overflow-hidden font-sans selection:bg-indigo-500/30 ${isLive ? 'custom-cursor-active' : ''}`}>
-      <div className="flex-1 flex flex-row overflow-hidden custom-scrollbar">
-        <main 
-          ref={mainContainerRef} 
+      <div className="flex-1 flex flex-col lg:flex-row overflow-y-auto lg:overflow-hidden custom-scrollbar">
+        <main
+          ref={mainContainerRef}
           onPointerMove={handlePointerMove}
           onPointerDown={handlePointerDown}
           onPointerUp={handlePointerUp}
           onPointerLeave={handlePointerUp}
-          className="flex-1 flex flex-row items-center lg:justify-start justify-center p-2 sm:p-4 lg:p-8 lg:pl-24 relative gap-2 lg:gap-0"
+          style={{ touchAction: isLive ? 'none' : 'auto' }}
+          className="flex-1 flex flex-row items-center lg:justify-start justify-center p-2 sm:p-4 lg:p-8 lg:pl-24 relative gap-2 lg:gap-0 min-h-[60vh] lg:min-h-0"
         >
           <CursorResources mode={isPainting ? 'painting' : 'off'} color="#3b82f6" />
           <CursorTrail isActive={isPainting} mousePos={trailMousePos} color="#3b82f6" />
@@ -2475,6 +2984,54 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
             height={mainSize.height} 
             className={`absolute inset-0 z-50 pointer-events-none ${isLive ? 'opacity-100' : 'opacity-0'} transition-opacity duration-300`}
           />
+          {/* G6 FEEDFORWARD: live "what I'll act on" preview as the cursor moves, so the user
+              sees the interpretation forming BEFORE they speak (closes the gulf of execution). */}
+          {isLive && (
+            <div className="absolute top-3 left-1/2 -translate-x-1/2 z-50 pointer-events-none flex items-center gap-2 px-3 py-1.5 rounded-full border border-[var(--card-border)] bg-[var(--card-bg)]/90 backdrop-blur shadow-sm">
+              <span className={`w-2 h-2 rounded-full ${hoveredObject && hoveredObject !== 'Google Maps' ? 'bg-[var(--accent-color)] animate-pulse' : 'bg-[var(--text-secondary)] opacity-40'}`} />
+              <span className="text-[11px] font-mono text-[var(--text-primary)]">
+                {hoveredObject && hoveredObject !== 'Google Maps'
+                  ? `Pointing at: ${hoveredWord ? `"${hoveredWord}" in ${hoveredObject}` : hoveredObject}`
+                  : 'Point at an element…'}
+              </span>
+            </div>
+          )}
+          {/* Highlight category legend — explains the colour ↔ category mapping while debug markings are on */}
+          {showMarkings && (
+            <div className="absolute top-3 right-3 z-50 pointer-events-none rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)]/90 backdrop-blur px-3 py-2 shadow-md">
+              <div className="text-[9px] font-mono uppercase tracking-wide text-[var(--text-secondary)] mb-1">Highlights</div>
+              <div className="flex flex-col gap-1">
+                {(Object.keys(CATEGORY_LABELS) as ElementCategory[]).map(cat => (
+                  <div key={cat} className="flex items-center gap-2">
+                    <span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: `rgb(${CATEGORY_COLORS[cat]})` }} />
+                    <span className="text-[10px] font-mono text-[var(--text-primary)]">{CATEGORY_LABELS[cat]}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {/* Feedback toast — the always-on VISUAL channel (minimum-feedback floor). Shows on
+              every action regardless of the Feedback dial, so "did it work?" is always answerable. */}
+          {feedbackToast && (
+            <div
+              key={feedbackToast.at}
+              className={`absolute bottom-4 left-1/2 -translate-x-1/2 z-[60] pointer-events-none flex items-center gap-2 px-4 py-2 rounded-full shadow-lg border backdrop-blur animate-in fade-in slide-in-from-bottom-2 duration-200 ${
+                feedbackToast.outcome === 'error'
+                  ? 'bg-red-500/10 border-red-500/40 text-red-600 dark:text-red-400'
+                  : feedbackToast.outcome === 'needs-confirm'
+                    ? 'bg-amber-500/10 border-amber-500/40 text-amber-600 dark:text-amber-400'
+                    : 'bg-[var(--card-bg)]/95 border-[var(--card-border)] text-[var(--text-primary)]'
+              }`}
+            >
+              {feedbackToast.outcome === 'error'
+                ? <X size={14} />
+                : feedbackToast.outcome === 'needs-confirm'
+                  ? <Shield size={14} />
+                  : <CheckCircle size={14} className="text-green-500" />}
+              <span className="text-[12px] font-mono">{feedbackToast.label}</span>
+            </div>
+          )}
+
           {/* Photos Box */}
           <div className="photos-box flex flex-col flex-1 min-w-0 lg:max-w-[700px] aspect-[2/3] relative z-10">
             <div className="flex flex-col bg-[var(--card-bg)] border border-[var(--card-border)] rounded-xl p-2 sm:p-4 overflow-hidden w-full h-full">
@@ -2488,11 +3045,35 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3 sm:gap-4 overflow-y-auto pr-2 custom-scrollbar flex-1">
-                {PHOTOS.map(photo => (
-                  <div key={photo.id} className="photo-item aspect-[3/4] rounded-lg overflow-hidden border border-[var(--card-border)] bg-[var(--card-bg)] transition-all duration-300 cursor-pointer shadow-sm">
-                    <img src={photo.url} alt={photo.title} className="w-full h-full object-cover" referrerPolicy="no-referrer" draggable="false" />
-                  </div>
-                ))}
+                {PHOTOS.map((photo, i) => {
+                  // Highlight the element the active scenario wants the user to point at.
+                  const isFocus = !!focusTitle && photo.title === focusTitle;
+                  const tone = CATEGORY_COLORS[photo.category];
+                  return (
+                    <div
+                      key={photo.id}
+                      onClick={() => isLive && selectTargetByNumber(i + 1)}
+                      className={`photo-item relative aspect-[3/4] rounded-lg overflow-hidden border bg-[var(--card-bg)] transition-all duration-300 cursor-pointer shadow-sm ${isFocus ? 'border-transparent' : 'border-[var(--card-border)]'}`}
+                      style={isFocus ? { boxShadow: `0 0 0 3px rgb(${tone}), 0 0 16px 2px rgba(${tone}, 0.45)` } : undefined}
+                    >
+                      <img src={photo.url} alt={photo.title} className="w-full h-full object-cover" referrerPolicy="no-referrer" draggable="false" />
+                      {/* G8: numbered target — say "number N", press N, or tap. */}
+                      {isLive && (
+                        <span className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-black/70 text-white text-[10px] font-mono font-bold flex items-center justify-center">
+                          {i + 1}
+                        </span>
+                      )}
+                      {isFocus && (
+                        <span
+                          className="absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded-md text-[9px] font-mono font-bold uppercase tracking-wide text-white"
+                          style={{ backgroundColor: `rgb(${tone})` }}
+                        >
+                          Point here
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -2528,7 +3109,7 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
         </main>
 
         {/* Responsive Sidebar */}
-        <aside id="sidebar-section" className="w-[300px] sm:w-[350px] lg:w-[400px] p-3 lg:p-6 flex flex-col gap-4 shrink-0 h-full overflow-hidden">
+        <aside id="sidebar-section" className="w-full lg:w-[400px] p-3 lg:p-6 flex flex-col gap-4 shrink-0 h-auto lg:h-full overflow-visible lg:overflow-hidden">
           {/* Task Box - Always Visible */}
           <section id="task-section" className={`shrink-0 relative ${showOnboarding ? 'z-[10001]' : ''}`}>
             <AnimatePresence mode="popLayout" custom={slideDirection}>
@@ -2550,8 +3131,20 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
                       {isCongratulationsPage ? "COMPLETE" : `Task ${currentTaskIndex + 1}/${TASKS.length}`}
                     </div>
                   </div>
-                  <div className="flex gap-1">
-                    <button 
+                  <div className="flex items-center gap-1">
+                    {/* Jump directly to any scenario — robust switching, not just step-through. */}
+                    <select
+                      value={isCongratulationsPage ? '' : currentTaskIndex}
+                      onChange={(e) => { if (e.target.value !== '') goToTask(Number(e.target.value)); }}
+                      title="Jump to scenario"
+                      className="mr-1 max-w-[150px] text-[11px] font-mono bg-[var(--card-bg)] border border-[var(--card-border)] rounded-lg px-2 py-1 text-[var(--text-primary)]"
+                    >
+                      {isCongratulationsPage && <option value="">Complete</option>}
+                      {TASKS.map((t, i) => (
+                        <option key={t.key} value={i}>{`${i + 1}. ${t.title}`}</option>
+                      ))}
+                    </select>
+                    <button
                       onClick={() => {
                         setSlideDirection(-1);
                         const total = allTasksCompleted ? TASKS.length + 1 : TASKS.length;
@@ -2562,7 +3155,7 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
                     >
                       <ChevronLeft size={18} />
                     </button>
-                    <button 
+                    <button
                       onClick={() => {
                         setSlideDirection(1);
                         const total = allTasksCompleted ? TASKS.length + 1 : TASKS.length;
@@ -2585,7 +3178,7 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
                       Congratulations!
                     </h4>
                     <p className="text-sm font-dm text-slate-500 mb-8 max-w-[240px]">
-                      You've completed all 3 tasks.<br />
+                      You've completed all {TASKS.length} tasks.<br />
                       Great job!
                     </p>
                     {/* 
@@ -2617,6 +3210,17 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
                         />
                       </div>
                       <div className="flex-1 min-w-0">
+                        {(() => {
+                          const meta = ACTION_CATEGORIES[TASKS[currentTaskIndex].action];
+                          return (
+                            <span
+                              className="inline-block mb-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase tracking-wide"
+                              style={{ backgroundColor: `rgba(${meta.color}, 0.15)`, color: `rgb(${meta.color})` }}
+                            >
+                              {meta.label}
+                            </span>
+                          );
+                        })()}
                         <h4 className="text-base font-dm font-bold mb-1.5 leading-tight text-[var(--text-primary)]">
                           {TASKS[currentTaskIndex].title}
                         </h4>
@@ -2704,6 +3308,18 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
               </div>
             </button>
             <div className="w-full mb-4 flex items-center justify-between gap-3 px-4 py-3 rounded-2xl border bg-[var(--inner-box-bg)] border-[var(--card-border)]">
+              <span className="text-[12px] font-bold text-[var(--text-primary)]">Program</span>
+              <select
+                value={activeProgram}
+                onChange={(e) => handleProgramChange(e.target.value as ProgramId)}
+                className="text-[12px] font-mono bg-[var(--card-bg)] border border-[var(--card-border)] rounded-lg px-2 py-1 text-[var(--text-primary)]"
+              >
+                {PROGRAMS.map(p => (
+                  <option key={p.id} value={p.id}>{p.label}</option>
+                ))}
+              </select>
+            </div>
+            <div className="w-full mb-4 flex items-center justify-between gap-3 px-4 py-3 rounded-2xl border bg-[var(--inner-box-bg)] border-[var(--card-border)]">
               <span className="text-[12px] font-bold text-[var(--text-primary)]">Voice backend</span>
               <select
                 value={voiceBackend}
@@ -2714,6 +3330,110 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
                 <option value="azure">RTV2 (Azure Realtime)</option>
               </select>
             </div>
+            {/* DIAL A — autonomy/friction: how readily verbs commit vs. witness-render first. */}
+            <div className="w-full mb-4 flex items-center justify-between gap-3 px-4 py-3 rounded-2xl border bg-[var(--inner-box-bg)] border-[var(--card-border)]">
+              <span className="text-[12px] font-bold text-[var(--text-primary)]" title="How readily actions commit vs. ask you to confirm first">Autonomy</span>
+              <select
+                value={autonomy}
+                onChange={(e) => setAutonomy(e.target.value as Autonomy)}
+                className="text-[12px] font-mono bg-[var(--card-bg)] border border-[var(--card-border)] rounded-lg px-2 py-1 text-[var(--text-primary)]"
+              >
+                {AUTONOMY_OPTIONS.map(o => (
+                  <option key={o.id} value={o.id}>{o.label}</option>
+                ))}
+              </select>
+            </div>
+            {/* DIAL B — feedback modality: how the app confirms (the model never self-confirms). */}
+            <div className="w-full mb-4 flex items-center justify-between gap-3 px-4 py-3 rounded-2xl border bg-[var(--inner-box-bg)] border-[var(--card-border)]">
+              <span className="text-[12px] font-bold text-[var(--text-primary)]" title="How the app confirms actions — the assistant stays silent on success">Feedback</span>
+              <select
+                value={feedbackMode}
+                onChange={(e) => setFeedbackMode(e.target.value as FeedbackMode)}
+                className="text-[12px] font-mono bg-[var(--card-bg)] border border-[var(--card-border)] rounded-lg px-2 py-1 text-[var(--text-primary)]"
+              >
+                {FEEDBACK_OPTIONS.map(o => (
+                  <option key={o.id} value={o.id}>{o.label}</option>
+                ))}
+              </select>
+            </div>
+            {/* Audition the earcon set without a live session (clicking unlocks the audio ctx). */}
+            <div className="w-full mb-4 px-4 py-3 rounded-2xl border bg-[var(--inner-box-bg)] border-[var(--card-border)]">
+              <span className="text-[11px] font-mono uppercase tracking-wide text-[var(--text-secondary)]">Audition earcons</span>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {EARCON_KINDS.map(kind => (
+                  <button
+                    key={kind}
+                    onClick={() => playEarcon(kind)}
+                    className="px-2 py-1 rounded-md text-[10px] font-mono border bg-[var(--card-bg)] border-[var(--card-border)] text-[var(--text-primary)] hover:border-[#0077F0] hover:text-[#0077F0] dark:hover:text-white transition-colors active:scale-95"
+                    title={`Play "${kind}" earcon`}
+                  >
+                    {kind.replace('commit-', '')}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {/* G3 OCR sub-elements toggle — read words in the screenshots so you can point at one. */}
+            <div className="w-full mb-4 flex items-center justify-between gap-3 px-4 py-3 rounded-2xl border bg-[var(--inner-box-bg)] border-[var(--card-border)]">
+              <div className="flex flex-col">
+                <span className="text-[12px] font-bold text-[var(--text-primary)]">OCR sub-elements</span>
+                <span className="text-[10px] font-mono text-[var(--text-secondary)]">{ocrEnabled ? 'point at individual words' : 'whole-tile pointing'}</span>
+              </div>
+              <button
+                onClick={() => { setOcrEnabled(v => { const nv = !v; if (!nv) { ocrWordsRef.current = {}; setHoveredWord(null); } return nv; }); }}
+                className={`relative w-11 h-6 rounded-full shrink-0 transition-colors ${ocrEnabled ? 'bg-green-500' : 'bg-slate-300 dark:bg-slate-600'}`}
+                title="Recognize text in the screenshots (downloads an OCR model the first time; needs network)"
+              >
+                <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${ocrEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
+              </button>
+            </div>
+            {/* Testbed telemetry — live metrics for the active config + a JSON export. */}
+            {(() => {
+              void telemetryTick; // re-read on tick
+              const device = detectDevice();
+              const tm = telemetry.metrics();
+              const cal = tm.deixis.calibration;
+              return (
+                <div className="w-full mb-4 px-4 py-3 rounded-2xl border bg-[var(--inner-box-bg)] border-[var(--card-border)]">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[11px] font-mono uppercase tracking-wide text-[var(--text-secondary)]">Testbed</span>
+                    <span className="text-[10px] font-mono text-[var(--text-secondary)]">{device.formFactor} · {device.width}×{device.height} · {device.pointer}</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] font-mono text-[var(--text-primary)]">
+                    <span className="text-[var(--text-secondary)]">Deixis acc</span>
+                    <span>{tm.deixis.accuracy === null ? '—' : `${Math.round(tm.deixis.accuracy * 100)}% (${tm.deixis.correct}/${tm.deixis.graded})`}</span>
+                    <span className="text-[var(--text-secondary)]">Calibration</span>
+                    <span>hi {cal.high.correct}/{cal.high.n} · lo {cal.low.correct}/{cal.low.n}</span>
+                    <span className="text-[var(--text-secondary)]">Actions</span>
+                    <span>{tm.actions.total} ({tm.actions.commits}✓ {tm.actions.witnesses}?)</span>
+                    <span className="text-[var(--text-secondary)]">Grounding</span>
+                    <span>{tm.grounding.agreementRate === null ? '—' : `${Math.round(tm.grounding.agreementRate * 100)}% (${tm.grounding.agree}/${tm.grounding.total})`}</span>
+                    <span className="text-[var(--text-secondary)]">Corrections</span>
+                    <span>{tm.corrections} ({Math.round(tm.correctionRate * 100)}%)</span>
+                    <span className="text-[var(--text-secondary)]">Errors</span>
+                    <span>{tm.errors}</span>
+                  </div>
+                  <button
+                    onClick={() => telemetry.exportJSON()}
+                    className="mt-2 w-full px-2 py-1 rounded-md text-[11px] font-mono border bg-[var(--card-bg)] border-[var(--card-border)] text-[var(--text-primary)] hover:border-[#0077F0] hover:text-[#0077F0] dark:hover:text-white transition-colors active:scale-95"
+                  >
+                    Export session JSON
+                  </button>
+                </div>
+              );
+            })()}
+            {isEmbedded && !isLive && (
+              <div className="w-full mb-3 px-4 py-3 rounded-2xl border border-amber-500/40 bg-amber-500/5">
+                <p className="text-[11px] font-mono text-[var(--text-secondary)] leading-relaxed mb-2">
+                  Running in an embedded preview — the microphone is usually blocked here. Open in a full tab to grant mic access.
+                </p>
+                <button
+                  onClick={() => window.open(window.location.href, '_blank', 'noopener')}
+                  className="w-full h-[40px] rounded-full font-dm font-bold text-[12px] flex items-center justify-center gap-2 border border-amber-500/60 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 transition-colors"
+                >
+                  Open in a new tab ↗
+                </button>
+              </div>
+            )}
             {!isLive ? (
               <button
                 onClick={startLiveSession}
@@ -2811,6 +3531,64 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
               {!shareRequest.confirmed && (
                 <p className="text-[11px] font-mono text-[var(--text-secondary)]">Say <span className="text-amber-500 font-bold">"yes, send it"</span> to confirm.</p>
               )}
+            </section>
+          )}
+
+          {/* Action verb — witness-render the interpretation before committing (honest mode),
+              or a "done" receipt after it commits. Same grammar as the share card above. */}
+          {pendingAction && (
+            <section className={`shrink-0 bg-[var(--card-bg)] border rounded-2xl p-6 animate-in fade-in slide-in-from-top-2 duration-300 ${pendingAction.confirmed ? 'border-green-500/50' : 'border-amber-500/40'}`}>
+              <div className="flex items-center gap-2 mb-3">
+                {pendingAction.confirmed
+                  ? <CheckCircle size={16} className="text-green-500" />
+                  : <Shield size={16} className="text-amber-500" />}
+                <span className={`text-[11px] font-mono font-bold uppercase tracking-widest ${pendingAction.confirmed ? 'text-green-500' : 'text-amber-500'}`}>
+                  {pendingAction.confirmed ? 'Done' : 'About to act — confirm'}
+                </span>
+              </div>
+              <div className="flex flex-col gap-1.5 mb-3">
+                <div className="flex items-center gap-2 text-sm text-[var(--text-primary)]">
+                  <span className="text-[10px] font-mono uppercase text-[var(--text-secondary)] w-16 shrink-0">Action</span>
+                  <span className="font-semibold">{pendingAction.label}</span>
+                </div>
+                <div className="flex items-center gap-2 text-sm text-[var(--text-primary)]">
+                  <span className="text-[10px] font-mono uppercase text-[var(--text-secondary)] w-16 shrink-0">Target</span>
+                  <span>{pendingAction.target}</span>
+                </div>
+                {pendingAction.detail && (
+                  <div className="flex items-center gap-2 text-sm text-[var(--text-primary)]">
+                    <span className="text-[10px] font-mono uppercase text-[var(--text-secondary)] w-16 shrink-0">Detail</span>
+                    <span>{pendingAction.detail}</span>
+                  </div>
+                )}
+              </div>
+              {pendingAction.note && (
+                <p className="text-[11px] font-mono text-amber-600 dark:text-amber-400 mb-2">⚠ {pendingAction.note}</p>
+              )}
+              {!pendingAction.confirmed && (
+                <p className="text-[11px] font-mono text-[var(--text-secondary)]">Say <span className="text-amber-500 font-bold">"yes, do it"</span> to confirm.</p>
+              )}
+            </section>
+          )}
+
+          {/* Mock document preview — the action verbs visibly mutate this. */}
+          {isLive && (
+            <section className="shrink-0 bg-[var(--card-bg)] border border-[var(--card-border)] rounded-2xl p-6">
+              <div className="flex items-center justify-end mb-2 -mt-2">
+                <button
+                  onClick={handleUndo}
+                  disabled={undoStack.length === 0}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono border transition-colors ${
+                    undoStack.length === 0
+                      ? 'opacity-40 cursor-not-allowed border-[var(--card-border)] text-[var(--text-secondary)]'
+                      : 'border-[var(--card-border)] text-[var(--text-primary)] hover:border-[#0077F0] hover:text-[#0077F0] dark:hover:text-white active:scale-95'
+                  }`}
+                  title="Undo the last document change"
+                >
+                  <RotateCcw size={13} /> Undo{undoStack.length ? ` (${undoStack.length})` : ''}
+                </button>
+              </div>
+              <MockPreview doc={mockDoc} />
             </section>
           )}
 
@@ -3033,6 +3811,12 @@ When the user points and speaks a command, respond cheerfully like a tour guide 
             <br />
             <span className="text-[var(--text-secondary)] font-normal mt-2 block">Please view on a different device</span>
           </h2>
+          <button
+            onClick={() => setBypassDeviceGate(true)}
+            className="mt-6 px-4 py-2 rounded-full font-dm font-bold text-xs border border-[var(--card-border)] text-[var(--text-primary)] hover:border-[#0077F0] hover:text-[#0077F0] dark:hover:text-white transition-colors active:scale-95"
+          >
+            Continue anyway — testbed mode ↗
+          </button>
         </div>
       </motion.div>
     )}

@@ -16,7 +16,10 @@
 import type { VoiceProvider, VoiceSessionConfig, VoiceCallbacks } from './types';
 
 const SAMPLE_RATE = 24000; // Azure/OpenAI realtime PCM16 mono
-const FRAME_HEARTBEAT_MS = 1500; // sparse vision: at most one image per this interval
+const FRAME_HEARTBEAT_MS = 500; // vision cadence: at most one image per this interval.
+// Lowered from 1500ms to narrow the grounding gap vs Gemini's continuous video — fresher
+// frames mean "where is this?" lands on the right element far more often. Each frame is a
+// persistent conversation item, so this trades some context/cost for accuracy.
 
 const floatToPcm16Base64 = (input: Float32Array): string => {
   const pcm = new Int16Array(input.length);
@@ -92,18 +95,24 @@ export function createAzureRealtimeProvider(
         ws = new WebSocket(url);
 
         ws.onopen = () => {
+          console.log('[azure] ws open → sending session.update (transcribe:', transcribeDeployment || 'NONE', ')');
           // Configure the session: instructions, tools, voice, PCM formats, server VAD.
+          // GA Realtime schema: requires session.type='realtime' and nests audio config
+          // under audio.input / audio.output (the flat modalities/*_audio_format form is
+          // rejected). Formats default to PCM16 @ 24kHz, which is what we stream/play.
           send({
             type: 'session.update',
             session: {
-              modalities: ['audio', 'text'],
+              type: 'realtime',
               instructions: config.instructions,
-              voice: config.voice ?? 'alloy',
-              input_audio_format: 'pcm16',
-              output_audio_format: 'pcm16',
-              // Azure requires a DEPLOYMENT name here (not 'whisper-1'); omit if none provided.
-              ...(transcribeDeployment ? { input_audio_transcription: { model: transcribeDeployment } } : {}),
-              turn_detection: { type: 'server_vad' },
+              audio: {
+                input: {
+                  turn_detection: { type: 'server_vad' },
+                  // Azure requires a transcription DEPLOYMENT name (not 'whisper-1'); omit if none.
+                  ...(transcribeDeployment ? { transcription: { model: transcribeDeployment } } : {}),
+                },
+                output: { voice: config.voice ?? 'alloy' },
+              },
               tools: config.tools.map(t => ({
                 type: 'function',
                 name: t.name,
@@ -141,6 +150,10 @@ export function createAzureRealtimeProvider(
         ws.onmessage = (e) => {
           let ev: any;
           try { ev = JSON.parse(e.data); } catch { return; }
+          // Log only errors + session lifecycle (the per-item churn — conversation.item.*,
+          // the 1.5s vision heartbeat — would otherwise flood the console).
+          if (ev.type === 'error') console.error('[azure event] error', JSON.stringify(ev.error));
+          else if (ev.type === 'session.created' || ev.type === 'session.updated') console.log('[azure event]', ev.type);
           switch (ev.type) {
             case 'conversation.item.input_audio_transcription.delta':
               cb.onInputTranscript(ev.delta ?? '', false);
@@ -175,8 +188,8 @@ export function createAzureRealtimeProvider(
           }
         };
 
-        ws.onerror = () => { if (!closed) cb.onError('Azure Realtime WebSocket error'); };
-        ws.onclose = () => { if (!closed) cb.onClose(); };
+        ws.onerror = () => { console.log('[azure] ws error'); if (!closed) cb.onError('Azure Realtime WebSocket error'); };
+        ws.onclose = (e) => { console.log('[azure] ws closed', e.code, e.reason); if (!closed) cb.onClose(); };
       } catch (err: any) {
         cb.onError(err?.message ?? 'failed to connect to Azure Realtime');
       }
