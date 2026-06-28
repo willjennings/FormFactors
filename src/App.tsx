@@ -63,6 +63,9 @@ import { CallDeduper, argsKey, parseRepair } from './coherence';
 import { assignTargetNumbers, parseTargetSelection } from './input_targets';
 import { ocrImage, terminateOcr, clearOcrCache } from './ocr';
 import type { OcrWord } from './ocr';
+import { Spreadsheet } from './widgets/Spreadsheet';
+import { buildSpreadsheetSnapshot, formatSnapshotForModel } from './widgets/spreadsheetData';
+import { snapshotNode, makeThrottle } from './vision/snapshotNode';
 
 // --- Types ---
 interface Marker {
@@ -563,7 +566,10 @@ export default function App() {
     photos: BBox;
     map: BBox;
     photoItems: { id: number; bbox: BBox }[];
+    spreadsheet?: BBox;
   } | null>(null);
+  const spreadsheetRef = useRef<HTMLDivElement>(null);
+  const spreadsheetSnapshotRef = useRef<HTMLCanvasElement | null>(null);
 
   const [pointerPath, setPointerPath] = useState<{ x: number, y: number, timestamp: number }[]>([]);
   const [persistentPaths, setPersistentPaths] = useState<{ x: number, y: number }[][]>([]);
@@ -674,10 +680,12 @@ export default function App() {
           };
         }).filter(Boolean) as { id: number; bbox: BBox }[];
         
+        const ssEl = main.querySelector('.spreadsheet-box');
         setLayoutBounds({
           photos: toBBox(pRect),
           map: toBBox(mRect),
-          photoItems
+          photoItems,
+          spreadsheet: ssEl ? toBBox((ssEl as HTMLElement).getBoundingClientRect()) : undefined,
         });
 
         // Update interactive objects for Gemini
@@ -2690,25 +2698,35 @@ When the user points and speaks a command, call the appropriate tool — a map t
       ctx.strokeRect((p.xmin/1000)*VISION_SIZE, (p.ymin/1000)*VISION_SIZE, ((p.xmax-p.xmin)/1000)*VISION_SIZE, ((p.ymax-p.ymin)/1000)*VISION_SIZE);
 
       // Draw Photo Items — REAL pixels when the CORS-clean image is loaded, else a labeled box.
-      layoutBounds.photoItems.forEach((item, i) => {
-        const b = item.bbox;
-        const dx = (b.xmin/1000)*VISION_SIZE, dy = (b.ymin/1000)*VISION_SIZE;
-        const dw = ((b.xmax-b.xmin)/1000)*VISION_SIZE, dh = ((b.ymax-b.ymin)/1000)*VISION_SIZE;
-        const cached = visionImgCacheRef.current[PHOTOS[i]?.url ?? ''];
-        if (cached && cached !== 'failed' && cached !== 'loading') {
-          try { ctx.drawImage(cached, dx, dy, dw, dh); } catch { /* keep canvas clean */ }
-          ctx.strokeStyle = '#e5e5e5';
-          ctx.strokeRect(dx, dy, dw, dh);
-        } else {
-          ctx.fillStyle = '#f1f5f9';
-          ctx.fillRect(dx, dy, dw, dh);
-          ctx.strokeRect(dx, dy, dw, dh);
-          ctx.fillStyle = '#64748b';
-          ctx.font = 'bold 8px sans-serif';
-          ctx.textAlign = 'center';
-          ctx.fillText(PHOTOS[i].title, dx + dw / 2, dy + dh / 2);
-        }
-      });
+      const ssCanvas = spreadsheetSnapshotRef.current;
+      if (activeProgram === 'excel' && ssCanvas) {
+        const b = layoutBounds.photos;
+        const dx = (b.xmin / 1000) * VISION_SIZE, dy = (b.ymin / 1000) * VISION_SIZE;
+        const dw = ((b.xmax - b.xmin) / 1000) * VISION_SIZE, dh = ((b.ymax - b.ymin) / 1000) * VISION_SIZE;
+        try { ctx.drawImage(ssCanvas, dx, dy, dw, dh); } catch { /* keep canvas clean */ }
+        ctx.strokeStyle = '#e5e5e5';
+        ctx.strokeRect(dx, dy, dw, dh);
+      } else {
+        layoutBounds.photoItems.forEach((item, i) => {
+          const b = item.bbox;
+          const dx = (b.xmin/1000)*VISION_SIZE, dy = (b.ymin/1000)*VISION_SIZE;
+          const dw = ((b.xmax-b.xmin)/1000)*VISION_SIZE, dh = ((b.ymax-b.ymin)/1000)*VISION_SIZE;
+          const cached = visionImgCacheRef.current[PHOTOS[i]?.url ?? ''];
+          if (cached && cached !== 'failed' && cached !== 'loading') {
+            try { ctx.drawImage(cached, dx, dy, dw, dh); } catch { /* keep canvas clean */ }
+            ctx.strokeStyle = '#e5e5e5';
+            ctx.strokeRect(dx, dy, dw, dh);
+          } else {
+            ctx.fillStyle = '#f1f5f9';
+            ctx.fillRect(dx, dy, dw, dh);
+            ctx.strokeRect(dx, dy, dw, dh);
+            ctx.fillStyle = '#64748b';
+            ctx.font = 'bold 8px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText(PHOTOS[i].title, dx + dw / 2, dy + dh / 2);
+          }
+        });
+      }
 
       // Draw Map Box
       const m = layoutBounds.map;
@@ -2777,7 +2795,10 @@ When the user points and speaks a command, call the appropriate tool — a map t
       ctx.fillStyle = '#e2e8f0';
       ctx.font = '9px monospace';
       // simple word-wrap into the strip
-      const docWords = serializeMockDoc(mockDocRef.current).split(' ');
+      const docText = (mockDocRef.current.kind === 'excel')
+        ? 'Excel — see SPREADSHEET image + [SPREADSHEET DATA] hint'
+        : serializeMockDoc(mockDocRef.current);
+      const docWords = docText.split(' ');
       let line = '';
       let ly = VISION_SIZE + 30;
       for (const w of docWords) {
@@ -2806,6 +2827,32 @@ When the user points and speaks a command, call the appropriate tool — a map t
     }, sendFrequency);
     return () => clearInterval(interval);
   }, [isLive, sendFrequency, dims, layoutBounds, activeProgram]);
+
+  // Refresh the real-pixel spreadsheet snapshot (throttled, fail-soft) for the vision frame.
+  useEffect(() => {
+    if (!isLive || activeProgram !== 'excel') {
+      spreadsheetSnapshotRef.current = null;
+      return;
+    }
+    let cancelled = false;
+    const gate = makeThrottle(500);
+    const tick = async () => {
+      if (cancelled || !gate(Date.now())) return;
+      const node = spreadsheetRef.current;
+      if (!node) return;
+      const canvas = await snapshotNode(node);
+      if (!cancelled && canvas) spreadsheetSnapshotRef.current = canvas;
+    };
+    const interval = setInterval(tick, 250);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [isLive, activeProgram]);
+
+  // Send the live structured spreadsheet data alongside the pixels (learnings §4: never labels-only).
+  useEffect(() => {
+    if (!isLive || activeProgram !== 'excel') return;
+    const hint = formatSnapshotForModel(buildSpreadsheetSnapshot(mockDoc));
+    providerRef.current?.sendTextHint(hint);
+  }, [isLive, activeProgram, mockDoc]);
 
   // Cleanup timeouts on unmount
   useEffect(() => {
@@ -3045,7 +3092,12 @@ When the user points and speaks a command, call the appropriate tool — a map t
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3 sm:gap-4 overflow-y-auto pr-2 custom-scrollbar flex-1">
-                {PHOTOS.map((photo, i) => {
+                {activeProgram === 'excel' ? (
+                  <div className="col-span-2 h-full">
+                    <Spreadsheet ref={spreadsheetRef} doc={mockDoc} />
+                  </div>
+                ) : (
+                PHOTOS.map((photo, i) => {
                   // Highlight the element the active scenario wants the user to point at.
                   const isFocus = !!focusTitle && photo.title === focusTitle;
                   const tone = CATEGORY_COLORS[photo.category];
@@ -3073,7 +3125,7 @@ When the user points and speaks a command, call the appropriate tool — a map t
                       )}
                     </div>
                   );
-                })}
+                }))}
               </div>
             </div>
           </div>
