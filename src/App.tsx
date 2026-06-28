@@ -2699,9 +2699,10 @@ When the user points and speaks a command, call the appropriate tool — a map t
       ctx.strokeRect((p.xmin/1000)*VISION_SIZE, (p.ymin/1000)*VISION_SIZE, ((p.xmax-p.xmin)/1000)*VISION_SIZE, ((p.ymax-p.ymin)/1000)*VISION_SIZE);
 
       // Draw Photo Items — REAL pixels when the CORS-clean image is loaded, else a labeled box.
+      // On a transient snapshot failure, last-good canvas is retained intentionally; [SPREADSHEET DATA] text hint stays authoritative.
       const ssCanvas = spreadsheetSnapshotRef.current;
       if (activeProgram === 'excel' && ssCanvas) {
-        const b = layoutBounds.photos;
+        const b = layoutBounds.spreadsheet ?? layoutBounds.photos;
         const dx = (b.xmin / 1000) * VISION_SIZE, dy = (b.ymin / 1000) * VISION_SIZE;
         const dw = ((b.xmax - b.xmin) / 1000) * VISION_SIZE, dh = ((b.ymax - b.ymin) / 1000) * VISION_SIZE;
         try { ctx.drawImage(ssCanvas, dx, dy, dw, dh); } catch { /* keep canvas clean */ }
