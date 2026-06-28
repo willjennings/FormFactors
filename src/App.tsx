@@ -1609,7 +1609,8 @@ When the user points and speaks a command, call the appropriate tool — a map t
       const appReferent = markersRef.current[0]?.identifiedObject ?? hoveredObjectRef.current ?? null;
       const modelElement = matchElement(program.images, args.target);
       const agree = (appReferent && modelElement) ? appReferent === modelElement : null;
-      telemetry.grounding(appReferent, args.target ?? null, agree);
+      const resolution: 'structural' | 'visual' | 'none' = appReferent ? 'structural' : (modelElement ? 'visual' : 'none');
+      telemetry.grounding(appReferent, args.target ?? null, agree, resolution);
       const disagreement = honestModeRef.current && agree === false && !confirmed;
       const effectiveDecision: 'commit' | 'witness' = disagreement ? 'witness' : decision;
       const note = disagreement ? `You pointed at “${appReferent}”, but I read “${modelElement}”.` : undefined;

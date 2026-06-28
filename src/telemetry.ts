@@ -35,7 +35,7 @@ export type TelemetryEvent =
   | { t: number; type: 'session_start'; config: SessionConfig }
   | { t: number; type: 'deixis'; keyword: string; resolved: string | null; target: string | null; confidence: 'high' | 'low'; correct: boolean | null }
   | { t: number; type: 'action'; verb: string; verbClass: string; decision: 'commit' | 'witness' }
-  | { t: number; type: 'grounding'; appReferent: string | null; modelTarget: string | null; agree: boolean | null }
+  | { t: number; type: 'grounding'; appReferent: string | null; modelTarget: string | null; agree: boolean | null; resolution: 'structural' | 'visual' | 'none' }
   | { t: number; type: 'map'; query: string }
   | { t: number; type: 'correction' } // undo
   | { t: number; type: 'error'; message: string };
@@ -82,8 +82,8 @@ class Telemetry {
   action(verb: string, verbClass: string, decision: 'commit' | 'witness') {
     this.push({ type: 'action', verb, verbClass, decision });
   }
-  grounding(appReferent: string | null, modelTarget: string | null, agree: boolean | null) {
-    this.push({ type: 'grounding', appReferent, modelTarget, agree });
+  grounding(appReferent: string | null, modelTarget: string | null, agree: boolean | null, resolution: 'structural' | 'visual' | 'none' = 'none') {
+    this.push({ type: 'grounding', appReferent, modelTarget, agree, resolution });
   }
   map(query: string) { this.push({ type: 'map', query }); }
   correction() { this.push({ type: 'correction' }); }
@@ -104,6 +104,10 @@ class Telemetry {
     const grounding = this.events.filter(e => e.type === 'grounding') as Extract<TelemetryEvent, { type: 'grounding' }>[];
     const gGraded = grounding.filter(g => g.agree !== null);
     const gAgree = gGraded.filter(g => g.agree).length;
+    const byResolution = (r: 'structural' | 'visual' | 'none') => {
+      const g = gGraded.filter(e => e.resolution === r);
+      return { total: g.length, agree: g.filter(e => e.agree).length };
+    };
     return {
       durationMs: this.config ? Date.now() - this.startedAt : 0,
       deixis: {
@@ -128,6 +132,11 @@ class Telemetry {
         agree: gAgree,
         disagree: gGraded.length - gAgree,
         agreementRate: gGraded.length ? +(gAgree / gGraded.length).toFixed(2) : null,
+        byResolution: {
+          structural: byResolution('structural'),
+          visual: byResolution('visual'),
+          none: byResolution('none'),
+        },
       },
     };
   }
