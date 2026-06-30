@@ -1,0 +1,55 @@
+import { describe, it, expect } from 'vitest';
+import { reduce } from './sessionStore';
+import { RFI_SCHEMA, initialSessionState } from './rfiSchema';
+
+const start = () => initialSessionState(RFI_SCHEMA, '6/29/2026', 1000);
+const slot = (st: any, id: string) => st.fills.find((f: any) => f.slotId === id);
+
+describe('reduce — agent→UI transitions', () => {
+  it('fillingStart sets the single active anchor', () => {
+    const st = reduce(start(), { type: 'slot.fillingStart', slotId: 'question' }, 2000);
+    expect(st.activeSlotId).toBe('question');
+    expect(slot(st, 'question').status).toBe('filling');
+    expect(st.activity).toBe('filling');
+    expect(st.lastUpdateAt).toBe(2000);
+  });
+
+  it('valueUpdate streams text into the slot', () => {
+    let st = reduce(start(), { type: 'slot.fillingStart', slotId: 'question' }, 2000);
+    st = reduce(st, { type: 'slot.valueUpdate', slotId: 'question', partialValue: 'S-301 beam' }, 2100);
+    expect(slot(st, 'question').value).toBe('S-301 beam');
+    expect(st.lastUpdateAt).toBe(2100);
+  });
+
+  it('draft releases the anchor and records confidence + source', () => {
+    let st = reduce(start(), { type: 'slot.fillingStart', slotId: 'location' }, 2000);
+    st = reduce(st, { type: 'slot.draft', slotId: 'location', value: 'C-3', confidence: 0.9, source: 'heard' }, 2200);
+    expect(slot(st, 'location')).toMatchObject({ value: 'C-3', status: 'draft', confidence: 0.9, source: 'heard' });
+    expect(st.activeSlotId).toBeNull();
+  });
+
+  it('needsInput stashes the question and sets asking', () => {
+    const st = reduce(start(), { type: 'slot.needsInput', slotId: 'neededBy', question: 'by when?' }, 3000);
+    expect(slot(st, 'neededBy')).toMatchObject({ status: 'needsInput', pendingQuestion: 'by when?' });
+    expect(st.activity).toBe('asking');
+  });
+
+  it('confirmed settles a slot', () => {
+    let st = reduce(start(), { type: 'slot.draft', slotId: 'location', value: 'C-3', confidence: 0.9, source: 'heard' }, 2200);
+    st = reduce(st, { type: 'slot.confirmed', slotId: 'location' }, 2300);
+    expect(slot(st, 'location').status).toBe('confirmed');
+  });
+
+  it('phaseChange and heartbeat behave', () => {
+    let st = reduce(start(), { type: 'session.phaseChange', phase: 'recapping' }, 4000);
+    expect(st.phase).toBe('recapping');
+    st = reduce(st, { type: 'heartbeat' }, 4500);
+    expect(st.lastUpdateAt).toBe(4500);
+  });
+
+  it('ignores events for an unknown slot (no throw)', () => {
+    const before = start();
+    const after = reduce(before, { type: 'slot.draft', slotId: 'nope', value: 'x', confidence: 1, source: 'heard' }, 2000);
+    expect(after.fills).toEqual(before.fills);
+  });
+});
