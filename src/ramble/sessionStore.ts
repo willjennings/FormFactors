@@ -46,7 +46,25 @@ export function reduce(state: SessionState, event: RambleEvent, now: number): Se
       return { ...state, phase: event.phase };
     case 'heartbeat':
       return { ...state, lastUpdateAt: now };
+    case 'user.editStart': {
+      const cur = state.fills.find((f) => f.slotId === event.slotId);
+      if (!cur) return state;
+      const s = patchSlot(state, event.slotId, { owner: 'user', prior: { ...cur } }, now);
+      const activeSlotId = state.activeSlotId === event.slotId ? null : state.activeSlotId;
+      return { ...s, activeSlotId };
+    }
+    case 'user.editCommit':
+      if (!hasSlot(state, event.slotId)) return state;
+      return patchSlot(state, event.slotId, { value: event.value, status: 'confirmed', source: 'userEdited', owner: 'user', prior: null }, now);
+    case 'user.editCancel': {
+      const cur = state.fills.find((f) => f.slotId === event.slotId);
+      if (!cur || !cur.prior) return state;
+      const prior = cur.prior;
+      return { ...state, fills: state.fills.map((f) => (f.slotId === event.slotId ? { ...prior, owner: 'agent', prior: null } : f)) };
+    }
+    case 'user.openFullEditor':
+      return state; // navigation handled by the app shell
     default:
-      return state; // user.* handled in Task 3; unknown events are no-ops
+      return state;
   }
 }

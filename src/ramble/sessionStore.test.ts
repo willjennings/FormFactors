@@ -53,3 +53,35 @@ describe('reduce — agent→UI transitions', () => {
     expect(after.fills).toEqual(before.fills);
   });
 });
+
+describe('reduce — yield + edits', () => {
+  it('editStart takes ownership and clears the anchor if it was filling', () => {
+    let st = reduce(start(), { type: 'slot.fillingStart', slotId: 'question' }, 2000);
+    st = reduce(st, { type: 'user.editStart', slotId: 'question' }, 2100);
+    expect(slot(st, 'question').owner).toBe('user');
+    expect(st.activeSlotId).toBeNull();
+  });
+
+  it('agent CANNOT overwrite a user-owned slot (yield)', () => {
+    let st = reduce(start(), { type: 'user.editStart', slotId: 'location' }, 2000);
+    const before = slot(st, 'location');
+    st = reduce(st, { type: 'slot.draft', slotId: 'location', value: 'WRONG', confidence: 1, source: 'heard' }, 2100);
+    st = reduce(st, { type: 'slot.fillingStart', slotId: 'location' }, 2150);
+    st = reduce(st, { type: 'slot.valueUpdate', slotId: 'location', partialValue: 'WRONG2' }, 2200);
+    expect(slot(st, 'location')).toEqual(before); // unchanged
+  });
+
+  it('editCommit sets userEdited + confirmed + user-owned', () => {
+    let st = reduce(start(), { type: 'user.editStart', slotId: 'location' }, 2000);
+    st = reduce(st, { type: 'user.editCommit', slotId: 'location', value: 'C-3' }, 2100);
+    expect(slot(st, 'location')).toMatchObject({ value: 'C-3', status: 'confirmed', source: 'userEdited', owner: 'user' });
+  });
+
+  it('editCancel reverts to the pre-edit snapshot and returns ownership to the agent', () => {
+    let st = reduce(start(), { type: 'slot.draft', slotId: 'location', value: 'C-3', confidence: 0.9, source: 'heard' }, 1500);
+    const draft = slot(st, 'location');
+    st = reduce(st, { type: 'user.editStart', slotId: 'location' }, 2000);
+    st = reduce(st, { type: 'user.editCancel', slotId: 'location' }, 2100);
+    expect(slot(st, 'location')).toMatchObject({ value: 'C-3', status: draft.status, source: 'heard', owner: 'agent' });
+  });
+});
