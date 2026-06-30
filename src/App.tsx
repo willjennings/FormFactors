@@ -3163,7 +3163,7 @@ When the user points and speaks a command, call the appropriate tool — a map t
         </main>
 
         {/* Responsive Sidebar */}
-        <aside id="sidebar-section" className="w-full lg:w-[400px] p-3 lg:p-6 flex flex-col gap-4 shrink-0 h-auto lg:h-full overflow-visible lg:overflow-hidden">
+        <aside id="sidebar-section" className="w-full lg:w-[400px] p-3 lg:p-6 flex flex-col gap-4 shrink-0 h-auto lg:h-full overflow-visible lg:overflow-y-auto custom-scrollbar">
           {/* Task Box - Always Visible */}
           <section id="task-section" className={`shrink-0 relative ${showOnboarding ? 'z-[10001]' : ''}`}>
             <AnimatePresence mode="popLayout" custom={slideDirection}>
