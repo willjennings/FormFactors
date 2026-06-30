@@ -10,7 +10,7 @@ describe('scripted demo', () => {
     let now = 0;
     for (const ev of SCRIPTED_DEMO) { now += 100; st = reduce(st, ev, now); }
 
-    expect(st.phase).toBe('recapping');
+    expect(st.phase).toBe('conversing');
     const byId = (id: string) => st.fills.find(f => f.slotId === id)!;
     expect(byId('question').status).toBe('draft');
     expect(byId('location').value).toBe('C-3');
