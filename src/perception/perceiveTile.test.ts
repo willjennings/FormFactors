@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { perceivePrompt, cleanPerceivedLabel, resolveTileName } from './perceiveTile';
+import { perceivePrompt, cleanPerceivedLabel, resolveTileName, perceiveTileLabel } from './perceiveTile';
 import type { PerceivedCache } from './perceiveTile';
 
 describe('perceivePrompt', () => {
@@ -39,5 +39,21 @@ describe('resolveTileName', () => {
     expect(resolveTileName('Word Ribbon', 'u-failed', cache)).toBe('Word Ribbon');
     expect(resolveTileName('Word Ribbon', 'u-empty', cache)).toBe('Word Ribbon');
     expect(resolveTileName('Word Ribbon', 'u-missing', cache)).toBe('Word Ribbon');
+  });
+});
+
+describe('perceiveTileLabel', () => {
+  const stub = (text: string) => ({
+    models: { generateContent: async () => ({ candidates: [{ content: { parts: [{ text }] } }] }) },
+  });
+
+  it('reads the model text and returns a cleaned label', async () => {
+    const label = await perceiveTileLabel(stub('  "A window with curtains."  ') as any, 'BASE64');
+    expect(label).toBe('window with curtains');
+  });
+
+  it('returns empty string when the response has no text', async () => {
+    const noText = { models: { generateContent: async () => ({ candidates: [{ content: { parts: [] } }] }) } };
+    expect(await perceiveTileLabel(noText as any, 'BASE64')).toBe('');
   });
 });
