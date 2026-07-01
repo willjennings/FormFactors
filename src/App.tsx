@@ -53,6 +53,8 @@ import {
   matchElement,
 } from './scenarios';
 import type { ProgramId, ElementCategory, InteractiveObject, MockDoc, Program, Autonomy } from './scenarios';
+import { perceiveTileLabel, loadImageAsBase64, resolveTileName } from './perception/perceiveTile';
+import type { PerceivedCache } from './perception/perceiveTile';
 import { MockPreview } from './components/MockPreview';
 import { emitFeedbackAudio, FEEDBACK_OPTIONS } from './feedback';
 import type { FeedbackMode, FeedbackEvent } from './feedback';
@@ -400,6 +402,8 @@ export default function App() {
   const [isPainting, setIsPainting] = useState(false);
   const [trailMousePos, setTrailMousePos] = useState({ x: 0, y: 0 });
   const [hoveredObject, setHoveredObject] = useState<string | null>(null);
+  const perceivedLabelsRef = useRef<PerceivedCache>({});
+  const [perceivedVersion, setPerceivedVersion] = useState(0);
   const hoveredObjectRef = useRef<string | null>(null);
   // Throttle state for proactive hover grounding (non-Gemini backends).
   const lastHoverHintRef = useRef<string | null>(null);
@@ -2669,6 +2673,35 @@ When the user points and speaks a command, call the appropriate tool — a map t
     }
     return () => { cancelled = true; };
   }, [ocrEnabled, isLive, activeProgram]);
+
+  // Real-perception: name each tile from its actual pixels once, cached by URL. Fail-soft —
+  // any failure leaves the tile without a perceived label, so resolveTileName falls back to title.
+  useEffect(() => {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) return;
+    const genai = new GoogleGenAI({ apiKey });
+    let cancelled = false;
+    (async () => {
+      for (const photo of PHOTOS) {
+        if (perceivedLabelsRef.current[photo.url]) continue; // perceive once per URL
+        perceivedLabelsRef.current[photo.url] = { status: 'pending' };
+        try {
+          const { base64, mimeType } = await loadImageAsBase64(photo.url);
+          if (cancelled) return;
+          const label = await perceiveTileLabel(genai, base64, mimeType);
+          if (cancelled) return;
+          perceivedLabelsRef.current[photo.url] = label ? { status: 'done', label } : { status: 'failed' };
+          if (label) addLog('info', `perceived "${label}" vs registered "${photo.title}"`);
+        } catch (e: any) {
+          if (cancelled) return;
+          perceivedLabelsRef.current[photo.url] = { status: 'failed' };
+          addLog('info', `perception failed for ${photo.title}: ${e?.message ?? e}`);
+        }
+        setPerceivedVersion((v) => v + 1);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [PHOTOS]);
 
   // Vision pipeline
   useEffect(() => {
