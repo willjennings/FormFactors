@@ -9,9 +9,10 @@ reports "Word Ribbon".*
 Date: 2026-06-30
 Branch: `honest-mode`
 Status: Approved design — ready for implementation planning
-Scope: perceive each visible tile once, cache it, and substitute the perceived name at the
-presentation/grounding edges (the "Pointing at" badge + the deixis hint to the model). Internal
-title-keyed grounding logic is untouched. Additive with a full fallback to today's behavior.
+Scope: perceive each visible tile once, cache it, and substitute the perceived name at the three
+name-facing sites (the "Pointing at" badge, the live deixis hint, and the model's static ON-SCREEN
+ELEMENTS list). Internal title-keyed grounding logic is untouched. Additive with a full fallback to
+today's behavior.
 
 ---
 
@@ -29,8 +30,6 @@ Ribbon". This is the learnings-doc §4 trap ("feeding labels you already compute
 from Gemini vision, cached once per image.
 
 **Non-goals (this slice):**
-- Rewriting the static instruction enumeration in `buildInstructions` (the model's up-front object
-  list) — a clean follow-up; the deixis hint at utterance time is the high-value site.
 - Changing the internal grounding identity (stays title-keyed so `matchElement` etc. are unchanged).
 - Perceiving the map (cross-origin iframe — out of scope, unchanged).
 - Any change to the scenario task names or the `?ramble=1` monitor.
@@ -45,14 +44,15 @@ scene tiles loaded  +  Gemini key present
         │                                                                    │
         └──────────────► perceivedLabels[url] = { status:'done', label }  ◄──┘
 
-at hover / utterance:
+at hover / utterance / connect:
    resolveTileName(title, url, cache) = cache[url]?.label (if 'done') ?? title
         ├─► "Pointing at: <perceived>"   (badge display)
-        └─► deixis hint  [USER JUST SAID "THIS" WHILE POINTING AT: <perceived> …]  (App.tsx:1942)
+        ├─► deixis hint  [USER JUST SAID "THIS" WHILE POINTING AT: <perceived> …]  (App.tsx:1942)
+        └─► static ON-SCREEN ELEMENTS list in the system prompt   (App.tsx:1448-1449)
 ```
 
 Internal `hoveredObjectRef` / `interactiveObjects` stay **title-keyed**; `resolveTileName` swaps only
-the human/model-facing name at the two edges above.
+the human/model-facing name at the three sites above.
 
 ## 4. New module — `src/perception/perceiveTile.ts`
 
@@ -91,6 +91,14 @@ type PerceivedCache = Record<string, Perceived>;   // keyed by image url
 - **Deixis hint (`App.tsx:1942`):** build the hint with `resolveTileName(foundObject.name, url, …)`
   in place of `foundObject.name`. (The tile's `url` is available via `PHOTOS.find(p => p.title ===
   foundObject.name)`.)
+- **Static ON-SCREEN ELEMENTS list (`App.tsx:1448-1449`):** map each `program.images[i]` through
+  `resolveTileName(i.title, i.url, cache)` instead of `i.title`. Timing: instructions are built at
+  connect. To pick up labels that resolve after first render, `buildInstructions` (a `useMemo`)
+  gains the cache **state mirror** in its deps so it recomputes when a label lands; a session started
+  after eager perception completes therefore uses perceived names. A session already live when a
+  label resolves is **not** retroactively re-prompted (realtime system prompts aren't re-sent
+  mid-session) — but the live deixis hint already carries the perceived name, so per-utterance
+  grounding stays correct. If perception hasn't finished at connect, the list falls back to titles.
 - **Divergence log:** on each `done` perception, emit `addLog('info', 'perceived "<label>" vs
   registered "<title>"')` (reuses the existing log stream) so the registered-vs-perceived gap is
   visible. A structured `telemetry` event (seeding F2 disagreement-confidence) is a follow-up, out of
@@ -120,4 +128,6 @@ type PerceivedCache = Record<string, Perceived>;   // keyed by image url
 1. `perceiveTile.ts` pure pieces (`perceivePrompt`, `cleanPerceivedLabel`, `resolveTileName`) + tests.
 2. `perceiveTileLabel` Gemini wrapper.
 3. App integration: cache + perceive effect + crop-to-base64.
-4. Substitute at the badge + the deixis hint; add the divergence log; manual smoke.
+4. Substitute at the badge + the deixis hint; add the divergence log.
+5. Substitute in the static ON-SCREEN ELEMENTS list (cache state-mirror into the `buildInstructions`
+   memo deps); manual smoke of both a pre-perception and post-perception session start.
