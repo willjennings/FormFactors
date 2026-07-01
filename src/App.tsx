@@ -1450,7 +1450,7 @@ MARKERS (Visual Anchors):
 - CRITICAL: When a new request starts, ignore all previous markers and landmarks. ALWAYS use the most recent visual information and pointing hints.
 
 ON-SCREEN ELEMENTS (the user points at these — use these names exactly):
-${program.images.map(i => `- ${i.title}`).join('\n')}
+${program.images.map(i => `- ${resolveTileName(i.title, i.url, perceivedLabelsRef.current)}`).join('\n')}
 
 USER CAPABILITIES:
 1. Point at a photo and ask "show me this on a map". You MUST identify which photo they are pointing at and call update_map(location_name).
@@ -1943,7 +1943,8 @@ When the user points and speaks a command, call the appropriate tool — a map t
           // G3: if an OCR word sits under the focus point, refine the referent to that word.
           const sub = wordAt(hX, hY);
           const subTag = sub && sub.photoTitle === foundObject.name ? ` (specifically the word "${sub.word}")` : '';
-          const hintText = `[USER JUST SAID "${kw.toUpperCase()}" WHILE POINTING AT: ${foundObject.name}${subTag}${confidenceTag}. ${isCommand ? "NOTE: This is part of an explicit command." : "NOTE: This is just a mention, stay silent unless they give a command."}${refCtx ? ` ${refCtx}` : ''}]`;
+          const perceivedName = resolveTileName(foundObject.name, PHOTOS.find(p => p.title === foundObject.name)?.url ?? '', perceivedLabelsRef.current);
+          const hintText = `[USER JUST SAID "${kw.toUpperCase()}" WHILE POINTING AT: ${perceivedName}${subTag}${confidenceTag}. ${isCommand ? "NOTE: This is part of an explicit command." : "NOTE: This is just a mention, stay silent unless they give a command."}${refCtx ? ` ${refCtx}` : ''}]`;
           providerRef.current?.sendTextHint(hintText);
           if (sub && sub.photoTitle === foundObject.name) referents.note(`"${sub.word}"`, 'pointed');
         }
@@ -2468,7 +2469,8 @@ When the user points and speaks a command, call the appropriate tool — a map t
     ) {
       lastHoverHintRef.current = hovered;
       lastHoverHintAtRef.current = now;
-      providerRef.current.sendTextHint(`[CONTEXT: the cursor is currently over "${hovered}". If the user says "this", "here", or "that", they are pointing at ${hovered}. This is silent context — DO NOT RESPOND OR SPEAK.]`);
+      const hoveredResolved = resolveTileName(hovered, PHOTOS.find(p => p.title === hovered)?.url ?? '', perceivedLabelsRef.current);
+      providerRef.current.sendTextHint(`[CONTEXT: the cursor is currently over "${hoveredResolved}". If the user says "this", "here", or "that", they are pointing at ${hoveredResolved}. This is silent context — DO NOT RESPOND OR SPEAK.]`);
     }
 
     // Only add to history if distance is enough (MIN_DISTANCE) to reduce jitter
@@ -3073,7 +3075,7 @@ When the user points and speaks a command, call the appropriate tool — a map t
               <span className={`w-2 h-2 rounded-full ${hoveredObject && hoveredObject !== 'Google Maps' ? 'bg-[var(--accent-color)] animate-pulse' : 'bg-[var(--text-secondary)] opacity-40'}`} />
               <span className="text-[11px] font-mono text-[var(--text-primary)]">
                 {hoveredObject && hoveredObject !== 'Google Maps'
-                  ? `Pointing at: ${hoveredWord ? `"${hoveredWord}" in ${hoveredObject}` : hoveredObject}`
+                  ? `Pointing at: ${hoveredWord ? `"${hoveredWord}" in ${resolveTileName(hoveredObject ?? '', PHOTOS.find(p => p.title === hoveredObject)?.url ?? '', perceivedLabelsRef.current)}` : resolveTileName(hoveredObject ?? '', PHOTOS.find(p => p.title === hoveredObject)?.url ?? '', perceivedLabelsRef.current)}`
                   : 'Point at an element…'}
               </span>
             </div>
