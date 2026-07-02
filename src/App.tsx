@@ -1991,6 +1991,18 @@ When the user points and speaks a command, call the appropriate tool — a map t
     }
   };
 
+  // R1: a typed command may have auto-started this session attempt. If session
+  // startup fails BEFORE the provider callbacks exist (missing key, mic denied,
+  // insecure context, connect throw), unwind: re-enable the box and give the
+  // user their text back so nothing is lost.
+  const abortPendingTyped = () => {
+    setIsConnecting(false);
+    if (pendingTypedRef.current) {
+      setTypedDraft(pendingTypedRef.current);
+      pendingTypedRef.current = null;
+    }
+  };
+
   const startLiveSession = async () => {
     if (isLive) return; // Prevent multiple sessions
     lastTranscriptionTimeRef.current = 0;
@@ -2000,12 +2012,14 @@ When the user points and speaks a command, call the appropriate tool — a map t
 
     const apiKey = process.env.GEMINI_API_KEY;
     if (voiceBackendRef.current === 'gemini' && !apiKey) {
+        abortPendingTyped();
         addLog('info', 'Missing GEMINI_API_KEY');
         console.error('Missing GEMINI_API_KEY');
         return;
     }
     if (voiceBackendRef.current === 'azure' && (!process.env.AZURE_OPENAI_API_KEY || !process.env.AZURE_OPENAI_ENDPOINT)) {
         const msg = 'Missing AZURE_OPENAI_API_KEY / AZURE_OPENAI_ENDPOINT — set them in .env.local and restart the dev server.';
+        abortPendingTyped();
         setLastError(msg);
         addLog('info', msg);
         return;
@@ -2014,6 +2028,7 @@ When the user points and speaks a command, call the appropriate tool — a map t
     // Secure-context check: getUserMedia only exists over HTTPS or http://localhost.
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         const msg = "This page can't reach the microphone API. It requires a secure context — open the app over HTTPS or http://localhost (a plain http forwarded URL will block it).";
+        abortPendingTyped();
         setLastError(msg);
         addLog('info', msg);
         return;
@@ -2036,6 +2051,7 @@ When the user points and speaks a command, call the appropriate tool — a map t
         : (err?.name === 'NotFoundError'
             ? "No microphone was found. Plug in or enable a mic and try again."
             : `Microphone unavailable: ${err?.message ?? err}`);
+      abortPendingTyped();
       setLastError(msg);
       addLog('info', `Session Error: ${msg}`);
       return;
@@ -2127,13 +2143,14 @@ When the user points and speaks a command, call the appropriate tool — a map t
           },
         },
       );
-    } catch (err) { 
+    } catch (err) {
       let errMsg = err instanceof Error ? err.message : String(err);
       if (errMsg.includes('Permission denied') || errMsg.includes('NotAllowedError')) {
         errMsg = "Microphone access denied. Please check your browser settings and ensure this site has permission to use your microphone.";
       }
+      abortPendingTyped();
       setLastError(errMsg);
-      addLog('info', `Session Error: ${errMsg}`); 
+      addLog('info', `Session Error: ${errMsg}`);
       console.error('Session Error:', err);
     }
   };
