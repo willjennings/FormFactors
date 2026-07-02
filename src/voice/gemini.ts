@@ -4,6 +4,7 @@
 // optional callbacks), so today's polished Gemini audio path is untouched.
 import { GoogleGenAI, Modality, Type } from '@google/genai';
 import type { VoiceProvider, VoiceSessionConfig, VoiceCallbacks, VoiceTool } from './types';
+import { geminiUserTurns } from './frames';
 
 const MODEL = 'gemini-2.5-flash-native-audio-preview-12-2025';
 
@@ -97,6 +98,7 @@ export function createGeminiProvider(apiKey: string, onSessionReady?: (session: 
     },
 
     sendTextHint(text: string) { session?.sendRealtimeInput({ text }); },
+    sendUserText(text: string) { session?.sendClientContent(geminiUserTurns(text)); },
     sendVideoFrame(jpegBase64: string) { session?.sendRealtimeInput({ video: { data: jpegBase64, mimeType: 'image/jpeg' } }); },
     sendToolResponse(id: string, name: string, result: any) {
       session?.sendToolResponse({ functionResponses: [{ id, name, response: result }] });

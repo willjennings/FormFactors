@@ -14,6 +14,7 @@
 // realtime audio is 24 kHz PCM16 mono, which is exactly what handleLiveAudio expects.
 
 import type { VoiceProvider, VoiceSessionConfig, VoiceCallbacks } from './types';
+import { userTextItemFrame, responseCreateFrame } from './frames';
 
 const SAMPLE_RATE = 24000; // Azure/OpenAI realtime PCM16 mono
 const FRAME_HEARTBEAT_MS = 500; // vision cadence: at most one image per this interval.
@@ -201,6 +202,12 @@ export function createAzureRealtimeProvider(
         type: 'conversation.item.create',
         item: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] },
       });
+    },
+
+    sendUserText(text: string) {
+      if (latestFrame) { sendImage(latestFrame); lastFrameSentAt = Date.now(); }
+      send(userTextItemFrame(text));
+      send(responseCreateFrame());
     },
 
     sendVideoFrame(jpegBase64: string) {

@@ -19,6 +19,7 @@
 //   not a safe single source for routing the call.
 
 import type { VoiceProvider, VoiceSessionConfig, VoiceCallbacks } from './types';
+import { userTextItemFrame, responseCreateFrame } from './frames';
 
 const FRAME_HEARTBEAT_MS = 1500; // sparse vision: at most one image per this interval
 
@@ -209,6 +210,12 @@ export function createOpenAIRealtimeProvider(): VoiceProvider {
           content: [{ type: 'input_text', text }],
         },
       });
+    },
+
+    sendUserText(text: string) {
+      if (latestFrame) { sendImage(latestFrame); lastFrameSentAt = Date.now(); }
+      send(userTextItemFrame(text));
+      send(responseCreateFrame());
     },
 
     sendVideoFrame(jpegBase64: string) {

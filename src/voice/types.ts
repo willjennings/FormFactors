@@ -35,6 +35,8 @@ export interface VoiceProvider {
   connect: (config: VoiceSessionConfig, callbacks: VoiceCallbacks) => Promise<void>;
   /** Inject context (deixis hint, system update). MUST NOT force a model response on its own. */
   sendTextHint: (text: string) => void;
+  /** Inject a typed user turn and force a model response (unlike sendTextHint, which must not). */
+  sendUserText: (text: string) => void;
   /** The current annotated scene as a base64 JPEG (no data: prefix). Cadence is the adapter's choice. */
   sendVideoFrame: (jpegBase64: string) => void;
   sendToolResponse: (id: string, name: string, result: any) => void;
