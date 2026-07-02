@@ -515,33 +515,6 @@ export function decideCommit(verbClass: VerbClass, autonomy: Autonomy, confirmed
   }
 }
 
-// ── G5: grounding reconciliation ───────────────────────────────────────────────────────
-// Map the model's free-text `target` ("the document body", "save") to one of the program's
-// element titles, so it can be compared against the app's pointer hit-test. Disagreement
-// between the two = a *perceived* ambiguity (real low confidence), not a seeded one.
-const normText = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-
-export function matchElement(images: ProgramImage[], text?: string): string | null {
-  if (!text) return null;
-  const t = normText(text);
-  if (!t) return null;
-  const tokens = new Set(t.split(' '));
-  let best: { title: string; score: number } | null = null;
-  for (const img of images) {
-    const title = normText(img.title);
-    let score = 0;
-    if (t === title) score = 1000;
-    // The full element name is contained in what was said → specific; longer = more specific.
-    else if (t.includes(title)) score = 500 + title.length;
-    // The phrase is a fragment of the element name → score by how much of it it covers,
-    // so "save" prefers "Save button" over "Save As button".
-    else if (title.includes(t)) score = 100 + Math.round((t.length / title.length) * 100);
-    else score = title.split(' ').filter(w => tokens.has(w)).length; // token overlap
-    if (score > 0 && (!best || score > best.score)) best = { title: img.title, score };
-  }
-  return best ? best.title : null;
-}
-
 /** Compact serialization of the mock document — the structured "world state" the model reads
  *  so it can see the result of its own edits (closes the action→result loop). */
 export function serializeMockDoc(doc: MockDoc): string {

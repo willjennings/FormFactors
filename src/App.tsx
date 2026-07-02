@@ -50,12 +50,11 @@ import {
   decideCommit,
   AUTONOMY_OPTIONS,
   serializeMockDoc,
-  matchElement,
 } from './scenarios';
 import type { ProgramId, ElementCategory, MockDoc, Program, Autonomy } from './scenarios';
 import { perceiveTileLabel, loadImageAsBase64 } from './perception/perceiveTile';
 import type { PerceivedCache } from './perception/perceiveTile';
-import { buildEntities, entityById, entityByTitle, displayName, MAP_ENTITY_ID } from './entities/registry';
+import { buildEntities, entityById, entityByTitle, displayName, MAP_ENTITY_ID, resolveEchoedTarget } from './entities/registry';
 import type { SceneEntity, EntityId } from './entities/registry';
 import { MockPreview } from './components/MockPreview';
 import { emitFeedbackAudio, FEEDBACK_OPTIONS } from './feedback';
@@ -1012,7 +1011,8 @@ export default function App() {
       // and only update the label. This prevents the marker from "jumping" if the AI's 
       // coordinate detection is slightly off.
       if (lastMarker && (now - lastMarker.timestamp < 4000)) {
-        lastMarker.identifiedObject = text as EntityId; // TODO Task 5: replace with entity resolution
+        const resolvedMarkerEntity = resolveEchoedTarget(entitiesRef.current, text);
+        lastMarker.identifiedObject = resolvedMarkerEntity?.entity.id;
         // We do NOT update lastMarker.x/y here to keep the user's precise point
         addLog('event', `AI Identified: "${text}" at user's point`);
       } else {
@@ -1021,7 +1021,7 @@ export default function App() {
           x: finalX,
           y: finalY,
           displayLabel: "THIS",
-          identifiedObject: text as EntityId, // TODO Task 5: replace with entity resolution
+          identifiedObject: resolveEchoedTarget(entitiesRef.current, text)?.entity.id,
           timestamp: now,
           isConsumed: false
         };
@@ -1455,7 +1455,7 @@ USER CAPABILITIES:
 CRITICAL - POINTING LOGIC:
 - You will receive hints in the format: [USER JUST SAID "THIS" WHILE POINTING AT: Landmark Name].
 - When the user says "this", "here", "that", or "there", they are ALWAYS referring to the landmark mentioned in the [USER JUST SAID ...] message that arrived MOST RECENTLY BEFORE or DURING that specific word.
-- If the user is pointing at "Google Maps", they are referring to the area currently shown on the map (e.g., "hotels near here" means hotels near the current map view).
+- If the user is pointing at the map, they are referring to the area currently shown on the map (e.g., "hotels near here" means hotels near the current map view).
 ${honest ? POINTING_TRUTH_HONEST : POINTING_TRUTH_CONFIDENT}
 - CRITICAL: For directions "from here to there", "here" is the landmark from the hint preceding "here", and "there" is the landmark from the hint preceding "there".
 - ALWAYS ignore landmarks from previous requests. Each time the user speaks a new command, start fresh with the pointing hints. Do NOT reuse locations from previous direction requests unless the user explicitly asks to "go back" or "use the same start".
@@ -1598,25 +1598,29 @@ When the user points and speaks a command, call the appropriate tool — a map t
       const phrase = `${label} ${target}${detail ? ` (${detail})` : ''}`;
       const decision = decideCommit(verbClass, autonomyRef.current, confirmed);
 
-      // G5 GROUNDING RECONCILIATION: compare the model's read of the referent (args.target)
-      // against the app's pointer hit-test. A genuine disagreement is a *perceived* ambiguity
-      // (real low confidence) — in honest mode it forces a confirm, independent of the seeded
-      // confusable table. Logged so we can measure whether disagreement predicts corrections.
-      const appReferent = markersRef.current[0]?.identifiedObject ?? hoveredIdRef.current ?? null;
-      const modelElement = matchElement(program.images, args.target);
-      const agree = (appReferent && modelElement) ? appReferent === modelElement : null;
-      const resolution: 'structural' | 'visual' | 'none' = appReferent ? 'structural' : (modelElement ? 'visual' : 'none');
-      telemetry.grounding(appReferent, args.target ?? null, agree, resolution);
+      // G5 GROUNDING RECONCILIATION on stable ids: the app's pointer referent vs the model's
+      // echoed target resolved across ALL aliases (title + perceived). Below the resolver's
+      // threshold → honest null (no phantom match, no spurious witness). See the 2026-07-02
+      // session regression: “Cell A3” must not bind to the Cell A1 tile.
+      const appReferentId = markersRef.current[0]?.identifiedObject ?? hoveredIdRef.current ?? null;
+      const appReferentEntity = entityById(entitiesRef.current, appReferentId);
+      const resolved = resolveEchoedTarget(entitiesRef.current, args.target);
+      const agree = (appReferentId && resolved) ? appReferentId === resolved.entity.id : null;
+      const resolution: 'structural' | 'visual' | 'none' =
+        appReferentId ? 'structural' : (resolved ? 'visual' : 'none');
+      telemetry.grounding(displayName(appReferentEntity) || null, args.target ?? null, agree, resolution);
       const disagreement = honestModeRef.current && agree === false && !confirmed;
       const effectiveDecision: 'commit' | 'witness' = disagreement ? 'witness' : decision;
-      const note = disagreement ? `You pointed at “${appReferent}”, but I read “${modelElement}”.` : undefined;
+      const note = disagreement
+        ? `You pointed at “${displayName(appReferentEntity)}”, but I read “${displayName(resolved!.entity)}”.`
+        : undefined;
 
       telemetry.action(fc.name, verbClass, effectiveDecision, lastInputModalityRef.current);
       if (effectiveDecision === 'witness') {
         addLog('tool', `Tool Call: ${fc.name}(witness${disagreement ? ', grounding mismatch' : ''}) — ${phrase}`);
         setPendingAction({ verb: fc.name, label, target, detail, confirmed: false, note });
-        emitFeedback({ outcome: 'needs-confirm', verbClass, label: disagreement ? `Mismatch: ${appReferent} vs ${modelElement}` : `Confirm: ${phrase}` });
-        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true, witnessed: true, grounding_mismatch: disagreement, app_referent: appReferent, model_target: modelElement });
+        emitFeedback({ outcome: 'needs-confirm', verbClass, label: disagreement ? `Mismatch: ${displayName(appReferentEntity)} vs ${displayName(resolved?.entity)}` : `Confirm: ${phrase}` });
+        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true, witnessed: true, grounding_mismatch: disagreement, app_referent: displayName(appReferentEntity) || null, model_target: resolved ? displayName(resolved.entity) : null });
       } else {
         const prevDoc = mockDocRef.current;
         const nextDoc = applyAction(prevDoc, fc.name, args);
@@ -1629,7 +1633,7 @@ When the user points and speaks a command, call the appropriate tool — a map t
         if (verbClass === 'create') {
           const createdName = nextDoc.kind === 'excel' ? 'Chart'
             : nextDoc.kind === 'powerpoint' ? (nextDoc.slides[nextDoc.slides.length - 1] ?? 'Slide')
-            : (modelElement ?? target);
+            : (resolved ? displayName(resolved.entity) : target);
           referents.note(createdName, 'created');
         }
         // G2: feed the new document state back so the model can SEE the result of its edit
