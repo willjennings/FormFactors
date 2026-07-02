@@ -12,6 +12,7 @@
 type DistributiveOmit<T, K extends keyof any> = T extends any ? Omit<T, K> : never;
 
 export type FormFactor = 'mobile' | 'tablet' | 'desktop';
+export type InputModality = 'voice' | 'typed' | 'direct';
 
 export interface DeviceInfo {
   width: number;
@@ -33,8 +34,8 @@ export interface SessionConfig {
 
 export type TelemetryEvent =
   | { t: number; type: 'session_start'; config: SessionConfig }
-  | { t: number; type: 'deixis'; keyword: string; resolved: string | null; target: string | null; confidence: 'high' | 'low'; correct: boolean | null }
-  | { t: number; type: 'action'; verb: string; verbClass: string; decision: 'commit' | 'witness' }
+  | { t: number; type: 'deixis'; keyword: string; resolved: string | null; target: string | null; confidence: 'high' | 'low'; correct: boolean | null; modality: InputModality }
+  | { t: number; type: 'action'; verb: string; verbClass: string; decision: 'commit' | 'witness'; modality: InputModality }
   | { t: number; type: 'grounding'; appReferent: string | null; modelTarget: string | null; agree: boolean | null; resolution: 'structural' | 'visual' | 'none' }
   | { t: number; type: 'map'; query: string }
   | { t: number; type: 'correction' } // undo
@@ -75,12 +76,12 @@ class Telemetry {
     this.events.push({ t: Date.now() - this.startedAt, ...ev } as TelemetryEvent);
   }
 
-  deixis(keyword: string, resolved: string | null, target: string | null, confidence: 'high' | 'low') {
+  deixis(keyword: string, resolved: string | null, target: string | null, confidence: 'high' | 'low', modality: InputModality = 'voice') {
     const correct = target ? resolved === target : null;
-    this.push({ type: 'deixis', keyword, resolved, target, confidence, correct });
+    this.push({ type: 'deixis', keyword, resolved, target, confidence, correct, modality });
   }
-  action(verb: string, verbClass: string, decision: 'commit' | 'witness') {
-    this.push({ type: 'action', verb, verbClass, decision });
+  action(verb: string, verbClass: string, decision: 'commit' | 'witness', modality: InputModality = 'voice') {
+    this.push({ type: 'action', verb, verbClass, decision, modality });
   }
   grounding(appReferent: string | null, modelTarget: string | null, agree: boolean | null, resolution: 'structural' | 'visual' | 'none' = 'none') {
     this.push({ type: 'grounding', appReferent, modelTarget, agree, resolution });
@@ -98,6 +99,10 @@ class Telemetry {
       const g = graded.filter(d => d.confidence === lvl);
       return { n: g.length, correct: g.filter(d => d.correct).length };
     };
+    const byMod = (mod: InputModality) => {
+      const g = graded.filter(d => (d as any).modality === mod);
+      return { n: g.length, correct: g.filter(d => d.correct).length };
+    };
     const actions = this.events.filter(e => e.type === 'action') as Extract<TelemetryEvent, { type: 'action' }>[];
     const corrections = this.events.filter(e => e.type === 'correction').length;
     const errors = this.events.filter(e => e.type === 'error').length;
@@ -108,6 +113,10 @@ class Telemetry {
       const g = gGraded.filter(e => e.resolution === r);
       return { total: g.length, agree: g.filter(e => e.agree).length };
     };
+    const actByMod = (mod: InputModality) => {
+      const a = actions.filter(x => (x as any).modality === mod);
+      return { total: a.length, commits: a.filter(x => x.decision === 'commit').length, witnesses: a.filter(x => x.decision === 'witness').length };
+    };
     return {
       durationMs: this.config ? Date.now() - this.startedAt : 0,
       deixis: {
@@ -117,11 +126,13 @@ class Telemetry {
         accuracy: graded.length ? +(correct / graded.length).toFixed(2) : null,
         // Calibration: how often each confidence level was actually right.
         calibration: { high: conf('high'), low: conf('low') },
+        byModality: { voice: byMod('voice'), typed: byMod('typed'), direct: byMod('direct') },
       },
       actions: {
         total: actions.length,
         commits: actions.filter(a => a.decision === 'commit').length,
         witnesses: actions.filter(a => a.decision === 'witness').length,
+        byModality: { voice: actByMod('voice'), typed: actByMod('typed'), direct: actByMod('direct') },
       },
       corrections,
       correctionRate: actions.length ? +(corrections / actions.length).toFixed(2) : 0,
