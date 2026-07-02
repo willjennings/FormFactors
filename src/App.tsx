@@ -68,6 +68,8 @@ import type { OcrWord } from './ocr';
 import { Spreadsheet } from './widgets/Spreadsheet';
 import { buildSpreadsheetSnapshot, formatSnapshotForModel } from './widgets/spreadsheetData';
 import { snapshotNode, makeThrottle } from './vision/snapshotNode';
+import { parseTypedSubmit } from './input/typedInput';
+import type { InputModality } from './telemetry';
 
 // --- Types ---
 interface Marker {
@@ -376,7 +378,11 @@ export default function App() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [activePrompt, setActivePrompt] = useState<string | null>(null);
   const [liveTranscription, setLiveTranscription] = useState("");
-  const [pendingEdit, setPendingEdit] = useState<{ 
+  const [typedDraft, setTypedDraft] = useState("");
+  const [isConnecting, setIsConnecting] = useState(false);
+  const pendingTypedRef = useRef<string | null>(null);
+  const lastInputModalityRef = useRef<InputModality>('voice');
+  const [pendingEdit, setPendingEdit] = useState<{
     prompt: string; 
     bbox: BBox; 
     marker?: { x: number, y: number };
@@ -1619,7 +1625,7 @@ When the user points and speaks a command, call the appropriate tool — a map t
       const effectiveDecision: 'commit' | 'witness' = disagreement ? 'witness' : decision;
       const note = disagreement ? `You pointed at “${appReferent}”, but I read “${modelElement}”.` : undefined;
 
-      telemetry.action(fc.name, verbClass, effectiveDecision);
+      telemetry.action(fc.name, verbClass, effectiveDecision, lastInputModalityRef.current);
       if (effectiveDecision === 'witness') {
         addLog('tool', `Tool Call: ${fc.name}(witness${disagreement ? ', grounding mismatch' : ''}) — ${phrase}`);
         setPendingAction({ verb: fc.name, label, target, detail, confirmed: false, note });
@@ -1651,6 +1657,7 @@ When the user points and speaks a command, call the appropriate tool — a map t
   // G8 INPUT FALLBACK: select a target by its number (voice "number two" / number key) — a
   // pointer-free deixis. Simulates pointing at the element so a command resolves to it.
   const selectTargetByNumber = (n: number) => {
+    lastInputModalityRef.current = 'direct';
     const img = program.images[n - 1];
     if (!img) return;
     const obj = interactiveObjectsRef.current.find(o => o.name === img.title);
@@ -1663,7 +1670,7 @@ When the user points and speaks a command, call the appropriate tool — a map t
     cursorHistoryRef.current.push({ x: cx, y: cy, t: Date.now(), hovered: img.title });
     addMarker('THIS', cx, cy);
     referents.note(img.title, 'pointed');
-    telemetry.deixis('number', img.title, focusTitleRef.current ?? null, 'high');
+    telemetry.deixis('number', img.title, focusTitleRef.current ?? null, 'high', 'direct');
     addLog('event', `Selected target ${n}: ${img.title}`);
     providerRef.current?.sendTextHint(`[USER SELECTED target ${n}: ${img.title} (numbered selection). Treat this as what they are pointing at.]`);
   };
@@ -1901,7 +1908,7 @@ When the user points and speaks a command, call the appropriate tool — a map t
 
         // TESTBED: record this deixis resolution against the active scenario's target (ground
         // truth) so we can measure pointing accuracy + confidence calibration per config/device.
-        telemetry.deixis(kw, foundObject.name, focusTitleRef.current ?? null, confidence.level);
+        telemetry.deixis(kw, foundObject.name, focusTitleRef.current ?? null, confidence.level, lastInputModalityRef.current);
 
         // G4: remember this referent so later turns can resolve "make THAT bold" / "send IT".
         if (foundObject.name !== 'Google Maps') referents.note(foundObject.name, 'pointed');
@@ -1961,6 +1968,27 @@ When the user points and speaks a command, call the appropriate tool — a map t
         spatialDescriptionRef.current = null;
       }
     });
+  };
+
+  // R1 TYPED PARITY: a typed command rides the exact same pipeline as speech —
+  // local grammar first (deixis binds to the pointer at type-time, repair, numbers),
+  // then a forced model turn. No session? Stash the text and auto-start one.
+  const sendTypedInput = (raw: string) => {
+    const text = parseTypedSubmit(raw);
+    if (!text) return;
+    lastInputModalityRef.current = 'typed';
+    addLog('event', `⌨ ${text}`);
+    setLiveTranscription(text);
+    processInputTranscript(text);
+    if (providerRef.current) {
+      providerRef.current.sendUserText(text);
+      setTypedDraft("");
+    } else {
+      pendingTypedRef.current = text;
+      setTypedDraft("");
+      setIsConnecting(true);
+      startLiveSession();
+    }
   };
 
   const startLiveSession = async () => {
@@ -2054,9 +2082,16 @@ When the user points and speaks a command, call the appropriate tool — a map t
               honest: honestModeRef.current,
               device: detectDevice(),
             });
+            setIsConnecting(false);
+            if (pendingTypedRef.current) {
+              providerRef.current?.sendUserText(pendingTypedRef.current);
+              pendingTypedRef.current = null;
+            }
           },
-          onClose: () => { setIsLive(false); sessionRef.current = null; providerRef.current = null; addLog('info', 'Live Link Closed'); },
+          onClose: () => { setIsLive(false); setIsConnecting(false); sessionRef.current = null; providerRef.current = null; addLog('info', 'Live Link Closed'); },
           onError: (m: string) => {
+            setIsConnecting(false);
+            if (pendingTypedRef.current) { setTypedDraft(pendingTypedRef.current); pendingTypedRef.current = null; }
             let errMsg = m;
             if (errMsg.includes('Permission denied') || errMsg.includes('NotAllowedError')) {
               errMsg = "Microphone access denied. Please check your browser settings and ensure this site has permission to use your microphone.";
@@ -2066,7 +2101,7 @@ When the user points and speaks a command, call the appropriate tool — a map t
             telemetry.error(errMsg);
             emitFeedback({ outcome: 'error', label: errMsg });
           },
-          onInputTranscript: (text: string) => { processInputTranscript(text); },
+          onInputTranscript: (text: string) => { lastInputModalityRef.current = 'voice'; processInputTranscript(text); },
           onToolCall: (call) => {
             if (showOnboardingRef.current || showWelcomeRef.current || showRotateOverlayRef.current || showMobileOverlayRef.current) return;
             if (lastTranscriptionTimeRef.current === 0) { addLog('info', 'Ignoring tool call before first transcription'); return; }
@@ -3570,6 +3605,25 @@ When the user points and speaks a command, call the appropriate tool — a map t
                   (isProcessing ? activePrompt : (liveTranscription || pendingEdit?.prompt)) || (isLive ? "..." : "Start point and speak to begin.")
                 )}
               </p>
+              <form
+                className="flex items-center gap-2"
+                onSubmit={(e) => { e.preventDefault(); sendTypedInput(typedDraft); }}
+              >
+                <input
+                  value={typedDraft}
+                  onChange={(e) => setTypedDraft(e.target.value)}
+                  placeholder="type a command — point while you type"
+                  disabled={isConnecting}
+                  className="flex-1 bg-transparent border border-[var(--card-border)] rounded-lg px-3 py-1.5 text-[11px] font-mono text-[var(--text-primary)] placeholder:text-[var(--text-secondary)] placeholder:opacity-50 focus:outline-none focus:border-[var(--accent-color)] disabled:opacity-40"
+                />
+                <button
+                  type="submit"
+                  disabled={isConnecting || !typedDraft.trim()}
+                  className="px-3 py-1.5 rounded-lg text-[10px] font-mono uppercase tracking-wide bg-[var(--accent-color)]/10 text-[var(--accent-color)] border border-[var(--accent-color)]/30 hover:bg-[var(--accent-color)]/20 disabled:opacity-30 transition-colors"
+                >
+                  {isConnecting ? '…' : 'Send'}
+                </button>
+              </form>
             </div>
           </section>
 
