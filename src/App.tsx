@@ -52,9 +52,11 @@ import {
   serializeMockDoc,
   matchElement,
 } from './scenarios';
-import type { ProgramId, ElementCategory, InteractiveObject, MockDoc, Program, Autonomy } from './scenarios';
-import { perceiveTileLabel, loadImageAsBase64, resolveTileName } from './perception/perceiveTile';
+import type { ProgramId, ElementCategory, MockDoc, Program, Autonomy } from './scenarios';
+import { perceiveTileLabel, loadImageAsBase64 } from './perception/perceiveTile';
 import type { PerceivedCache } from './perception/perceiveTile';
+import { buildEntities, entityById, entityByTitle, displayName, MAP_ENTITY_ID } from './entities/registry';
+import type { SceneEntity, EntityId } from './entities/registry';
 import { MockPreview } from './components/MockPreview';
 import { emitFeedbackAudio, FEEDBACK_OPTIONS } from './feedback';
 import type { FeedbackMode, FeedbackEvent } from './feedback';
@@ -129,32 +131,32 @@ const KEYWORD_MAP: Record<string, string> = {
 type PointingConfidence = { level: 'high' | 'low'; candidates: string[]; reason: string };
 
 function computePointingConfidence(
-  foundObject: { name: string; bbox: number[] },
+  foundObject: SceneEntity,
   hX: number,
   hY: number,
-  objects: { name: string; bbox: number[] }[],
+  objects: SceneEntity[],
   confusablePairs: Record<string, string[]>
 ): PointingConfidence {
   // 1. Seeded confusable pairs — the headline ambiguity (e.g. Save ↔ Save As).
-  const confusables = confusablePairs[foundObject.name];
+  const confusables = confusablePairs[foundObject.title];
   if (confusables && confusables.length) {
     return {
       level: 'low',
-      candidates: [foundObject.name, ...confusables],
-      reason: `seeded confusable — ${foundObject.name} looks like ${confusables.join(', ')}`,
+      candidates: [foundObject.title, ...confusables],
+      reason: `seeded confusable — ${foundObject.title} looks like ${confusables.join(', ')}`,
     };
   }
 
   // 2. Geometric: cursor sits inside more than one photo region → ambiguous overlap.
   const containing = objects.filter(o => {
-    if (o.name === 'Google Maps') return false;
+    if (o.category === 'map') return false;
     const [ymin, xmin, ymax, xmax] = o.bbox;
     return hX >= xmin && hX <= xmax && hY >= ymin && hY <= ymax;
   });
   if (containing.length > 1) {
     return {
       level: 'low',
-      candidates: containing.map(o => o.name),
+      candidates: containing.map(o => o.title),
       reason: `cursor inside ${containing.length} overlapping regions`,
     };
   }
@@ -168,13 +170,13 @@ function computePointingConfidence(
   if (margin < edgeThreshold) {
     return {
       level: 'low',
-      candidates: [foundObject.name],
+      candidates: [foundObject.title],
       reason: `near region edge (margin ${Math.round(margin)} < ${Math.round(edgeThreshold)})`,
     };
   }
 
   // 4. Clean hit inside a single region, no confusable → high.
-  return { level: 'high', candidates: [foundObject.name], reason: 'clean hit inside a single region' };
+  return { level: 'high', candidates: [foundObject.title], reason: 'clean hit inside a single region' };
 }
 
 const VOICE_TOOLS: VoiceTool[] = [
@@ -302,27 +304,23 @@ export default function App() {
     }
     return map;
   }, [program]);
-  // Zero-bbox placeholder objects (real bboxes are filled in from the DOM layout below).
-  const INTERACTIVE_OBJECTS_BASE: InteractiveObject[] = React.useMemo(() => [
-    ...program.images.map(img => ({ name: img.title, bbox: [0, 0, 0, 0], category: img.category })),
-    { name: "Google Maps", bbox: [0, 0, 0, 0], category: DEFAULT_CATEGORY },
-  ], [program]);
-  // name → category, read live by the canvas renderer (kept in a ref to avoid stale closures).
+  // Scene source of truth: the entity registry (one entity per program image + the map).
+  const [entities, setEntities] = useState<SceneEntity[]>([]);
+  const entitiesRef = useRef<SceneEntity[]>([]);
+  // id → category, read live by the canvas renderer (kept in a ref to avoid stale closures).
   const categoryMapRef = useRef<Record<string, ElementCategory>>({});
   React.useEffect(() => {
     const m: Record<string, ElementCategory> = {};
-    for (const img of program.images) m[img.title] = img.category;
+    for (const e of entitiesRef.current) if (e.category !== 'map') m[e.id] = e.category as ElementCategory;
     categoryMapRef.current = m;
-  }, [program]);
-  const categoryOf = (name?: string): ElementCategory =>
-    (name && categoryMapRef.current[name]) || DEFAULT_CATEGORY;
+  }, [entities]);
+  const categoryOf = (id?: EntityId | null): ElementCategory =>
+    (id && categoryMapRef.current[id]) || DEFAULT_CATEGORY;
 
   // The active scenario's target element name, read live by the canvas renderer (ref avoids
   // stale closures since the render loop's effect doesn't re-run on every task switch).
   const focusTitleRef = useRef<string | undefined>(undefined);
 
-  const [interactiveObjects, setInteractiveObjects] = useState<InteractiveObject[]>([]);
-  const interactiveObjectsRef = useRef<InteractiveObject[]>([]);
   const [showWelcome, setShowWelcome] = useState(true);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showRotateOverlay, setShowRotateOverlay] = useState(false);
@@ -372,7 +370,7 @@ export default function App() {
     try { setIsEmbedded(window.self !== window.top); } catch { setIsEmbedded(true); }
   }, []);
   const [currentImage, setCurrentImage] = useState(INITIAL_IMAGE);
-  const [history, setHistory] = useState<{ image: string; objects: InteractiveObject[] }[]>([]);
+  const [history, setHistory] = useState<{ image: string; objects: SceneEntity[] }[]>([]);
   const [dims, setDims] = useState({ width: BASE_SIZE, height: BASE_SIZE });
   const [mainSize, setMainSize] = useState({ width: 0, height: 0 });
   const [isProcessing, setIsProcessing] = useState(false);
@@ -407,10 +405,10 @@ export default function App() {
   const [mousePos, setMousePos] = useState({ x: -100, y: -100 });
   const [isPainting, setIsPainting] = useState(false);
   const [trailMousePos, setTrailMousePos] = useState({ x: 0, y: 0 });
-  const [hoveredObject, setHoveredObject] = useState<string | null>(null);
+  const [hoveredId, setHoveredId] = useState<EntityId | null>(null);
   const perceivedLabelsRef = useRef<PerceivedCache>({});
   const [perceivedVersion, setPerceivedVersion] = useState(0);
-  const hoveredObjectRef = useRef<string | null>(null);
+  const hoveredIdRef = useRef<EntityId | null>(null);
   // Throttle state for proactive hover grounding (non-Gemini backends).
   const lastHoverHintRef = useRef<string | null>(null);
   const lastHoverHintAtRef = useRef(0);
@@ -471,7 +469,7 @@ export default function App() {
   const traceCanvasRef = useRef<HTMLCanvasElement>(null);
   const mainContainerRef = useRef<HTMLElement>(null);
   const cursorRef = useRef<{x: number, y: number}>({x: 500, y: 500}); // Normalized 0-1000
-  const cursorHistoryRef = useRef<{x: number, y: number, t: number, hovered: string | null}[]>([]);
+  const cursorHistoryRef = useRef<{x: number, y: number, t: number, hovered: EntityId | null}[]>([]);
   const markersRef = useRef<Marker[]>([]);
   const sessionRef = useRef<any>(null);
   const providerRef = useRef<VoiceProvider | null>(null);
@@ -526,17 +524,17 @@ export default function App() {
   // Find the OCR word (if any) under a normalized 0–1000 point, mapping each word's image-
   // relative bbox into the live tile bbox. Returns the word text + its containing element.
   const wordAt = (x: number, y: number): { word: string; photoTitle: string } | null => {
-    for (const obj of interactiveObjectsRef.current) {
-      if (obj.name === 'Google Maps') continue;
+    for (const obj of entitiesRef.current) {
+      if (obj.category === 'map') continue;
       const [tymin, txmin, tymax, txmax] = obj.bbox;
       if (x < txmin || x > txmax || y < tymin || y > tymax) continue;
-      const words = ocrWordsRef.current[obj.name];
+      const words = ocrWordsRef.current[obj.title];
       if (!words || words.length === 0) return null;
       const tw = txmax - txmin, th = tymax - tymin;
       for (const w of words) {
         const gx0 = txmin + w.nx0 * tw, gx1 = txmin + w.nx1 * tw;
         const gy0 = tymin + w.ny0 * th, gy1 = tymin + w.ny1 * th;
-        if (x >= gx0 && x <= gx1 && y >= gy0 && y <= gy1) return { word: w.text, photoTitle: obj.name };
+        if (x >= gx0 && x <= gx1 && y >= gy0 && y <= gy1) return { word: w.text, photoTitle: obj.title };
       }
       return null;
     }
@@ -698,29 +696,17 @@ export default function App() {
           spreadsheet: ssEl ? toBBox((ssEl as HTMLElement).getBoundingClientRect()) : undefined,
         });
 
-        // Update interactive objects for Gemini
-        const mapBBox = toBBox(mRect);
-        const newInteractiveObjects: InteractiveObject[] = [
-          ...photoItems.map((item) => {
-            const img = PHOTOS.find(p => p.id === item.id);
-            return {
-              name: img?.title || "Photo",
-              category: img?.category ?? DEFAULT_CATEGORY,
-              bbox: [item.bbox.ymin, item.bbox.xmin, item.bbox.ymax, item.bbox.xmax] as [number, number, number, number]
-            };
-          }),
-          {
-            name: "Google Maps",
-            category: DEFAULT_CATEGORY,
-            bbox: [mapBBox.ymin, mapBBox.xmin, mapBBox.ymax, mapBBox.xmax] as [number, number, number, number]
-          }
-        ];
-        setInteractiveObjects(newInteractiveObjects);
-        interactiveObjectsRef.current = newInteractiveObjects;
+        // Update the scene entities for Gemini (single source of truth).
+        const es = buildEntities(program, perceivedLabelsRef.current, {
+          items: photoItems.map(it => ({ id: it.id, bbox: it.bbox })),
+          map: toBBox(mRect),
+        });
+        setEntities(es);
+        entitiesRef.current = es;
 
         // Notify AI of the new layout if session is active (core context — both backends).
         if (providerRef.current) {
-          const layoutInfo = newInteractiveObjects.map(obj => `${obj.name}: [${obj.bbox.map(Math.round).join(', ')}]`).join('\n');
+          const layoutInfo = es.map(e => `${displayName(e)}: [${e.bbox.map(Math.round).join(', ')}]`).join('\n');
           providerRef.current.sendTextHint(`[SYSTEM UPDATE: The gallery photos have been rearranged and now overlap the Google Maps box. Here are their new coordinates (ymin, xmin, ymax, xmax):\n${layoutInfo}\nIMPORTANT: The photos are ON TOP of the map. If the user points at or circles an area that contains both a photo and the map, they are referring to the PHOTO. Use these to identify what the user is pointing at when they say "this" or "here". DO NOT RESPOND TO THIS UPDATE. STAY SILENT UNTIL THE USER SPEAKS.]`);
         }
       }
@@ -744,7 +730,7 @@ export default function App() {
       window.removeEventListener('resize', updateLayout);
       window.removeEventListener('scroll', updateLayout, true);
     };
-  }, [isLive, activeProgram]); // Recalculate when live starts, layout changes, or program swaps
+  }, [isLive, activeProgram, perceivedVersion]); // Recalculate when live starts, layout changes, program swaps, or perception lands
 
   useEffect(() => {
     const checkDevice = () => {
@@ -1002,12 +988,12 @@ export default function App() {
 
     // Don't let markers be placed on the Google Maps view
     // Use find() instead of some() to respect Z-order (photos are on top of map)
-    const topObject = interactiveObjectsRef.current.find(obj => {
-      const [ymin, xmin, ymax, xmax] = obj.bbox;
+    const topObject = entitiesRef.current.find(e => {
+      const [ymin, xmin, ymax, xmax] = e.bbox;
       return finalX >= xmin && finalX <= xmax && finalY >= ymin && finalY <= ymax;
     });
-    
-    const isOnMap = topObject?.name === 'Google Maps';
+
+    const isOnMap = topObject?.category === 'map';
     
     if (isOnMap) {
       if (!isIdentification && providerRef.current) {
@@ -1195,7 +1181,7 @@ CRITICAL CONSTRAINTS - ABSOLUTELY NO ZOOMING OR CROPPING:
           if (ctx) {
             // Save current state to history before updating
             const currentImgData = pCanvas.toDataURL('image/png');
-            setHistory(prev => [...prev, { image: currentImgData, objects: [...interactiveObjects] }]);
+            setHistory(prev => [...prev, { image: currentImgData, objects: [...entities] }]);
 
             ctx.clearRect(0, 0, dims.width, dims.height);
             ctx.drawImage(img, 0, 0, dims.width, dims.height);
@@ -1208,20 +1194,20 @@ CRITICAL CONSTRAINTS - ABSOLUTELY NO ZOOMING OR CROPPING:
               const isRemoval = lowerPrompt.includes("remove") || lowerPrompt.includes("delete") || lowerPrompt.includes("erase");
               
               if (isRemoval) {
-                setInteractiveObjects(prev => prev.filter(obj => obj.name !== objectName));
+                setEntities(prev => prev.filter(e => e.title !== objectName));
                 addLog('info', `Removed "${objectName}" from spatial map.`);
               } else if (dest) {
-                setInteractiveObjects(prev => prev.map(obj => {
-                  if (obj.name === objectName) {
+                setEntities(prev => prev.map(e => {
+                  if (e.title === objectName) {
                     const dx = dest.x - marker.x;
                     const dy = dest.y - marker.y;
-                    const [ymin, xmin, ymax, xmax] = obj.bbox;
+                    const [ymin, xmin, ymax, xmax] = e.bbox;
                     return {
-                      ...obj,
+                      ...e,
                       bbox: [ymin + dy, xmin + dx, ymax + dy, xmax + dx] as [number, number, number, number]
                     };
                   }
-                  return obj;
+                  return e;
                 }));
                 addLog('info', `Updated marking for "${objectName}" to new location.`);
               }
@@ -1384,7 +1370,7 @@ CRITICAL CONSTRAINTS - ABSOLUTELY NO ZOOMING OR CROPPING:
     return () => window.removeEventListener('resize', checkWidth);
   }, [bypassDeviceGate]);
 
-  const buildInstructions = (honest: boolean, program: Program): string => {
+  const buildInstructions = (honest: boolean, program: Program, entities: SceneEntity[]): string => {
     // Program-specific verbs the model may call in addition to the map tools.
     const actionTools = buildActionTools(program.id);
     const ACTIONS_SECTION = actionTools.length ? `
@@ -1456,7 +1442,9 @@ MARKERS (Visual Anchors):
 - CRITICAL: When a new request starts, ignore all previous markers and landmarks. ALWAYS use the most recent visual information and pointing hints.
 
 ON-SCREEN ELEMENTS (the user points at these — use these names exactly):
-${program.images.map(i => `- ${resolveTileName(i.title, i.url, perceivedLabelsRef.current)}`).join('\n')}
+${entities.length
+  ? entities.filter(e => e.category !== 'map').map(e => `- ${displayName(e)}`).join('\n')
+  : program.images.map(img => `- ${img.title}`).join('\n')}
 
 USER CAPABILITIES:
 1. Point at a photo and ask "show me this on a map". You MUST identify which photo they are pointing at and call update_map(location_name).
@@ -1616,7 +1604,7 @@ When the user points and speaks a command, call the appropriate tool — a map t
       // against the app's pointer hit-test. A genuine disagreement is a *perceived* ambiguity
       // (real low confidence) — in honest mode it forces a confirm, independent of the seeded
       // confusable table. Logged so we can measure whether disagreement predicts corrections.
-      const appReferent = markersRef.current[0]?.identifiedObject ?? hoveredObjectRef.current ?? null;
+      const appReferent = markersRef.current[0]?.identifiedObject ?? hoveredIdRef.current ?? null;
       const modelElement = matchElement(program.images, args.target);
       const agree = (appReferent && modelElement) ? appReferent === modelElement : null;
       const resolution: 'structural' | 'visual' | 'none' = appReferent ? 'structural' : (modelElement ? 'visual' : 'none');
@@ -1660,14 +1648,14 @@ When the user points and speaks a command, call the appropriate tool — a map t
     lastInputModalityRef.current = 'direct';
     const img = program.images[n - 1];
     if (!img) return;
-    const obj = interactiveObjectsRef.current.find(o => o.name === img.title);
+    const obj = entityByTitle(entitiesRef.current, img.title);
     if (!obj) return;
     const [ymin, xmin, ymax, xmax] = obj.bbox;
     const cx = (xmin + xmax) / 2, cy = (ymin + ymax) / 2;
     cursorRef.current = { x: cx, y: cy };
-    hoveredObjectRef.current = img.title;
-    setHoveredObject(img.title);
-    cursorHistoryRef.current.push({ x: cx, y: cy, t: Date.now(), hovered: img.title });
+    hoveredIdRef.current = obj.id;
+    setHoveredId(obj.id);
+    cursorHistoryRef.current.push({ x: cx, y: cy, t: Date.now(), hovered: obj.id });
     addMarker('THIS', cx, cy);
     referents.note(img.title, 'pointed');
     telemetry.deixis('number', img.title, focusTitleRef.current ?? null, 'high', 'direct');
@@ -1788,7 +1776,7 @@ When the user points and speaks a command, call the appropriate tool — a map t
       // 1. HISTORY PURPLE TEXT CHECK (Prioritize what was hovered DURING the speech window)
       const hoveredCounts: Record<string, number> = {};
       windowEntries.forEach(entry => {
-        if (entry.hovered && entry.hovered !== 'Google Maps') {
+        if (entry.hovered && entry.hovered !== MAP_ENTITY_ID) {
           hoveredCounts[entry.hovered] = (hoveredCounts[entry.hovered] || 0) + 1;
         }
       });
@@ -1802,19 +1790,19 @@ When the user points and speaks a command, call the appropriate tool — a map t
         }
       }
 
-      let foundObject = mostFrequentHovered
-        ? interactiveObjectsRef.current.find(obj => obj.name === mostFrequentHovered) || null
+      let foundObject: SceneEntity | null = mostFrequentHovered
+        ? entitiesRef.current.find(e => e.id === mostFrequentHovered) || null
         : null;
 
       if (foundObject) {
-        addLog('info', `Using historical "Purple Text": ${foundObject.name}`);
+        addLog('info', `Using historical "Purple Text": ${displayName(foundObject)}`);
       }
 
       // 2. DIRECT PURPLE TEXT CHECK (Only for the very latest keyword if history is sparse)
-      if (!foundObject && index === totalKws - 1 && hoveredObjectRef.current && hoveredObjectRef.current !== 'Google Maps') {
-        foundObject = interactiveObjectsRef.current.find(obj => obj.name === hoveredObjectRef.current) || null;
+      if (!foundObject && index === totalKws - 1 && hoveredIdRef.current && hoveredIdRef.current !== MAP_ENTITY_ID) {
+        foundObject = entityById(entitiesRef.current, hoveredIdRef.current) || null;
         if (foundObject) {
-          addLog('info', `Using current "Purple Text" for latest keyword: ${foundObject.name}`);
+          addLog('info', `Using current "Purple Text" for latest keyword: ${displayName(foundObject)}`);
         }
       }
 
@@ -1875,26 +1863,26 @@ When the user points and speaks a command, call the appropriate tool — a map t
 
       // Final check for object at focus point if still unknown
       if (!foundObject) {
-        foundObject = interactiveObjectsRef.current.find(obj => {
-          const [ymin, xmin, ymax, xmax] = obj.bbox;
+        foundObject = entitiesRef.current.find(e => {
+          const [ymin, xmin, ymax, xmax] = e.bbox;
           const padding = 5; // Reduced from 15 for stricter, non-guessy detection
           return hX >= (xmin - padding) && hX <= (xmax + padding) && hY >= (ymin - padding) && hY <= (ymax + padding);
-        });
+        }) || null;
       }
 
       if (foundObject) {
         // Attach the object name to the marker
         const lastM = markersRef.current[0];
         if (lastM && (Date.now() - lastM.timestamp < 1000)) {
-          lastM.identifiedObject = foundObject.name;
-          addLog('info', `Identified: ${foundObject.name}`);
+          lastM.identifiedObject = displayName(foundObject);
+          addLog('info', `Identified: ${displayName(foundObject)}`);
         }
 
         // DIFF 1: compute a (demo-grade) confidence for this resolution and log it.
         // Computed in both modes so the signal is visible in the debug panel even on
         // the confident baseline (which deliberately ignores it).
-        const confidence = computePointingConfidence(foundObject, hX, hY, interactiveObjectsRef.current, CONFUSABLE_PAIRS);
-        const otherCandidates = confidence.candidates.filter(c => c !== foundObject!.name);
+        const confidence = computePointingConfidence(foundObject, hX, hY, entitiesRef.current, CONFUSABLE_PAIRS);
+        const otherCandidates = confidence.candidates.filter(c => c !== foundObject!.title);
         addLog('info', `Confidence: ${confidence.level.toUpperCase()} — ${confidence.reason}${otherCandidates.length ? ` (vs ${otherCandidates.join(', ')})` : ''}`);
 
         // PHASE B: thread confidence onto the most recent marker so the canvas can
@@ -1903,21 +1891,21 @@ When the user points and speaks a command, call the appropriate tool — a map t
         if (markerForConfidence && (Date.now() - markerForConfidence.timestamp < 1000)) {
           markerForConfidence.confidence = confidence.level;
           markerForConfidence.candidates = confidence.candidates;
-          markerForConfidence.category = categoryOf(foundObject.name);
+          markerForConfidence.category = categoryOf(foundObject.id);
         }
 
         // TESTBED: record this deixis resolution against the active scenario's target (ground
         // truth) so we can measure pointing accuracy + confidence calibration per config/device.
-        telemetry.deixis(kw, foundObject.name, focusTitleRef.current ?? null, confidence.level, lastInputModalityRef.current);
+        telemetry.deixis(kw, foundObject.title, focusTitleRef.current ?? null, confidence.level, lastInputModalityRef.current);
 
         // G4: remember this referent so later turns can resolve "make THAT bold" / "send IT".
-        if (foundObject.name !== 'Google Maps') referents.note(foundObject.name, 'pointed');
+        if (foundObject.category !== 'map') referents.note(displayName(foundObject), 'pointed');
 
         // PHASE F (S6): accumulate distinct real landmarks. In honest mode, once enough
         // have been pointed at with no plan yet, authorize the model to make ONE
         // transparent itinerary offer (notice → hypothesize → ask, never build).
-        if (foundObject.name !== 'Google Maps') {
-          identifiedLandmarksRef.current.add(foundObject.name);
+        if (foundObject.category !== 'map') {
+          identifiedLandmarksRef.current.add(displayName(foundObject));
         }
         if (
           honestModeRef.current &&
@@ -1949,11 +1937,11 @@ When the user points and speaks a command, call the appropriate tool — a map t
           const refCtx = referents.promptContext();
           // G3: if an OCR word sits under the focus point, refine the referent to that word.
           const sub = wordAt(hX, hY);
-          const subTag = sub && sub.photoTitle === foundObject.name ? ` (specifically the word "${sub.word}")` : '';
-          const perceivedName = resolveTileName(foundObject.name, PHOTOS.find(p => p.title === foundObject.name)?.url ?? '', perceivedLabelsRef.current);
+          const subTag = sub && sub.photoTitle === foundObject.title ? ` (specifically the word "${sub.word}")` : '';
+          const perceivedName = displayName(foundObject);
           const hintText = `[USER JUST SAID "${kw.toUpperCase()}" WHILE POINTING AT: ${perceivedName}${subTag}${confidenceTag}. ${isCommand ? "NOTE: This is part of an explicit command." : "NOTE: This is just a mention, stay silent unless they give a command."}${refCtx ? ` ${refCtx}` : ''}]`;
           providerRef.current?.sendTextHint(hintText);
-          if (sub && sub.photoTitle === foundObject.name) referents.note(`"${sub.word}"`, 'pointed');
+          if (sub && sub.photoTitle === foundObject.title) referents.note(`"${sub.word}"`, 'pointed');
         }
       } else {
         // SEND "NOTHING" HINT TO PREVENT GUESSING
@@ -2084,7 +2072,7 @@ When the user points and speaks a command, call the appropriate tool — a map t
             : createGeminiProvider(apiKey!, (s) => { sessionRef.current = s; });
       const voice = backend === 'gemini' ? 'Zephyr' : backend === 'azure' ? 'alloy' : 'marin';
       await providerRef.current.connect(
-        { instructions: buildInstructions(honest, program), tools: voiceTools, voice },
+        { instructions: buildInstructions(honest, program, entitiesRef.current), tools: voiceTools, voice },
         {
           onOpen: () => {
             setIsLive(true);
@@ -2291,7 +2279,7 @@ When the user points and speaks a command, call the appropriate tool — a map t
           // HUE = element category (program/os/ui/content); ring STYLE = confidence.
           // The two axes are orthogonal: a marker's colour tells you WHAT kind of thing was
           // selected, while solid-vs-dashed + "?" tells you how SURE the resolution is.
-          const tone = CATEGORY_COLORS[m.category || categoryOf(m.identifiedObject)];
+          const tone = CATEGORY_COLORS[m.category || categoryOf(entityByTitle(entitiesRef.current, m.identifiedObject)?.id)];
 
           // Map 0-1000 back to current canvas pixels
           // We use canvas.width/height directly to avoid stale closures
@@ -2395,14 +2383,14 @@ When the user points and speaks a command, call the appropriate tool — a map t
       // so they know where to aim before they move the cursor. A soft pulsing ring in the
       // element's category hue + a "POINT HERE" tag on its bbox.
       if (focusTitleRef.current) {
-        const target = interactiveObjectsRef.current.find(o => o.name === focusTitleRef.current);
+        const target = entityByTitle(entitiesRef.current, focusTitleRef.current);
         const [tymin, txmin, tymax, txmax] = target?.bbox ?? [0, 0, 0, 0];
         if (target && (txmax - txmin) > 0 && (tymax - tymin) > 0) {
           const x = (txmin / 1000) * canvas.width;
           const y = (tymin / 1000) * canvas.height;
           const w = ((txmax - txmin) / 1000) * canvas.width;
           const h = ((tymax - tymin) / 1000) * canvas.height;
-          const tone = CATEGORY_COLORS[target.category || categoryOf(target.name)];
+          const tone = CATEGORY_COLORS[categoryOf(target.id)];
           const pulse = (Math.sin(now * 0.004) + 1) / 2; // 0..1
           const pad = 4 + pulse * 3;
 
@@ -2439,14 +2427,14 @@ When the user points and speaks a command, call the appropriate tool — a map t
       if (showMarkings) {
         // Read from the ref so freshly-swapped programs colour correctly without re-running
         // this animation effect. Each outline is hued by its element category.
-        interactiveObjectsRef.current.forEach(obj => {
+        entitiesRef.current.forEach(obj => {
           const [ymin, xmin, ymax, xmax] = obj.bbox;
           const x = (xmin / 1000) * canvas.width;
           const y = (ymin / 1000) * canvas.height;
           const w = ((xmax - xmin) / 1000) * canvas.width;
           const h = ((ymax - ymin) / 1000) * canvas.height;
 
-          const tone = CATEGORY_COLORS[obj.category || categoryOf(obj.name)];
+          const tone = CATEGORY_COLORS[categoryOf(obj.id)];
           ctx.strokeStyle = `rgba(${tone}, 0.85)`;
           ctx.lineWidth = 2;
           ctx.setLineDash([5, 5]);
@@ -2491,16 +2479,16 @@ When the user points and speaks a command, call the appropriate tool — a map t
     // Update hovered object for visual feedback
     const hX = Math.round(x);
     const hY = Math.round(y);
-    const found = interactiveObjectsRef.current.find(obj => {
-      const [ymin, xmin, ymax, xmax] = obj.bbox;
+    const found = entitiesRef.current.find(e => {
+      const [ymin, xmin, ymax, xmax] = e.bbox;
       return hX >= xmin && hX <= xmax && hY >= ymin && hY <= ymax;
     });
-    const hovered = found ? found.name : null;
-    setHoveredObject(hovered);
-    hoveredObjectRef.current = hovered;
+    const hovered = found ? found.id : null;
+    setHoveredId(hovered);
+    hoveredIdRef.current = hovered;
 
     // G3: which OCR word (if any) is under the cursor — finer-grained referent + feedforward.
-    const sub = hovered && hovered !== 'Google Maps' ? wordAt(hX, hY) : null;
+    const sub = hovered && hovered !== MAP_ENTITY_ID ? wordAt(hX, hY) : null;
     const wordName = sub?.word ?? null;
     if (wordName !== hoveredWordRef.current) {
       hoveredWordRef.current = wordName;
@@ -2515,13 +2503,13 @@ When the user points and speaks a command, call the appropriate tool — a map t
     if (
       providerRef.current &&
       voiceBackendRef.current !== 'gemini' &&
-      hovered && hovered !== 'Google Maps' &&
+      hovered && hovered !== MAP_ENTITY_ID &&
       hovered !== lastHoverHintRef.current &&
       now - lastHoverHintAtRef.current > HOVER_HINT_THROTTLE_MS
     ) {
       lastHoverHintRef.current = hovered;
       lastHoverHintAtRef.current = now;
-      const hoveredResolved = resolveTileName(hovered, PHOTOS.find(p => p.title === hovered)?.url ?? '', perceivedLabelsRef.current);
+      const hoveredResolved = displayName(found);
       providerRef.current.sendTextHint(`[CONTEXT: the cursor is currently over "${hoveredResolved}". If the user says "this", "here", or "that", they are pointing at ${hoveredResolved}. This is silent context — DO NOT RESPOND OR SPEAK.]`);
     }
 
@@ -2536,7 +2524,7 @@ When the user points and speaks a command, call the appropriate tool — a map t
 
     cursorHistoryRef.current.push({ x, y, t: now, hovered });
     
-    if (isPainting && hovered !== 'Google Maps') {
+    if (isPainting && hovered !== MAP_ENTITY_ID) {
       setPointerPath(prev => [...prev, { x, y, timestamp: now }]);
     }
     
@@ -2551,24 +2539,24 @@ When the user points and speaks a command, call the appropriate tool — a map t
     
     // Re-verify what is being clicked to handle overlaps correctly
     const rect = mainContainerRef.current?.getBoundingClientRect();
-    let isActuallyOnMap = hoveredObjectRef.current === 'Google Maps';
-    
+    let isActuallyOnMap = hoveredIdRef.current === MAP_ENTITY_ID;
+
     if (rect) {
       const x = ((e.clientX - rect.left) / rect.width) * 1000;
       const y = ((e.clientY - rect.top) / rect.height) * 1000;
-      const found = interactiveObjectsRef.current.find(obj => {
-        const [ymin, xmin, ymax, xmax] = obj.bbox;
+      const found = entitiesRef.current.find(e => {
+        const [ymin, xmin, ymax, xmax] = e.bbox;
         return x >= xmin && x <= xmax && y >= ymin && y <= ymax;
       });
-      isActuallyOnMap = found?.name === 'Google Maps';
+      isActuallyOnMap = found?.category === 'map';
 
       // TOUCH DEIXIS: touch has no hover — a tap is the point. Register the target at the
       // down position (cursor + hovered + history) so saying "this" right after a tap resolves,
       // even if no pointermove fired. (Mouse users already get this via hover; harmless there.)
       cursorRef.current = { x, y };
-      const hovered = found ? found.name : null;
-      setHoveredObject(hovered);
-      hoveredObjectRef.current = hovered;
+      const hovered = found ? found.id : null;
+      setHoveredId(hovered);
+      hoveredIdRef.current = hovered;
       cursorHistoryRef.current.push({ x, y, t: Date.now(), hovered });
     }
 
@@ -2591,18 +2579,17 @@ When the user points and speaks a command, call the appropriate tool — a map t
     setIsPainting(false);
 
     // 1. Check if we have a path and are hovering an image
-    if (pointerPath.length > 5 && hoveredObjectRef.current) {
+    if (pointerPath.length > 5 && hoveredIdRef.current) {
       // Add to persistent paths so it stays visible while speaking
       setPersistentPaths(prev => [...prev, pointerPath.map(p => ({ x: p.x, y: p.y }))]);
 
-      const hoveredName = hoveredObjectRef.current;
-      const found = interactiveObjectsRef.current.find(obj => obj.name === hoveredName);
-      
+      const hoveredId = hoveredIdRef.current;
+      const found = entityById(entitiesRef.current, hoveredId);
+
       if (found) {
         let content = currentImage;
-        if (found.name !== "Google Maps") {
-          const photo = PHOTOS.find(p => p.title === found.name);
-          if (photo) content = photo.url;
+        if (found.category !== 'map' && found.url) {
+          content = found.url;
         }
 
         const element = {
@@ -2628,7 +2615,7 @@ When the user points and speaks a command, call the appropriate tool — a map t
           // Send a circle-gesture hint to whichever backend is live (core context).
           if (providerRef.current) {
             const markerIndex = markersRef.current.length; // Approximate index
-            providerRef.current.sendTextHint(`[SYSTEM: User circled an area on ${hoveredName} and a marker M${markerIndex} has been placed at [${Math.round(centerX)}, ${Math.round(centerY)}].]`);
+            providerRef.current.sendTextHint(`[SYSTEM: User circled an area on ${displayName(found)} and a marker M${markerIndex} has been placed at [${Math.round(centerX)}, ${Math.round(centerY)}].]`);
           }
 
           // 3. Send the cropped circled region as an image turn. Gemini-only: this uses
@@ -2638,14 +2625,14 @@ When the user points and speaks a command, call the appropriate tool — a map t
             const [mime, data] = croppedUrl.split(',');
             const mimeType = mime.split(':')[1].split(';')[0];
 
-            addLog('gemini', `Sending circled region of ${hoveredName} to Gemini`);
+            addLog('gemini', `Sending circled region of ${displayName(found)} to Gemini`);
 
             // Send the image as a "turn" in the conversation
             sessionRef.current.sendClientContent({
               turns: [{
                 role: "user",
                 parts: [
-                  { text: `[SYSTEM] The user just circled this region on ${hoveredName}. Focus on it.` },
+                  { text: `[SYSTEM] The user just circled this region on ${displayName(found)}. Focus on it.` },
                   { inlineData: { mimeType, data } }
                 ]
               }],
@@ -2976,8 +2963,9 @@ When the user points and speaks a command, call the appropriate tool — a map t
         ctx.clearRect(0, 0, dims.width, dims.height);
         ctx.drawImage(img, sx, sy, sWidth, sHeight, 0, 0, dims.width, dims.height);
         setCurrentImage(persistentCanvasRef.current!.toDataURL('image/png'));
-        setInteractiveObjects(INTERACTIVE_OBJECTS_BASE);
-        interactiveObjectsRef.current = INTERACTIVE_OBJECTS_BASE;
+        const baseEntities = buildEntities(program, perceivedLabelsRef.current, null);
+        setEntities(baseEntities);
+        entitiesRef.current = baseEntities;
         setHistory([]); // Clear history on full reset
         addLog('info', 'Canvas Reset.');
         // Clear markers on reset
@@ -2995,8 +2983,8 @@ When the user points and speaks a command, call the appropriate tool — a map t
     if (id === activeProgram) return;
     setActiveProgram(id);
     markersRef.current = [];
-    setInteractiveObjects([]);
-    interactiveObjectsRef.current = [];
+    setEntities([]);
+    entitiesRef.current = [];
     setCurrentTaskIndex(0);
     setCompletedTaskIds([]);
     identifiedLandmarksRef.current = new Set();
@@ -3033,8 +3021,9 @@ When the user points and speaks a command, call the appropriate tool — a map t
     setHistory([]);
     setPersistentPaths([]);
     setPointerPath([]);
-    setInteractiveObjects(INTERACTIVE_OBJECTS_BASE);
-    interactiveObjectsRef.current = INTERACTIVE_OBJECTS_BASE;
+    const baseEntities = buildEntities(program, perceivedLabelsRef.current, null);
+    setEntities(baseEntities);
+    entitiesRef.current = baseEntities;
     setMapQuery("London");
     setMapType('search');
     setDirections(null);
@@ -3124,10 +3113,10 @@ When the user points and speaks a command, call the appropriate tool — a map t
               sees the interpretation forming BEFORE they speak (closes the gulf of execution). */}
           {isLive && (
             <div className="absolute top-3 left-1/2 -translate-x-1/2 z-50 pointer-events-none flex items-center gap-2 px-3 py-1.5 rounded-full border border-[var(--card-border)] bg-[var(--card-bg)]/90 backdrop-blur shadow-sm">
-              <span className={`w-2 h-2 rounded-full ${hoveredObject && hoveredObject !== 'Google Maps' ? 'bg-[var(--accent-color)] animate-pulse' : 'bg-[var(--text-secondary)] opacity-40'}`} />
+              <span className={`w-2 h-2 rounded-full ${hoveredId && hoveredId !== MAP_ENTITY_ID ? 'bg-[var(--accent-color)] animate-pulse' : 'bg-[var(--text-secondary)] opacity-40'}`} />
               <span className="text-[11px] font-mono text-[var(--text-primary)]">
-                {hoveredObject && hoveredObject !== 'Google Maps'
-                  ? `Pointing at: ${hoveredWord ? `"${hoveredWord}" in ${resolveTileName(hoveredObject ?? '', PHOTOS.find(p => p.title === hoveredObject)?.url ?? '', perceivedLabelsRef.current)}` : resolveTileName(hoveredObject ?? '', PHOTOS.find(p => p.title === hoveredObject)?.url ?? '', perceivedLabelsRef.current)}`
+                {hoveredId && hoveredId !== MAP_ENTITY_ID
+                  ? `Pointing at: ${hoveredWord ? `"${hoveredWord}" in ${displayName(entityById(entitiesRef.current, hoveredId))}` : displayName(entityById(entitiesRef.current, hoveredId))}`
                   : 'Point at an element…'}
               </span>
             </div>
@@ -3231,7 +3220,7 @@ When the user points and speaks a command, call the appropriate tool — a map t
 
           <div className="map-box relative lg:-ml-[110px] flex-1 min-w-0 lg:max-w-[700px] aspect-[2/2.43]">
             <div 
-              className={`relative bg-[var(--card-bg)] border border-[var(--card-border)] rounded-xl overflow-hidden w-full h-full transition-all duration-300 ${hoveredObject === 'Google Maps' ? 'ring-4 ring-[var(--accent-color)]/10 dark:ring-[var(--accent-color)]/20' : ''}`}
+              className={`relative bg-[var(--card-bg)] border border-[var(--card-border)] rounded-xl overflow-hidden w-full h-full transition-all duration-300 ${hoveredId === MAP_ENTITY_ID ? 'ring-4 ring-[var(--accent-color)]/10 dark:ring-[var(--accent-color)]/20' : ''}`}
             >
               <div className="absolute inset-0 w-full h-full">
                 <iframe
