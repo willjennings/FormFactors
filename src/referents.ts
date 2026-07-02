@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import type { EntityId } from './entities/registry';
+
 // --- Referent registry: cross-turn anaphora for the point-and-speak app ---
 //
 // The app resolves a user's deictic ("this/here") to an element NAME (a string
@@ -20,8 +22,10 @@
 export type ReferentKind = 'pointed' | 'created';
 
 export type Referent = {
-  /** The resolved element name, e.g. "Save button". */
+  /** The display name, e.g. "Save button" or a perceived label. */
   name: string;
+  /** Stable entity id when the referent IS a scene entity (quoted OCR words and created doc-objects have none). */
+  id?: EntityId | null;
   /** How this referent entered the conversation. */
   kind: ReferentKind;
   /** Timestamp (ms) the referent was last noted. */
@@ -78,7 +82,7 @@ export class ReferentRegistry {
    * Record a referent with the current timestamp. If the same name was noted
    * within DEDUPE_WINDOW_MS, refresh its timestamp/kind instead of appending.
    */
-  note(name: string, kind: ReferentKind): void {
+  note(name: string, kind: ReferentKind, id: EntityId | null = null): void {
     const trimmed = name.trim();
     if (!trimmed) return;
     const key = normalize(trimmed);
@@ -92,9 +96,10 @@ export class ReferentRegistry {
       existing.t = t;
       existing.kind = kind;
       existing.name = trimmed;
+      existing.id = id ?? existing.id;
       return;
     }
-    this.items.push({ name: trimmed, kind, t });
+    this.items.push({ name: trimmed, id, kind, t });
   }
 
   /**
