@@ -79,11 +79,11 @@ interface Marker {
   y: number;
   timestamp: number;
   displayLabel: string;
-  identifiedObject?: string;
+  identifiedObject?: EntityId;
   isConsumed?: boolean;
   // Honest-mode rendering: a guess must never look like a confident success.
   confidence?: 'high' | 'low';
-  candidates?: string[];
+  candidates?: EntityId[];
   // Element category drives the highlight hue (program/os/ui/content).
   category?: ElementCategory;
 }
@@ -128,27 +128,25 @@ const KEYWORD_MAP: Record<string, string> = {
 // grammar (hint carries confidence → low confidence triggers an honest ask). See README.
 // The confusable map is passed in from the active program (e.g. Save ↔ Save As).
 
-type PointingConfidence = { level: 'high' | 'low'; candidates: string[]; reason: string };
-
 function computePointingConfidence(
-  foundObject: SceneEntity,
-  hX: number,
-  hY: number,
-  objects: SceneEntity[],
-  confusablePairs: Record<string, string[]>
-): PointingConfidence {
+  found: SceneEntity, hX: number, hY: number, entities: SceneEntity[],
+  confusablePairs: Record<string, string[]>,
+): { level: 'high' | 'low'; candidates: EntityId[]; reason: string } {
   // 1. Seeded confusable pairs — the headline ambiguity (e.g. Save ↔ Save As).
-  const confusables = confusablePairs[foundObject.title];
+  const confusables = confusablePairs[found.title];
   if (confusables && confusables.length) {
+    const confusableIds = confusables
+      .map(t => entityByTitle(entities, t)?.id)
+      .filter((id): id is EntityId => Boolean(id));
     return {
       level: 'low',
-      candidates: [foundObject.title, ...confusables],
-      reason: `seeded confusable — ${foundObject.title} looks like ${confusables.join(', ')}`,
+      candidates: [found.id, ...confusableIds],
+      reason: `seeded confusable — ${found.title} looks like ${confusables.join(', ')}`,
     };
   }
 
   // 2. Geometric: cursor sits inside more than one photo region → ambiguous overlap.
-  const containing = objects.filter(o => {
+  const containing = entities.filter(o => {
     if (o.category === 'map') return false;
     const [ymin, xmin, ymax, xmax] = o.bbox;
     return hX >= xmin && hX <= xmax && hY >= ymin && hY <= ymax;
@@ -156,13 +154,13 @@ function computePointingConfidence(
   if (containing.length > 1) {
     return {
       level: 'low',
-      candidates: containing.map(o => o.title),
+      candidates: containing.map(o => o.id),
       reason: `cursor inside ${containing.length} overlapping regions`,
     };
   }
 
   // 3. Geometric: cursor near the edge of its region → shaky hit.
-  const [ymin, xmin, ymax, xmax] = foundObject.bbox;
+  const [ymin, xmin, ymax, xmax] = found.bbox;
   const w = Math.max(1, xmax - xmin);
   const h = Math.max(1, ymax - ymin);
   const margin = Math.min(hX - xmin, xmax - hX, hY - ymin, ymax - hY);
@@ -170,13 +168,13 @@ function computePointingConfidence(
   if (margin < edgeThreshold) {
     return {
       level: 'low',
-      candidates: [foundObject.title],
+      candidates: [found.id],
       reason: `near region edge (margin ${Math.round(margin)} < ${Math.round(edgeThreshold)})`,
     };
   }
 
   // 4. Clean hit inside a single region, no confusable → high.
-  return { level: 'high', candidates: [foundObject.title], reason: 'clean hit inside a single region' };
+  return { level: 'high', candidates: [found.id], reason: 'clean hit inside a single region' };
 }
 
 const VOICE_TOOLS: VoiceTool[] = [
@@ -1014,16 +1012,16 @@ export default function App() {
       // and only update the label. This prevents the marker from "jumping" if the AI's 
       // coordinate detection is slightly off.
       if (lastMarker && (now - lastMarker.timestamp < 4000)) {
-        lastMarker.identifiedObject = text;
+        lastMarker.identifiedObject = text as EntityId; // TODO Task 5: replace with entity resolution
         // We do NOT update lastMarker.x/y here to keep the user's precise point
         addLog('event', `AI Identified: "${text}" at user's point`);
       } else {
         // Fallback: If no recent user marker, use the AI's suggested coordinates
-        const newMarker: Marker = { 
-          x: finalX, 
-          y: finalY, 
-          displayLabel: "THIS", 
-          identifiedObject: text, 
+        const newMarker: Marker = {
+          x: finalX,
+          y: finalY,
+          displayLabel: "THIS",
+          identifiedObject: text as EntityId, // TODO Task 5: replace with entity resolution
           timestamp: now,
           isConsumed: false
         };
@@ -1648,19 +1646,19 @@ When the user points and speaks a command, call the appropriate tool — a map t
     lastInputModalityRef.current = 'direct';
     const img = program.images[n - 1];
     if (!img) return;
-    const obj = entityByTitle(entitiesRef.current, img.title);
-    if (!obj) return;
-    const [ymin, xmin, ymax, xmax] = obj.bbox;
+    const entity = entitiesRef.current.find(e => e.title === img.title); // scenario index → entity
+    if (!entity) return;
+    const [ymin, xmin, ymax, xmax] = entity.bbox;
     const cx = (xmin + xmax) / 2, cy = (ymin + ymax) / 2;
     cursorRef.current = { x: cx, y: cy };
-    hoveredIdRef.current = obj.id;
-    setHoveredId(obj.id);
-    cursorHistoryRef.current.push({ x: cx, y: cy, t: Date.now(), hovered: obj.id });
+    hoveredIdRef.current = entity.id;
+    setHoveredId(entity.id);
+    cursorHistoryRef.current.push({ x: cx, y: cy, t: Date.now(), hovered: entity.id });
     addMarker('THIS', cx, cy);
-    referents.note(img.title, 'pointed');
-    telemetry.deixis('number', img.title, focusTitleRef.current ?? null, 'high', 'direct');
-    addLog('event', `Selected target ${n}: ${img.title}`);
-    providerRef.current?.sendTextHint(`[USER SELECTED target ${n}: ${img.title} (numbered selection). Treat this as what they are pointing at.]`);
+    referents.note(displayName(entity), 'pointed', entity.id);
+    telemetry.deixis('number', entity.title, focusTitleRef.current ?? null, 'high', 'direct');
+    addLog('event', `Selected target ${n}: ${displayName(entity)}`);
+    providerRef.current?.sendTextHint(`[USER SELECTED target ${n}: ${displayName(entity)} (numbered selection). Treat this as what they are pointing at.]`);
   };
 
   const processInputTranscript = (text: string) => {
@@ -1693,10 +1691,11 @@ When the user points and speaks a command, call the appropriate tool — a map t
     } else if (repair === 'other') {
       const m = markersRef.current[0];
       const alt = m?.candidates?.find(c => c !== m.identifiedObject);
-      if (alt && providerRef.current) {
+      const altEntity = alt ? entityById(entitiesRef.current, alt) : undefined;
+      if (alt && altEntity && providerRef.current) {
         if (m) m.identifiedObject = alt;
-        referents.note(alt, 'pointed');
-        providerRef.current.sendTextHint(`[SYSTEM: the user meant the OTHER one — they are pointing at "${alt}", not your previous guess. Use ${alt} now.]`);
+        referents.note(displayName(altEntity), 'pointed', alt);
+        providerRef.current.sendTextHint(`[SYSTEM: the user meant the OTHER one — they are pointing at "${displayName(altEntity)}", not your previous guess. Use ${displayName(altEntity)} now.]`);
       }
     }
 
@@ -1874,7 +1873,7 @@ When the user points and speaks a command, call the appropriate tool — a map t
         // Attach the object name to the marker
         const lastM = markersRef.current[0];
         if (lastM && (Date.now() - lastM.timestamp < 1000)) {
-          lastM.identifiedObject = displayName(foundObject);
+          lastM.identifiedObject = foundObject.id;
           addLog('info', `Identified: ${displayName(foundObject)}`);
         }
 
@@ -1882,8 +1881,8 @@ When the user points and speaks a command, call the appropriate tool — a map t
         // Computed in both modes so the signal is visible in the debug panel even on
         // the confident baseline (which deliberately ignores it).
         const confidence = computePointingConfidence(foundObject, hX, hY, entitiesRef.current, CONFUSABLE_PAIRS);
-        const otherCandidates = confidence.candidates.filter(c => c !== foundObject!.title);
-        addLog('info', `Confidence: ${confidence.level.toUpperCase()} — ${confidence.reason}${otherCandidates.length ? ` (vs ${otherCandidates.join(', ')})` : ''}`);
+        const otherCandidates = confidence.candidates.filter(c => c !== foundObject!.id);
+        addLog('info', `Confidence: ${confidence.level.toUpperCase()} — ${confidence.reason}${otherCandidates.length ? ` (vs ${otherCandidates.map(c => displayName(entityById(entitiesRef.current, c))).join(', ')})` : ''}`);
 
         // PHASE B: thread confidence onto the most recent marker so the canvas can
         // render a guess differently from a confident hit (honest mode only).
@@ -1899,7 +1898,7 @@ When the user points and speaks a command, call the appropriate tool — a map t
         telemetry.deixis(kw, foundObject.title, focusTitleRef.current ?? null, confidence.level, lastInputModalityRef.current);
 
         // G4: remember this referent so later turns can resolve "make THAT bold" / "send IT".
-        if (foundObject.category !== 'map') referents.note(displayName(foundObject), 'pointed');
+        if (foundObject.category !== 'map') referents.note(displayName(foundObject), 'pointed', foundObject.id);
 
         // PHASE F (S6): accumulate distinct real landmarks. In honest mode, once enough
         // have been pointed at with no plan yet, authorize the model to make ONE
@@ -1929,7 +1928,7 @@ When the user points and speaks a command, call the appropriate tool — a map t
             ? (confidence.level === 'high'
                 ? ' (confidence: high)'
                 : otherCandidates.length
-                  ? ` (confidence: low — could also be ${otherCandidates.join(' or ')})`
+                  ? ` (confidence: low — could also be ${otherCandidates.map(c => displayName(entityById(entitiesRef.current, c))).join(' or ')})`
                   : ' (confidence: low — not certain this is the right photo)')
             : '';
           // G4: give the model recent referents so it can resolve cross-turn back-references
@@ -1938,8 +1937,7 @@ When the user points and speaks a command, call the appropriate tool — a map t
           // G3: if an OCR word sits under the focus point, refine the referent to that word.
           const sub = wordAt(hX, hY);
           const subTag = sub && sub.photoTitle === foundObject.title ? ` (specifically the word "${sub.word}")` : '';
-          const perceivedName = displayName(foundObject);
-          const hintText = `[USER JUST SAID "${kw.toUpperCase()}" WHILE POINTING AT: ${perceivedName}${subTag}${confidenceTag}. ${isCommand ? "NOTE: This is part of an explicit command." : "NOTE: This is just a mention, stay silent unless they give a command."}${refCtx ? ` ${refCtx}` : ''}]`;
+          const hintText = `[USER JUST SAID "${kw.toUpperCase()}" WHILE POINTING AT: ${displayName(foundObject)}${subTag}${confidenceTag}. ${isCommand ? "NOTE: This is part of an explicit command." : "NOTE: This is just a mention, stay silent unless they give a command."}${refCtx ? ` ${refCtx}` : ''}]`;
           providerRef.current?.sendTextHint(hintText);
           if (sub && sub.photoTitle === foundObject.title) referents.note(`"${sub.word}"`, 'pointed');
         }
@@ -2279,7 +2277,7 @@ When the user points and speaks a command, call the appropriate tool — a map t
           // HUE = element category (program/os/ui/content); ring STYLE = confidence.
           // The two axes are orthogonal: a marker's colour tells you WHAT kind of thing was
           // selected, while solid-vs-dashed + "?" tells you how SURE the resolution is.
-          const tone = CATEGORY_COLORS[m.category || categoryOf(entityByTitle(entitiesRef.current, m.identifiedObject)?.id)];
+          const tone = CATEGORY_COLORS[m.category || categoryOf(m.identifiedObject)];
 
           // Map 0-1000 back to current canvas pixels
           // We use canvas.width/height directly to avoid stale closures
