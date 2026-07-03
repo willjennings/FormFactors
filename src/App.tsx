@@ -56,6 +56,7 @@ import { perceiveTileLabel, loadImageAsBase64 } from './perception/perceiveTile'
 import type { PerceivedCache } from './perception/perceiveTile';
 import { buildEntities, entityById, entityByTitle, displayName, MAP_ENTITY_ID, resolveEchoedTarget } from './entities/registry';
 import type { SceneEntity, EntityId } from './entities/registry';
+import { TeachingLayer } from './teaching/TeachingLayer';
 import { MockPreview } from './components/MockPreview';
 import { emitFeedbackAudio, FEEDBACK_OPTIONS } from './feedback';
 import type { FeedbackMode, FeedbackEvent } from './feedback';
@@ -405,6 +406,7 @@ export default function App() {
   const [hoveredId, setHoveredId] = useState<EntityId | null>(null);
   const perceivedLabelsRef = useRef<PerceivedCache>({});
   const [perceivedVersion, setPerceivedVersion] = useState(0);
+  const teachMode = typeof window !== 'undefined' && window.location.search.includes('teach');
   const hoveredIdRef = useRef<EntityId | null>(null);
   // Throttle state for proactive hover grounding (non-Gemini backends).
   const lastHoverHintRef = useRef<string | null>(null);
@@ -3105,12 +3107,13 @@ When the user points and speaks a command, call the appropriate tool — a map t
           <CursorTrail isActive={isPainting} mousePos={trailMousePos} color="#3b82f6" />
           <PaintLayer paths={persistentPaths} activePath={pointerPath} containerSize={mainSize} />
           {/* Global Trace Canvas for visual feedback over everything */}
-          <canvas 
-            ref={traceCanvasRef} 
-            width={mainSize.width} 
-            height={mainSize.height} 
+          <canvas
+            ref={traceCanvasRef}
+            width={mainSize.width}
+            height={mainSize.height}
             className={`absolute inset-0 z-50 pointer-events-none ${isLive ? 'opacity-100' : 'opacity-0'} transition-opacity duration-300`}
           />
+          {teachMode && <TeachingLayer entities={entities} demo />}
           {/* G6 FEEDFORWARD: live "what I'll act on" preview as the cursor moves, so the user
               sees the interpretation forming BEFORE they speak (closes the gulf of execution). */}
           {isLive && (
