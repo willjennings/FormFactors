@@ -406,7 +406,7 @@ export default function App() {
   const [hoveredId, setHoveredId] = useState<EntityId | null>(null);
   const perceivedLabelsRef = useRef<PerceivedCache>({});
   const [perceivedVersion, setPerceivedVersion] = useState(0);
-  const teachMode = typeof window !== 'undefined' && window.location.search.includes('teach');
+  const teachMode = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('teach');
   const hoveredIdRef = useRef<EntityId | null>(null);
   // Throttle state for proactive hover grounding (non-Gemini backends).
   const lastHoverHintRef = useRef<string | null>(null);

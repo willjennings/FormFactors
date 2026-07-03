@@ -32,7 +32,7 @@ export function TeachingLayer({ entities, demo = false, dispatchRef }: Props) {
     if (prior.sequence && next.sequence && prior.sequence.activeIndex !== null && next.sequence.activeIndex === null)
       telemetry.guidance('sequence_complete', { taskKey: prior.sequence.taskKey, fadeLevel: fadeLevel(prior, prior.sequence.taskKey) });
     if (e.type === 'user.stepAction' && next.sequence && prior.sequence && (next.sequence.blockedAttempts > prior.sequence.blockedAttempts)) telemetry.guidance('blocked', { taskKey: prior.sequence.taskKey });
-    if (e.type === 'user.stepAction' && prior.sequence && prior.sequence.activeIndex !== null && prior.sequence.steps[prior.sequence.activeIndex].entityId === e.entityId) telemetry.guidance('step_done', { taskKey: prior.sequence.taskKey });
+    if (e.type === 'user.stepAction' && prior.sequence && prior.sequence.activeIndex !== null && !prior.sequence.paused && prior.sequence.steps[prior.sequence.activeIndex].entityId === e.entityId) telemetry.guidance('step_done', { taskKey: prior.sequence.taskKey });
     setState(next);
   };
   useEffect(() => { if (dispatchRef) { dispatchRef.current = dispatch; return () => { dispatchRef.current = null; }; } }, [dispatchRef]);
@@ -91,7 +91,7 @@ export function TeachingLayer({ entities, demo = false, dispatchRef }: Props) {
       })}
 
       {/* Relate links: SVG arcs between entity centers, mid-labeled (the EXPERIMENT) */}
-      <svg className="absolute inset-0 w-full h-full overflow-visible">
+      <svg className="absolute inset-0 w-full h-full overflow-visible" viewBox="0 0 100 100" preserveAspectRatio="none">
         {state.relations.map((r, i) => {
           const a = byId(r.from), b2 = byId(r.to);
           if (!a || !b2) return null;
@@ -103,7 +103,7 @@ export function TeachingLayer({ entities, demo = false, dispatchRef }: Props) {
               <path d={`M ${cx(a)} ${cy(a)} Q ${mx} ${my - 8} ${cx(b2)} ${cy(b2)}`}
                     fill="none" stroke="rgb(99,102,241)" strokeWidth="0.4" strokeDasharray="1.2 0.8"
                     vectorEffect="non-scaling-stroke" transform="scale(1,1)" />
-              <text x={`${mx}%`} y={`${my}%`} textAnchor="middle" className="fill-indigo-500 text-[9px] font-mono">{r.label}</text>
+              <text x={mx} y={my} textAnchor="middle" fontSize={2.5} className="fill-indigo-500 font-mono">{r.label}</text>
             </g>
           );
         })}
