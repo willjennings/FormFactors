@@ -23,13 +23,29 @@ export function TeachingLayer({ entities, demo = false, dispatchRef, onGuidance 
   const dispatch = (e: TeachingEvent) => setState((s) => reduce(s, e, Date.now()));
   useEffect(() => { if (dispatchRef) { dispatchRef.current = dispatch; return () => { dispatchRef.current = null; }; } }, [dispatchRef]);
 
-  // Demo driver: play the script once entities exist.
+  // Toast expiry: schedule a re-render 2.6 s after a block lands so toastFresh re-evaluates.
+  const [, forceTick] = useState(0);
+  useEffect(() => {
+    if (!state.sequence?.lastBlocked) return;
+    const t = setTimeout(() => forceTick((n) => n + 1), 2600);
+    return () => clearTimeout(t);
+  }, [state.sequence?.lastBlocked]);
+
+  // Demo driver: play the script once entities exist. StrictMode-safe: `played` is set when
+  // the first event FIRES (not when scheduled), and cleanup re-arms only if nothing fired yet.
+  // Known limitation (documented): with a live GEMINI key, perception rebuilds `entities`
+  // mid-script and truncates the tail — the demo is the no-key proof path.
+  const scheduled = useRef(false);
   const played = useRef(false);
   useEffect(() => {
-    if (!demo || played.current || entities.filter(e => e.category !== 'map').length < 3) return;
-    played.current = true;
-    const timers = buildDemoScript(entities).map(({ at, event }) => setTimeout(() => dispatch(event), at));
-    return () => timers.forEach(clearTimeout);
+    if (!demo || scheduled.current || entities.filter((e) => e.category !== 'map').length < 3) return;
+    scheduled.current = true;
+    const timers = buildDemoScript(entities).map(({ at, event }) =>
+      setTimeout(() => { played.current = true; dispatch(event); }, at));
+    return () => {
+      timers.forEach(clearTimeout);
+      if (!played.current) scheduled.current = false;
+    };
   }, [demo, entities]);
 
   const byId = (eid: EntityId) => entities.find((e) => e.id === eid);
