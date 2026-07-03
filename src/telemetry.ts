@@ -39,7 +39,8 @@ export type TelemetryEvent =
   | { t: number; type: 'grounding'; appReferent: string | null; modelTarget: string | null; agree: boolean | null; resolution: 'structural' | 'visual' | 'none' }
   | { t: number; type: 'map'; query: string }
   | { t: number; type: 'correction' } // undo
-  | { t: number; type: 'error'; message: string };
+  | { t: number; type: 'error'; message: string }
+  | { t: number; type: 'guidance'; kind: 'sequence_start' | 'step_done' | 'sequence_complete' | 'sequence_abandoned' | 'blocked' | 'reveal' | 'relate_shown'; taskKey?: string; posture?: string; fadeLevel?: number };
 
 export function detectDevice(): DeviceInfo {
   const width = typeof window !== 'undefined' ? window.innerWidth : 0;
@@ -89,6 +90,9 @@ class Telemetry {
   map(query: string) { this.push({ type: 'map', query }); }
   correction() { this.push({ type: 'correction' }); }
   error(message: string) { this.push({ type: 'error', message }); }
+  guidance(kind: 'sequence_start' | 'step_done' | 'sequence_complete' | 'sequence_abandoned' | 'blocked' | 'reveal' | 'relate_shown', detail: { taskKey?: string; posture?: string; fadeLevel?: number } = {}) {
+    this.push({ type: 'guidance', kind, ...detail });
+  }
 
   /** Aggregated, human-readable summary for the live readout + export. */
   metrics() {
@@ -117,6 +121,8 @@ class Telemetry {
       const a = actions.filter(x => (x as any).modality === mod);
       return { total: a.length, commits: a.filter(x => x.decision === 'commit').length, witnesses: a.filter(x => x.decision === 'witness').length };
     };
+    const guid = this.events.filter(e => e.type === 'guidance') as Extract<TelemetryEvent, { type: 'guidance' }>[];
+    const gk = (k: string) => guid.filter(e => e.kind === k).length;
     return {
       durationMs: this.config ? Date.now() - this.startedAt : 0,
       deixis: {
@@ -137,6 +143,12 @@ class Telemetry {
       corrections,
       correctionRate: actions.length ? +(corrections / actions.length).toFixed(2) : 0,
       errors,
+      guidance: {
+        sequences: gk('sequence_start'),
+        completions: gk('sequence_complete'),
+        unaidedCompletions: guid.filter(e => e.kind === 'sequence_complete' && e.fadeLevel === 2).length,
+        blocked: gk('blocked'), reveals: gk('reveal'), abandoned: gk('sequence_abandoned'), relatesShown: gk('relate_shown'),
+      },
       // G5: how often the model's read of the referent agrees with the app's hit-test.
       grounding: {
         total: gGraded.length,

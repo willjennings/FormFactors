@@ -3,8 +3,10 @@ import type { SceneEntity, EntityId } from '../entities/registry';
 import { displayName } from '../entities/registry';
 import type { TeachingEvent, TeachingState } from './types';
 import { initialTeachingState, reduce } from './teachingStore';
-import { activeStep, visibleScaffold, blockedEntityIds } from './selectors';
+import { activeStep, visibleScaffold, blockedEntityIds, fadeLevel } from './selectors';
 import { buildDemoScript } from './demoScript';
+import { loadCompetence, saveCompetence } from './persistence';
+import { telemetry } from '../telemetry';
 
 const pct = (v: number) => `${v / 10}%`; // 0-1000 space → percentage of the container
 
@@ -12,15 +14,27 @@ type Props = {
   entities: SceneEntity[];
   demo?: boolean;
   dispatchRef?: React.MutableRefObject<((e: TeachingEvent) => void) | null>; // Plan 2 seam
-  onGuidance?: (kind: string, data: Record<string, unknown>) => void;        // telemetry seam (Task 4)
 };
 
-export function TeachingLayer({ entities, demo = false, dispatchRef, onGuidance }: Props) {
-  const [state, setState] = useState<TeachingState>(initialTeachingState);
+export function TeachingLayer({ entities, demo = false, dispatchRef }: Props) {
+  const [state, setState] = useState<TeachingState>(() => ({ ...initialTeachingState(), competence: loadCompetence() }));
   const stateRef = useRef(state);
   stateRef.current = state;
 
-  const dispatch = (e: TeachingEvent) => setState((s) => reduce(s, e, Date.now()));
+  const dispatch = (e: TeachingEvent) => {
+    const prior = stateRef.current;
+    const next = reduce(prior, e, Date.now());
+    if (next.competence !== prior.competence) saveCompetence(next.competence);
+    if (e.type === 'teach.sequence') telemetry.guidance('sequence_start', { taskKey: e.taskKey, posture: e.posture, fadeLevel: fadeLevel(prior, e.taskKey) });
+    if (e.type === 'teach.relate') telemetry.guidance('relate_shown', {});
+    if (e.type === 'user.reveal') telemetry.guidance('reveal', {});
+    if (e.type === 'user.dismiss' && prior.sequence && prior.sequence.activeIndex !== null) telemetry.guidance('sequence_abandoned', { taskKey: prior.sequence.taskKey });
+    if (prior.sequence && next.sequence && prior.sequence.activeIndex !== null && next.sequence.activeIndex === null)
+      telemetry.guidance('sequence_complete', { taskKey: prior.sequence.taskKey, fadeLevel: fadeLevel(prior, prior.sequence.taskKey) });
+    if (e.type === 'user.stepAction' && next.sequence && prior.sequence && (next.sequence.blockedAttempts > prior.sequence.blockedAttempts)) telemetry.guidance('blocked', { taskKey: prior.sequence.taskKey });
+    if (e.type === 'user.stepAction' && prior.sequence && prior.sequence.activeIndex !== null && prior.sequence.steps[prior.sequence.activeIndex].entityId === e.entityId) telemetry.guidance('step_done', { taskKey: prior.sequence.taskKey });
+    setState(next);
+  };
   useEffect(() => { if (dispatchRef) { dispatchRef.current = dispatch; return () => { dispatchRef.current = null; }; } }, [dispatchRef]);
 
   // Toast expiry: schedule a re-render 2.6 s after a block lands so toastFresh re-evaluates.
@@ -103,7 +117,7 @@ export function TeachingLayer({ entities, demo = false, dispatchRef, onGuidance 
             const b = box(eid);
             return b && (
               <div key={eid} className="absolute rounded-lg bg-slate-900/35 backdrop-saturate-50 pointer-events-auto cursor-not-allowed" style={b}
-                   onClick={() => { dispatch({ type: 'user.stepAction', entityId: eid }); onGuidance?.('blocked', { entityId: eid }); }} />
+                   onClick={() => { dispatch({ type: 'user.stepAction', entityId: eid }); }} />
             );
           })}
           {/* active-step catcher + emphasis on the target */}
@@ -114,7 +128,7 @@ export function TeachingLayer({ entities, demo = false, dispatchRef, onGuidance 
             return (
               <div className={`absolute rounded-xl pointer-events-auto cursor-pointer ${showRing ? 'ring-4 ring-[var(--accent-color)] shadow-[0_0_28px_rgba(99,102,241,0.45)]' : ''}`}
                    style={b}
-                   onClick={() => { dispatch({ type: 'user.stepAction', entityId: step.entityId }); onGuidance?.('step_done', { subgoal: step.subgoal }); }}>
+                   onClick={() => { dispatch({ type: 'user.stepAction', entityId: step.entityId }); }}>
                 {scaffold.markers && seq.activeIndex !== null && (
                   <span className="absolute -top-3 -left-3 w-7 h-7 rounded-full bg-[var(--accent-color)] text-white text-sm font-bold flex items-center justify-center shadow">
                     {seq.activeIndex + 1}
@@ -139,7 +153,7 @@ export function TeachingLayer({ entities, demo = false, dispatchRef, onGuidance 
             <div className="absolute bottom-3 left-1/2 -translate-x-1/2 pointer-events-auto flex items-center gap-2 px-3 py-1.5 rounded-full bg-[var(--card-bg)] border border-[var(--card-border)] shadow">
               <span className="text-[11px] font-mono">{step.subgoal}</span>
               <button className="text-[10px] font-mono text-[var(--accent-color)]"
-                      onClick={() => { dispatch({ type: 'user.reveal' }); onGuidance?.('reveal', {}); }}>show me</button>
+                      onClick={() => { dispatch({ type: 'user.reveal' }); }}>show me</button>
             </div>
           )}
           {/* disablement toast (transient, names the active subgoal) */}
