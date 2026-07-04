@@ -940,22 +940,6 @@ export default function App() {
     const finalX = x !== undefined ? x : cursorRef.current.x;
     const finalY = y !== undefined ? y : cursorRef.current.y;
 
-    // Don't let markers be placed on the Google Maps view
-    // Use find() instead of some() to respect Z-order (photos are on top of map)
-    const topObject = entitiesRef.current.find(e => {
-      const [ymin, xmin, ymax, xmax] = e.bbox;
-      return finalX >= xmin && finalX <= xmax && finalY >= ymin && finalY <= ymax;
-    });
-
-    const isOnMap = topObject?.category === 'map';
-    
-    if (isOnMap) {
-      if (!isIdentification && providerRef.current) {
-        providerRef.current.sendTextHint("[SYSTEM: The user tried to point at the map. Tell them: 'That's the map, try pointing at the camera roll instead'.]");
-      }
-      return;
-    }
-
     const lastMarker = markersRef.current[0];
     const hasMovedSignificantly = lastMarker ? (Math.abs(lastMarker.x - finalX) > 50 || Math.abs(lastMarker.y - finalY) > 50) : true;
     
