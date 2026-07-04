@@ -3,12 +3,15 @@ import { Mic, MicOff, CornerDownLeft } from 'lucide-react';
 
 export type Suggestion = { key: string; label: string; phrase: string; color: string };
 
-export function Omnibox({ isLive, isConnecting, error, transcript, suggestions, firstRunHint, onSubmit, onMicToggle, onChipTap }: {
+export function Omnibox({ isLive, isConnecting, error, transcript, suggestions, firstRunHint, restoredDraft, onSubmit, onMicToggle, onChipTap }: {
   isLive: boolean; isConnecting: boolean; error: string | null; transcript: string | null;
   suggestions: Suggestion[]; firstRunHint: boolean;
+  restoredDraft?: { text: string; at: number } | null;
   onSubmit: (text: string) => void; onMicToggle: () => void; onChipTap: (s: Suggestion) => void;
 }) {
   const [draft, setDraft] = useState('');
+  // Restore typed text that was lost when a cold-start connect failed (R1 path).
+  React.useEffect(() => { if (restoredDraft) setDraft(restoredDraft.text); }, [restoredDraft?.at]);
   return (
     <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-30 w-[min(640px,90vw)] flex flex-col items-stretch gap-2" onPointerDown={(e) => e.stopPropagation()}>
       {firstRunHint && !isLive && (

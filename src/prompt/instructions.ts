@@ -4,8 +4,8 @@ import type { SceneEntity } from '../entities/registry';
 import { displayName } from '../entities/registry';
 
 /** The system prompt: an honest desktop assistant over one live program window.
- *  Same grounding grammar as the tourism-era prompt (confidence tiers, witness-render,
- *  commitment × confidence, grounding-mismatch protocol) — zero tourism vocabulary,
+ *  Same grounding grammar as the original demo prompt (confidence tiers, witness-render,
+ *  commitment × confidence, grounding-mismatch protocol) — zero legacy vocabulary,
  *  describing exactly the world that renders. */
 export function buildInstructions(honest: boolean, program: Program, entities: SceneEntity[]): string {
   const actionTools = buildActionTools(program.id);

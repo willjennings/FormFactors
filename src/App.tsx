@@ -305,7 +305,6 @@ export default function App() {
   // desktop-only gate + the mobile/rotate overlays.
   const [bypassDeviceGate, setBypassDeviceGate] = useState(false);
 
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(() => {
     if (typeof window !== 'undefined') {
       return localStorage.getItem('theme') === 'dark' || 
@@ -345,6 +344,8 @@ export default function App() {
   const pendingTypedRef = useRef<string | null>(null);
   const lastInputModalityRef = useRef<InputModality>('voice');
   const [lastError, setLastError] = useState<string | null>(null);
+  // Draft text restored to the omnibox when a cold-start connect fails (R1 path).
+  const [restoredDraft, setRestoredDraft] = useState<{ text: string; at: number } | null>(null);
   const [logs, setLogs] = useState<DebugLog[]>([]);
   const [mousePos, setMousePos] = useState({ x: -100, y: -100 });
   const [isPainting, setIsPainting] = useState(false);
@@ -462,6 +463,9 @@ export default function App() {
     return null;
   };
   const [pendingAction, setPendingAction] = useState<{ verb: string; label: string; target: string; detail?: string; confirmed: boolean; note?: string } | null>(null);
+  // Mirror in a ref so voice callbacks (stale closures) can read the live value.
+  const pendingActionRef = useRef<typeof pendingAction>(null);
+  useEffect(() => { pendingActionRef.current = pendingAction; }, [pendingAction]);
 
   // --- The two control dials ---
   // DIAL A (autonomy/friction): how readily verbs commit vs. witness-render first.
@@ -535,55 +539,72 @@ export default function App() {
   }, [persistentPaths.length]);
   */
 
+  // Stable layout measurement function — hoisted so multiple effects can share it without
+  // creating new ResizeObserver instances on every render. Deps: program (drives entity shape)
+  // and isLive (decides whether to push a layout hint to the model).
+  const updateLayout = React.useCallback(() => {
+    const main = mainContainerRef.current;
+    if (!main) return;
+    const mainRect = main.getBoundingClientRect();
+
+    const winEl = main.querySelector('.program-window');
+
+    const toBBox = (r: DOMRect) => ({
+      ymin: ((r.top - mainRect.top) / mainRect.height) * 1000,
+      xmin: ((r.left - mainRect.left) / mainRect.width) * 1000,
+      ymax: ((r.bottom - mainRect.top) / mainRect.height) * 1000,
+      xmax: ((r.right - mainRect.left) / mainRect.width) * 1000,
+    });
+
+    if (!winEl) {
+      // Window is closed — zero-bbox degradation so entities/overlays render nothing honestly.
+      setMainSize({ width: mainRect.width, height: mainRect.height });
+      const zeroWindow = { ymin: 0, xmin: 0, ymax: 0, xmax: 0 };
+      setLayoutBounds({ window: zeroWindow, photoItems: [], surface: undefined });
+      const es = buildEntities(program, perceivedLabelsRef.current, { items: [] });
+      setEntities(es);
+      entitiesRef.current = es;
+      return;
+    }
+
+    const pRect = winEl.getBoundingClientRect();
+    setMainSize({ width: mainRect.width, height: mainRect.height });
+
+    // Generic element contract: anything with data-element-id is a measurable scene
+    // element (tiles today, surface controls after the surface migration).
+    const photoItems = Array.from(winEl.querySelectorAll<HTMLElement>('[data-element-id]')).map((el: HTMLElement) => {
+      const id = Number(el.dataset.elementId);
+      return Number.isFinite(id) ? { id, bbox: toBBox(el.getBoundingClientRect()) } : null;
+    }).filter(Boolean) as { id: number; bbox: BBox }[];
+
+    const surfEl = main.querySelector('.program-surface');
+    setLayoutBounds({
+      window: toBBox(pRect),
+      photoItems,
+      surface: surfEl ? toBBox((surfEl as HTMLElement).getBoundingClientRect()) : undefined,
+    });
+
+    // Update the scene entities for Gemini (single source of truth).
+    const es = buildEntities(program, perceivedLabelsRef.current, {
+      items: photoItems.map(it => ({ id: it.id, bbox: it.bbox })),
+    });
+    setEntities(es);
+    entitiesRef.current = es;
+
+    // Notify AI of the new layout if session is active (core context — both backends).
+    if (providerRef.current) {
+      const layoutInfo = es.map(e => `${displayName(e)}: [${e.bbox.map(Math.round).join(', ')}]`).join('\n');
+      providerRef.current.sendTextHint(`[SYSTEM UPDATE: The on-screen program elements are at these coordinates (ymin, xmin, ymax, xmax):\n${layoutInfo}\nUse these to identify what the user is pointing at when they say "this" or "here". DO NOT RESPOND TO THIS UPDATE. STAY SILENT UNTIL THE USER SPEAKS.]`);
+    }
+  }, [program, isLive]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Re-measure on window move/resize/open/close — ResizeObserver only fires on size changes,
+  // so drags and reopen would otherwise leave stale bboxes (a false screen for the AI).
+  useEffect(() => { updateLayout(); }, [updateLayout, windowRect, windowOpen]);
+
+  // Mount/reattach observers — re-runs when windowOpen flips so the new .program-window
+  // element (which the old observer never saw) gets observed immediately on reopen.
   useEffect(() => {
-    const updateLayout = () => {
-      const main = mainContainerRef.current;
-      if (!main) return;
-      const mainRect = main.getBoundingClientRect();
-      
-      const winEl = main.querySelector('.program-window');
-
-      if (winEl) {
-        const pRect = winEl.getBoundingClientRect();
-
-        setMainSize({ width: mainRect.width, height: mainRect.height });
-
-        const toBBox = (r: DOMRect) => ({
-          ymin: ((r.top - mainRect.top) / mainRect.height) * 1000,
-          xmin: ((r.left - mainRect.left) / mainRect.width) * 1000,
-          ymax: ((r.bottom - mainRect.top) / mainRect.height) * 1000,
-          xmax: ((r.right - mainRect.left) / mainRect.width) * 1000,
-        });
-
-        // Generic element contract: anything with data-element-id is a measurable scene
-        // element (tiles today, surface controls after the surface migration).
-        const photoItems = Array.from(winEl.querySelectorAll<HTMLElement>('[data-element-id]')).map((el: HTMLElement) => {
-          const id = Number(el.dataset.elementId);
-          return Number.isFinite(id) ? { id, bbox: toBBox(el.getBoundingClientRect()) } : null;
-        }).filter(Boolean) as { id: number; bbox: BBox }[];
-
-        const surfEl = main.querySelector('.program-surface');
-        setLayoutBounds({
-          window: toBBox(pRect),
-          photoItems,
-          surface: surfEl ? toBBox((surfEl as HTMLElement).getBoundingClientRect()) : undefined,
-        });
-
-        // Update the scene entities for Gemini (single source of truth).
-        const es = buildEntities(program, perceivedLabelsRef.current, {
-          items: photoItems.map(it => ({ id: it.id, bbox: it.bbox })),
-        });
-        setEntities(es);
-        entitiesRef.current = es;
-
-        // Notify AI of the new layout if session is active (core context — both backends).
-        if (providerRef.current) {
-          const layoutInfo = es.map(e => `${displayName(e)}: [${e.bbox.map(Math.round).join(', ')}]`).join('\n');
-          providerRef.current.sendTextHint(`[SYSTEM UPDATE: The on-screen program elements are at these coordinates (ymin, xmin, ymax, xmax):\n${layoutInfo}\nUse these to identify what the user is pointing at when they say "this" or "here". DO NOT RESPOND TO THIS UPDATE. STAY SILENT UNTIL THE USER SPEAKS.]`);
-        }
-      }
-    };
-
     const observer = new ResizeObserver(updateLayout);
     if (mainContainerRef.current) observer.observe(mainContainerRef.current);
 
@@ -594,13 +615,13 @@ export default function App() {
     updateLayout();
     window.addEventListener('resize', updateLayout);
     window.addEventListener('scroll', updateLayout, true); // Capture scroll events that might shift layout
-    
+
     return () => {
       observer.disconnect();
       window.removeEventListener('resize', updateLayout);
       window.removeEventListener('scroll', updateLayout, true);
     };
-  }, [isLive, activeProgram]); // Recalculate when live starts, layout changes, or program swaps
+  }, [updateLayout, windowOpen]); // re-attach when window open/close so new DOM element is observed
 
   useEffect(() => {
     const checkDevice = () => {
@@ -929,7 +950,7 @@ export default function App() {
       // PHASE D: low-commitment, verbal-only. No map mutation. Ack immediately so the
       // model keeps speaking; the honest hedging lives in the prompt + the spoken answer.
       const args = fc.args as any;
-      addLog('tool', `Tool Call: explain(${args.subject ?? ''}) - verbal only, no map change`);
+      addLog('tool', `Tool Call: explain(${args.subject ?? ''}) - verbal only, changes nothing`);
       providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true });
     } else if (fc.name === 'share') {
       // PHASE G: outward action. Witness recipient + payload before sending; commit only
@@ -956,6 +977,18 @@ export default function App() {
       const args = (fc.args ?? {}) as { target?: string; detail?: string; confirm?: boolean };
       const { label, target, detail } = describeAction(fc.name, args);
       const confirmed = args.confirm === true;
+
+      // Double-apply guard: if the button already confirmed this action, don't re-apply the
+      // voice-confirm call that follows (button sets confirmed=true, then the model also fires
+      // confirm=true — one apply is enough). Witness-mode calls (confirmed=false) are unaffected.
+      if (confirmed) {
+        const pa = pendingActionRef.current;
+        if (pa?.confirmed === true && pa.verb === fc.name && pa.target === (args.target ?? pa.target)) {
+          providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true, deduped: true, note: 'already applied via button confirm' });
+          return;
+        }
+      }
+
       const verbClass = classOf(fc.name);
       const phrase = `${label} ${target}${detail ? ` (${detail})` : ''}`;
       const decision = decideCommit(verbClass, autonomyRef.current, confirmed);
@@ -1377,6 +1410,7 @@ export default function App() {
   // user their text back so nothing is lost.
   const abortPendingTyped = () => {
     setIsConnecting(false);
+    if (pendingTypedRef.current) setRestoredDraft({ text: pendingTypedRef.current, at: Date.now() });
     pendingTypedRef.current = null;
   };
 
@@ -1386,9 +1420,10 @@ export default function App() {
 
     const apiKey = process.env.GEMINI_API_KEY;
     if (voiceBackendRef.current === 'gemini' && !apiKey) {
+        const msg = 'Missing GEMINI_API_KEY — set it in .env.local and restart the dev server.';
         abortPendingTyped();
-        addLog('info', 'Missing GEMINI_API_KEY');
-        console.error('Missing GEMINI_API_KEY');
+        setLastError(msg);
+        addLog('info', msg);
         return;
     }
     if (voiceBackendRef.current === 'azure' && (!process.env.AZURE_OPENAI_API_KEY || !process.env.AZURE_OPENAI_ENDPOINT)) {
@@ -1532,7 +1567,9 @@ export default function App() {
   // Keyboard Fallback
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); handleUndo(); return; }
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) { e.preventDefault(); handleUndo(); return; }
       if (!isLive) return;
       if (e.key === 't') addMarker("this");
       if (e.key === 'i') addMarker("it");
@@ -2121,7 +2158,7 @@ export default function App() {
     const tick = async () => {
       if (cancelled || !gate(Date.now())) return;
       const node = surfaceRef.current;
-      if (!node) return;
+      if (!node) { surfaceSnapshotRef.current = null; return; } // closed window — clear stale pixels
       const canvas = await snapshotNode(node);
       if (!cancelled && canvas) surfaceSnapshotRef.current = canvas;
     };
@@ -2195,7 +2232,7 @@ export default function App() {
     mockDocRef.current = freshDoc;
     setUndoStack([]);
     referents.clear();
-    addLog('info', 'Map reset to original state.');
+    addLog('info', 'Desktop reset to original state.');
   };
 
   if (!isWideEnough) {
@@ -2275,6 +2312,7 @@ export default function App() {
           {feedbackToast && (
             <div
               key={feedbackToast.at}
+              onPointerDown={(e) => e.stopPropagation()}
               className={`absolute bottom-4 left-1/2 -translate-x-1/2 z-[60] pointer-events-none [&>button]:pointer-events-auto flex items-center gap-2 px-4 py-2 rounded-full shadow-lg border backdrop-blur animate-in fade-in slide-in-from-bottom-2 duration-200 ${
                 feedbackToast.outcome === 'error'
                   ? 'bg-red-500/10 border-red-500/40 text-red-600 dark:text-red-400'
@@ -2313,13 +2351,14 @@ export default function App() {
             isLive={isLive} isConnecting={isConnecting}
             error={lastError} transcript={liveTranscription || null}
             suggestions={suggestions} firstRunHint={firstRunHint}
+            restoredDraft={restoredDraft}
             onSubmit={(text) => { setFirstRunHint(false); setFocusTitle(undefined); sendTypedInput(text); }}
             onMicToggle={() => { setFirstRunHint(false); isLive ? providerRef.current?.close() : startLiveSession(); }}
             onChipTap={(s) => setFocusTitle(TASKS.find(t => t.key === s.key)?.targetElement)}
           />
 
-          {/* Witness cards — parked here temporarily (Task 9 gives them buttons + final home) */}
-          <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-30 w-[min(560px,88vw)] flex flex-col gap-2">
+          {/* Witness cards — confirm/cancel by button or voice. */}
+          <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-30 w-[min(560px,88vw)] flex flex-col gap-2" onPointerDown={(e) => e.stopPropagation()}>
             {shareRequest && (
               <section className={`shrink-0 bg-[var(--card-bg)] border rounded-2xl p-6 animate-in fade-in slide-in-from-top-2 duration-300 ${shareRequest.confirmed ? 'border-green-500/50' : 'border-amber-500/40'}`}>
                 <div className="flex items-center gap-2 mb-3">
@@ -2342,7 +2381,7 @@ export default function App() {
                 </div>
                 {!shareRequest.confirmed && (
                   <div className="flex items-center gap-2">
-                    <button onClick={confirmShare} autoFocus
+                    <button onClick={confirmShare}
                       className="px-4 py-1.5 rounded-full text-[12px] font-bold bg-amber-500 text-white hover:bg-amber-600 active:scale-95 transition-all">
                       Confirm
                     </button>
@@ -2386,7 +2425,7 @@ export default function App() {
                 )}
                 {!pendingAction.confirmed && (
                   <div className="flex items-center gap-2">
-                    <button onClick={confirmPendingAction} autoFocus
+                    <button onClick={confirmPendingAction}
                       className="px-4 py-1.5 rounded-full text-[12px] font-bold bg-amber-500 text-white hover:bg-amber-600 active:scale-95 transition-all">
                       Confirm
                     </button>
