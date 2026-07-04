@@ -7,16 +7,18 @@ import { activeStep, visibleScaffold, blockedEntityIds, fadeLevel } from './sele
 import { buildDemoScript } from './demoScript';
 import { loadCompetence, saveCompetence } from './persistence';
 import { telemetry } from '../telemetry';
+import type { Program } from '../scenarios';
 
 const pct = (v: number) => `${v / 10}%`; // 0-1000 space → percentage of the container
 
 type Props = {
   entities: SceneEntity[];
+  program: Program;
   demo?: boolean;
   dispatchRef?: React.MutableRefObject<((e: TeachingEvent) => void) | null>; // Plan 2 seam
 };
 
-export function TeachingLayer({ entities, demo = false, dispatchRef }: Props) {
+export function TeachingLayer({ entities, program, demo = false, dispatchRef }: Props) {
   const [state, setState] = useState<TeachingState>(() => ({ ...initialTeachingState(), competence: loadCompetence() }));
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -54,13 +56,13 @@ export function TeachingLayer({ entities, demo = false, dispatchRef }: Props) {
   useEffect(() => {
     if (!demo || scheduled.current || entities.filter((e) => e.category !== 'map').length < 3) return;
     scheduled.current = true;
-    const timers = buildDemoScript(entities).map(({ at, event }) =>
+    const timers = buildDemoScript(program, entities).map(({ at, event }) =>
       setTimeout(() => { played.current = true; dispatch(event); }, at));
     return () => {
       timers.forEach(clearTimeout);
       if (!played.current) scheduled.current = false;
     };
-  }, [demo, entities]);
+  }, [demo, entities, program]);
 
   const byId = (eid: EntityId) => entities.find((e) => e.id === eid);
   const box = (eid: EntityId) => {

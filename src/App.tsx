@@ -3140,7 +3140,7 @@ When the user points and speaks a command, call the appropriate tool — a map t
             height={mainSize.height}
             className={`absolute inset-0 z-50 pointer-events-none ${isLive ? 'opacity-100' : 'opacity-0'} transition-opacity duration-300`}
           />
-          {teachMode && <TeachingLayer entities={entities} demo dispatchRef={teachingDispatchRef} />}
+          {teachMode && <TeachingLayer entities={entities} program={program} demo dispatchRef={teachingDispatchRef} />}
           {/* G6 FEEDFORWARD: live "what I'll act on" preview as the cursor moves, so the user
               sees the interpretation forming BEFORE they speak (closes the gulf of execution). */}
           {isLive && (
