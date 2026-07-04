@@ -398,10 +398,10 @@ export function buildActionTools(programId: ProgramId): VoiceTool[] {
 
 // ── Mock document the verbs visibly mutate ─────────────────────────────────────────────
 export type MockDoc =
-  | { kind: 'word'; text: string; bold: boolean; heading?: string; saved: boolean }
+  | { kind: 'word'; text: string; bold: boolean; heading?: string; saved: boolean; savedAs?: string }
   | { kind: 'excel'; cells: Record<string, string>; currency: string[]; chart: boolean; saved: boolean }
   | { kind: 'powerpoint'; slides: string[]; transition?: string; saved: boolean }
-  | { kind: 'photo'; cropped: boolean; brightness: number; bgRemoved: boolean; saved: boolean };
+  | { kind: 'photo'; cropped: boolean; resized: boolean; brightness: number; bgRemoved: boolean; saved: boolean };
 
 export function initialMockDoc(programId: ProgramId): MockDoc {
   switch (programId) {
@@ -410,7 +410,7 @@ export function initialMockDoc(programId: ProgramId): MockDoc {
     case 'powerpoint':
       return { kind: 'powerpoint', slides: ['Title slide'], transition: undefined, saved: false };
     case 'photo':
-      return { kind: 'photo', cropped: false, brightness: 0, bgRemoved: false, saved: false };
+      return { kind: 'photo', cropped: false, resized: false, brightness: 0, bgRemoved: false, saved: false };
     case 'word':
     default:
       return { kind: 'word', text: 'The quarterly report summary.', bold: false, heading: undefined, saved: false };
@@ -421,6 +421,10 @@ const has = (s: unknown, needle: string) => typeof s === 'string' && s.toLowerCa
 // Parse a cell ref like "Cell A1" / "A1" → "A1" (falls back to A1).
 const cellRef = (target?: string) => (target?.match(/[A-Za-z]\d+/)?.[0]?.toUpperCase()) ?? 'A1';
 
+/** Filename shown in the Word surface title bar; Save As writes the "(copy)" variant. */
+export const WORD_FILENAME = 'Quarterly report.docx';
+const A_CELLS = ['A1', 'A2', 'A3', 'A4', 'A5', 'A6']; // the grid's A column (see spreadsheetGrid ROWS)
+
 /**
  * Pure reducer: given the current mock doc and an action verb call, return the next doc.
  * Unknown verb/arg combinations return the doc unchanged (safe by default).
@@ -428,6 +432,8 @@ const cellRef = (target?: string) => (target?.match(/[A-Za-z]\d+/)?.[0]?.toUpper
 export function applyAction(doc: MockDoc, verb: string, args: { target?: string; detail?: string } = {}): MockDoc {
   const detail = args.detail ?? '';
   if (verb === 'save_file') {
+    if (doc.kind === 'word' && has(detail, 'as') && !has(detail, 'pdf'))
+      return { ...doc, saved: true, savedAs: WORD_FILENAME.replace(/\.docx$/, ' (copy).docx') };
     return { ...doc, saved: true };
   }
   switch (doc.kind) {
@@ -444,10 +450,24 @@ export function applyAction(doc: MockDoc, verb: string, args: { target?: string;
         const ref = cellRef(args.target);
         return { ...doc, currency: doc.currency.includes(ref) ? doc.currency : [...doc.currency, ref] };
       }
-      if (verb === 'insert_object') return { ...doc, chart: true };
+      if (verb === 'insert_object') {
+        if (has(detail, 'sum') || has(detail, 'aver') || has(detail, 'avg')) {
+          const isAvg = has(detail, 'aver') || has(detail, 'avg');
+          const nums = A_CELLS.map(r => parseFloat(doc.cells[r] ?? '')).filter(n => Number.isFinite(n));
+          const target = A_CELLS.find(r => !(doc.cells[r] ?? '').trim());
+          if (!nums.length || !target) return doc;
+          const value = isAvg ? nums.reduce((a, b) => a + b, 0) / nums.length : nums.reduce((a, b) => a + b, 0);
+          return { ...doc, cells: { ...doc.cells, [target]: String(Math.round(value * 100) / 100) } };
+        }
+        return { ...doc, chart: true };
+      }
       return doc;
     case 'powerpoint':
-      if (verb === 'insert_object') return { ...doc, slides: [...doc.slides, `Slide ${doc.slides.length + 1}`] };
+      if (verb === 'insert_object') {
+        if (has(detail, 'dup'))
+          return { ...doc, slides: [...doc.slides, `${doc.slides[doc.slides.length - 1]} (copy)`] };
+        return { ...doc, slides: [...doc.slides, `Slide ${doc.slides.length + 1}`] };
+      }
       if (verb === 'edit_content') {
         const slides = [...doc.slides];
         slides[slides.length - 1] = detail || slides[slides.length - 1];
@@ -457,6 +477,7 @@ export function applyAction(doc: MockDoc, verb: string, args: { target?: string;
       return doc;
     case 'photo':
       if (verb === 'photo_edit') {
+        if (has(detail, 'resize') || has(detail, 'size') || has(args.target, 'resize')) return { ...doc, resized: true };
         if (has(detail, 'crop') || has(args.target, 'crop')) return { ...doc, cropped: true };
         if (has(detail, 'bright') || has(detail, 'expos')) return { ...doc, brightness: Math.min(3, doc.brightness + 1) };
         if (has(detail, 'background') || has(detail, 'remove')) return { ...doc, bgRemoved: true };
@@ -520,13 +541,13 @@ export function decideCommit(verbClass: VerbClass, autonomy: Autonomy, confirmed
 export function serializeMockDoc(doc: MockDoc): string {
   switch (doc.kind) {
     case 'word':
-      return `Word — text:"${doc.text}"${doc.heading ? `, heading:"${doc.heading}"` : ''}, bold:${doc.bold ? 'yes' : 'no'}, saved:${doc.saved ? 'yes' : 'no'}`;
+      return `Word — text:"${doc.text}"${doc.heading ? `, heading:"${doc.heading}"` : ''}, bold:${doc.bold ? 'yes' : 'no'}, saved:${doc.saved ? (doc.savedAs ? `yes (as ${doc.savedAs})` : 'yes') : 'no'}`;
     case 'excel':
       return `Excel — ${Object.entries(doc.cells).map(([k, v]) => `${k}=${doc.currency.includes(k) && v ? '$' + v : v}`).join(' ')}, chart:${doc.chart ? 'yes' : 'no'}, saved:${doc.saved ? 'yes' : 'no'}`;
     case 'powerpoint':
       return `PowerPoint — slides:[${doc.slides.join(', ')}]${doc.transition ? `, transition:${doc.transition}` : ''}, saved:${doc.saved ? 'yes' : 'no'}`;
     case 'photo':
-      return `Photo — ${doc.cropped ? 'cropped, ' : ''}brightness:+${doc.brightness}${doc.bgRemoved ? ', background removed' : ''}, saved:${doc.saved ? 'yes' : 'no'}`;
+      return `Photo — ${doc.cropped ? 'cropped, ' : ''}${doc.resized ? 'resized, ' : ''}brightness:+${doc.brightness}${doc.bgRemoved ? ', background removed' : ''}, saved:${doc.saved ? 'yes' : 'no'}`;
   }
 }
 
