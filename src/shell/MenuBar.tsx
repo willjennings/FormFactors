@@ -6,7 +6,7 @@ export function MenuBar({ isLive, isConnecting, isDarkMode, onToggleTheme, onTog
   onToggleTheme: () => void; onToggleDrawer: () => void;
 }) {
   return (
-    <div className="absolute top-0 left-0 right-0 z-30 flex items-center justify-between px-4 h-9 border-b border-[var(--card-border)] bg-[var(--card-bg)]/80 backdrop-blur">
+    <div className="absolute top-0 left-0 right-0 z-30 flex items-center justify-between px-4 h-9 border-b border-[var(--card-border)] bg-[var(--card-bg)]/80 backdrop-blur" onPointerDown={(e) => e.stopPropagation()}>
       <span className="text-[12px] font-semibold text-[var(--text-primary)]">FormFactors</span>
       <div className="flex items-center gap-3">
         <span className="flex items-center gap-1.5 text-[10px] font-mono text-[var(--text-secondary)]">

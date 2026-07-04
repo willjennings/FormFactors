@@ -10,7 +10,7 @@ export function Omnibox({ isLive, isConnecting, error, transcript, suggestions, 
 }) {
   const [draft, setDraft] = useState('');
   return (
-    <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-30 w-[min(640px,90vw)] flex flex-col items-stretch gap-2">
+    <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-30 w-[min(640px,90vw)] flex flex-col items-stretch gap-2" onPointerDown={(e) => e.stopPropagation()}>
       {firstRunHint && !isLive && (
         <p className="text-center text-[11px] font-mono text-[var(--text-secondary)]">Point at things and ask — or type.</p>
       )}
