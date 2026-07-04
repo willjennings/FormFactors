@@ -2578,8 +2578,9 @@ export default function App() {
 
       </div>
 
-  {/* Custom Cursor */}
-  {isLive && (
+  {/* Custom Cursor — always rendered: custom-cursor-active hides the native cursor
+      unconditionally, so this replacement must be unconditional too (else no cursor). */}
+  {(
     <div
       className="fixed top-0 left-0 pointer-events-none z-[40000] hidden sm:block"
       style={{ 
