@@ -59,7 +59,8 @@ import { DebugDrawer } from './shell/DebugDrawer';
 import { clampWindow, loadWindowRect, saveWindowRect, type WindowRect } from './shell/windowState';
 import { docStatusLabel } from './widgets/surfaceModels';
 import type { TeachingEvent, TeachingState } from './teaching/types';
-import { initialRailState, reduceRail, type RailEvent, type RailState } from './rail/railStore';
+import { initialRailState, reduceRail, railComplete, type RailEvent, type RailState } from './rail/railStore';
+import { respondCallToRail } from './rail/respondCallToRail';
 import { projectTeaching } from './rail/projectTeaching';
 import { RailPanel } from './rail/RailPanel';
 import { snapshotNode, makeThrottle } from './vision/snapshotNode';
@@ -169,6 +170,23 @@ function computePointingConfidence(
 }
 
 const VOICE_TOOLS: VoiceTool[] = [
+  {
+    name: 'respond',
+    description: 'Render your answer or instructions as typed cards in the response rail. THIS IS HOW YOU DELIVER ALL INSTRUCTIONAL AND INFORMATIONAL CONTENT — one respond call per user request. Card types: do (one action: verb click/press/type/drag/open + target + text + result), answer (a short answer), orient, check (verify:"auto" with expect:{path,equals} against the document, or "user"), caution, concept (front/back), try (prompt/notice), recap (≤3 lines). Keep every text within its budget; put rationale in "why". Include exactly ONE guideLine sentence — SAY the guideLine aloud; do not speak the card contents.',
+    parameters: { type: 'object', properties: {
+      seq: { type: 'string', description: 'Task key for this response, e.g. "word.save" or "answer".' },
+      cards: { type: 'array', items: { type: 'object', properties: {
+        t: { type: 'string', description: 'do|answer|orient|check|caution|concept|try|recap' },
+        text: { type: 'string' }, verb: { type: 'string' }, target: { type: 'string' },
+        result: { type: 'string' }, why: { type: 'string' },
+        verify: { type: 'string' }, expect: { type: 'object', properties: { path: { type: 'string' }, equals: {} } },
+        front: { type: 'string' }, back: { type: 'string' }, analogy: { type: 'string' },
+        prompt: { type: 'string' }, notice: { type: 'string' },
+        lines: { type: 'array', items: { type: 'string' } },
+      }, required: ['t'] } },
+      guideLine: { type: 'string', description: 'ONE warm sentence. Speak this aloud; nothing else.' },
+    }, required: ['seq', 'cards', 'guideLine'] },
+  },
   {
     name: 'explain',
     description: 'Verbally name or describe what the user is pointing at (e.g. "what is this?", "what am I looking at?"). LOW-COMMITMENT: it does NOT change any state. Call it when the user asks to identify something.',
@@ -508,8 +526,39 @@ export default function App() {
   const [teachingSnapshot, setTeachingSnapshot] = useState<TeachingState | null>(null);
 
   const [railState, setRailState] = useState<RailState>(initialRailState());
-  const railDispatch = (e: RailEvent) => setRailState(s => reduceRail(s, e, Date.now()));
+  const railStateRef = useRef(railState);
+  railStateRef.current = railState;
+  const railDispatch = (e: RailEvent) => {
+    const prev = railStateRef.current;
+    const next = reduceRail(prev, e, Date.now());
+    // Interaction telemetry
+    if (e.type === 'user.whyToggle') telemetry.guidance('why_opened', { taskKey: prev.rail?.seq });
+    if (e.type === 'user.flip') telemetry.guidance('card_flipped', { taskKey: prev.rail?.seq });
+    // Dismiss with active step → abandoned
+    if (e.type === 'rail.dismiss' && prev.rail && prev.rail.activeIndex !== null)
+      telemetry.guidance('rail_abandoned', { taskKey: prev.rail.seq });
+    // Rail completed (activeIndex flipped to null)
+    if (!railComplete(prev) && railComplete(next))
+      telemetry.guidance('rail_complete', { taskKey: next.rail?.seq ?? prev.rail?.seq });
+    // Check card state transitions
+    if (prev.rail && prev.rail.activeIndex !== null) {
+      const ci = prev.rail.activeIndex;
+      const prevCard = prev.rail.cards[ci];
+      if (prevCard.t === 'check') {
+        const nextCard = next.rail?.cards[ci];
+        if (prevCard.verify === 'auto' && nextCard) {
+          if (nextCard.state === 'done' && prevCard.state !== 'done')
+            telemetry.guidance('check_auto_pass', { taskKey: prev.rail.seq });
+          else if (nextCard.state === 'failed' && prevCard.state !== 'failed')
+            telemetry.guidance('check_auto_fail', { taskKey: prev.rail.seq });
+        } else if (prevCard.verify === 'user' && next.rail?.activeIndex !== ci)
+          telemetry.guidance('check_user_confirmed', { taskKey: prev.rail.seq });
+      }
+    }
+    setRailState(next);
+  };
   const railDispatchRef = useRef(railDispatch);
+  railDispatchRef.current = railDispatch;
   useEffect(() => { railDispatch({ type: 'doc.changed', doc: mockDoc }); }, [mockDoc]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [pointerPath, setPointerPath] = useState<{ x: number, y: number, timestamp: number }[]>([]);
@@ -956,11 +1005,29 @@ export default function App() {
       return;
     }
     if (fc.name === 'explain') {
-      // PHASE D: low-commitment, verbal-only. No map mutation. Ack immediately so the
-      // model keeps speaking; the honest hedging lives in the prompt + the spoken answer.
+      // Low-commitment identify. The durable artifact is an ANSWER card in the rail;
+      // the spoken answer remains the model's (prompt: hedges stay voice).
       const args = fc.args as any;
-      addLog('tool', `Tool Call: explain(${args.subject ?? ''}) - verbal only, changes nothing`);
+      const subject = typeof args.subject === 'string' ? args.subject : '';
+      const hit = resolveEchoedTarget(entitiesRef.current, subject);
+      const mapped = respondCallToRail({ seq: 'answer', guideLine: ' ', cards: [
+        hit ? { t: 'answer', text: `That's the ${displayName(hit.entity)}.`, target: subject }
+            : { t: 'answer', text: subject ? `I can't point at "${subject}" — not on this screen.` : `I'm not sure what that is.` },
+      ] }, entitiesRef.current, mockDocRef.current, Date.now());
+      if (!('error' in mapped)) railDispatchRef.current?.({ type: 'rail.set', rail: { ...mapped.rail, guideLine: undefined } });
+      addLog('tool', `Tool Call: explain(${subject}) - verbal only, changes nothing`);
       providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true });
+    } else if (fc.name === 'respond') {
+      const mapped = respondCallToRail(fc.args, entitiesRef.current, mockDocRef.current, Date.now());
+      if ('error' in mapped) {
+        addLog('tool', `Tool Call: respond REJECTED — ${mapped.error}`);
+        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: false, error: mapped.error });
+      } else {
+        railDispatchRef.current?.({ type: 'rail.set', rail: mapped.rail });
+        mapped.rail.cards.forEach(() => telemetry.guidance('card_dealt', { taskKey: mapped.rail.seq }));
+        addLog('tool', `Tool Call: respond(${mapped.rail.seq}) — ${mapped.rail.cards.length} cards`);
+        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true, rendered: mapped.rail.cards.length });
+      }
     } else if (fc.name === 'share') {
       // PHASE G: outward action. Witness recipient + payload before sending; commit only
       // on explicit confirm. (Sending itself is simulated — no real outward integration.)
@@ -2371,7 +2438,7 @@ export default function App() {
             state={railState}
             teachingRail={teachingSnapshot ? projectTeaching(teachingSnapshot) : null}
             onEvent={railDispatch}
-            onShowMe={(id) => teachingDispatchRef.current?.({ type: 'teach.highlight', entityId: id as EntityId })}
+            onShowMe={(id) => { telemetry.guidance('show_me', { taskKey: railState.rail?.seq }); teachingDispatchRef.current?.({ type: 'teach.highlight', entityId: id as EntityId }); }}
           />
 
           {/* Witness cards — confirm/cancel by button or voice. */}

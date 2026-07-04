@@ -35,4 +35,11 @@ describe('buildInstructions — honest desktop assistant', () => {
     expect(honest).toMatch(/STAY SILENT/);
     expect(confident).not.toMatch(/confidence: low/i);
   });
+
+  it('carries the response contract', () => {
+    expect(honest).toContain('RESPONSE CONTRACT');
+    expect(honest).toContain('respond');
+    expect(honest).toContain('guideLine');
+    expect(confident).toContain('RESPONSE CONTRACT');
+  });
 });
