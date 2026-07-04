@@ -1065,6 +1065,37 @@ export default function App() {
     providerRef.current?.sendTextHint(`[DOCUMENT STATE after the user's direct edit: ${serializeMockDoc(nextDoc)}. DO NOT acknowledge this message.]`);
   };
 
+  // Witness cards are keyboard/click-confirmable — voice is no longer the only path (gap 9).
+  const confirmPendingAction = () => {
+    const p = pendingAction;
+    if (!p || p.confirmed) return;
+    const prevDoc = mockDocRef.current;
+    const nextDoc = applyAction(prevDoc, p.verb, { target: p.target, detail: p.detail });
+    mockDocRef.current = nextDoc;
+    setMockDoc(nextDoc);
+    setUndoStack(s => [...s, { doc: prevDoc, label: `${p.label} ${p.target}` }]);
+    telemetry.action(p.verb, classOf(p.verb), 'commit', 'direct');
+    emitFeedback({ outcome: 'committed', verbClass: classOf(p.verb), label: `${p.label} ${p.target}` });
+    setPendingAction({ ...p, confirmed: true });
+    providerRef.current?.sendTextHint(`[SYSTEM: the user confirmed via button — the action was applied. DOCUMENT STATE: ${serializeMockDoc(nextDoc)}. Do not re-call the tool; do not acknowledge.]`);
+  };
+  const cancelPendingAction = () => {
+    if (!pendingAction || pendingAction.confirmed) return;
+    setPendingAction(null);
+    providerRef.current?.sendTextHint('[SYSTEM: the user cancelled the pending action via button — drop it and wait.]');
+  };
+  const confirmShare = () => {
+    if (!shareRequest || shareRequest.confirmed) return;
+    setShareRequest({ ...shareRequest, confirmed: true });
+    emitFeedback({ outcome: 'committed', verbClass: 'share', label: `Shared with ${shareRequest.recipient}` });
+    providerRef.current?.sendTextHint('[SYSTEM: the user confirmed the share via button — it was sent. Do not re-call the tool; do not acknowledge.]');
+  };
+  const cancelShare = () => {
+    if (!shareRequest || shareRequest.confirmed) return;
+    setShareRequest(null);
+    providerRef.current?.sendTextHint('[SYSTEM: the user cancelled the share via button — drop it and wait.]');
+  };
+
   const processInputTranscript = (text: string) => {
     addLog('info', `User: "${text}"`);
     lastTranscriptionTimeRef.current = Date.now();
@@ -2333,7 +2364,17 @@ export default function App() {
                   </div>
                 </div>
                 {!shareRequest.confirmed && (
-                  <p className="text-[11px] font-mono text-[var(--text-secondary)]">Say <span className="text-amber-500 font-bold">"yes, send it"</span> to confirm.</p>
+                  <div className="flex items-center gap-2">
+                    <button onClick={confirmShare} autoFocus
+                      className="px-4 py-1.5 rounded-full text-[12px] font-bold bg-amber-500 text-white hover:bg-amber-600 active:scale-95 transition-all">
+                      Confirm
+                    </button>
+                    <button onClick={cancelShare}
+                      className="px-4 py-1.5 rounded-full text-[12px] font-mono border border-[var(--card-border)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] active:scale-95 transition-all">
+                      Cancel
+                    </button>
+                    <span className="text-[10px] font-mono text-[var(--text-secondary)] ml-1">or say "yes"</span>
+                  </div>
                 )}
               </section>
             )}
@@ -2367,7 +2408,17 @@ export default function App() {
                   <p className="text-[11px] font-mono text-amber-600 dark:text-amber-400 mb-2">⚠ {pendingAction.note}</p>
                 )}
                 {!pendingAction.confirmed && (
-                  <p className="text-[11px] font-mono text-[var(--text-secondary)]">Say <span className="text-amber-500 font-bold">"yes, do it"</span> to confirm.</p>
+                  <div className="flex items-center gap-2">
+                    <button onClick={confirmPendingAction} autoFocus
+                      className="px-4 py-1.5 rounded-full text-[12px] font-bold bg-amber-500 text-white hover:bg-amber-600 active:scale-95 transition-all">
+                      Confirm
+                    </button>
+                    <button onClick={cancelPendingAction}
+                      className="px-4 py-1.5 rounded-full text-[12px] font-mono border border-[var(--card-border)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] active:scale-95 transition-all">
+                      Cancel
+                    </button>
+                    <span className="text-[10px] font-mono text-[var(--text-secondary)] ml-1">or say "yes"</span>
+                  </div>
                 )}
               </section>
             )}
