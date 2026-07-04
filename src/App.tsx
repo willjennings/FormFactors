@@ -702,7 +702,7 @@ export default function App() {
         // Notify AI of the new layout if session is active (core context — both backends).
         if (providerRef.current) {
           const layoutInfo = es.map(e => `${displayName(e)}: [${e.bbox.map(Math.round).join(', ')}]`).join('\n');
-          providerRef.current.sendTextHint(`[SYSTEM UPDATE: The gallery photos have been rearranged and now overlap the Google Maps box. Here are their new coordinates (ymin, xmin, ymax, xmax):\n${layoutInfo}\nIMPORTANT: The photos are ON TOP of the map. If the user points at or circles an area that contains both a photo and the map, they are referring to the PHOTO. Use these to identify what the user is pointing at when they say "this" or "here". DO NOT RESPOND TO THIS UPDATE. STAY SILENT UNTIL THE USER SPEAKS.]`);
+          providerRef.current.sendTextHint(`[SYSTEM UPDATE: The on-screen program elements and the Google Maps box are at these coordinates (ymin, xmin, ymax, xmax):\n${layoutInfo}\nUse these to identify what the user is pointing at when they say "this" or "here". DO NOT RESPOND TO THIS UPDATE. STAY SILENT UNTIL THE USER SPEAKS.]`);
         }
       }
     };
@@ -2702,28 +2702,12 @@ When the user points and speaks a command, call the appropriate tool — a map t
   }, [handlePointerMove, handlePointerUp]);
 
 
-  // G3 OCR: when enabled during a live session, recognize words in each gallery screenshot
-  // and tell the model the text content. Failures (offline / blocked model assets) are
-  // logged and ignored — the app falls back to whole-tile pointing.
-  useEffect(() => {
-    if (!ocrEnabled || !isLive) return;
-    let cancelled = false;
-    addLog('info', 'OCR enabled — recognizing screenshot text…');
-    for (const img of program.images) {
-      ocrImage(img.url)
-        .then(words => {
-          if (cancelled) return;
-          ocrWordsRef.current[img.title] = words;
-          addLog('info', `OCR: ${img.title} — ${words.length} words`);
-          if (words.length && providerRef.current) {
-            const txt = words.map(w => w.text).slice(0, 40).join(' ');
-            providerRef.current.sendTextHint(`[OCR: "${img.title}" contains the text: ${txt}. The user may point at individual words. DO NOT acknowledge this message.]`);
-          }
-        })
-        .catch(err => { if (!cancelled) addLog('info', `OCR unavailable for ${img.title}: ${err?.message ?? err}`); });
-    }
-    return () => { cancelled = true; };
-  }, [ocrEnabled, isLive, activeProgram]);
+  // G3 OCR retired: this effect previously OCR-d img.url picsum stock photos and sent hints
+  // like `[OCR: "Word Ribbon" contains the text: ...]` — asserting on-screen text from images
+  // that no longer render anywhere. Retired with the picsum tiles (Task 9/10). A future pass
+  // can OCR the live surface snapshot (surfaceSnapshotRef) instead and remain honest.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { /* retired — see comment above */ }, [ocrEnabled, isLive, activeProgram]);
 
   // Tile perception retired with the picsum tiles: the surfaces ARE self-describing DOM,
   // so registered titles are literally what's on screen. The PerceivedCache seam stays
@@ -2886,10 +2870,9 @@ When the user points and speaks a command, call the appropriate tool — a map t
 
   // Refresh the real-pixel surface snapshot (throttled, fail-soft) for the vision frame.
   useEffect(() => {
-    if (!isLive) {
-      surfaceSnapshotRef.current = null;
-      return;
-    }
+    // Clear immediately so a program swap never composites the previous program's pixels.
+    surfaceSnapshotRef.current = null;
+    if (!isLive) return;
     let cancelled = false;
     const gate = makeThrottle(500);
     const tick = async () => {
@@ -3453,8 +3436,8 @@ When the user points and speaks a command, call the appropriate tool — a map t
                 ))}
               </div>
             </div>
-            {/* G3 OCR sub-elements toggle — read words in the screenshots so you can point at one. */}
-            <div className="w-full mb-4 flex items-center justify-between gap-3 px-4 py-3 rounded-2xl border bg-[var(--inner-box-bg)] border-[var(--card-border)]">
+            {/* G3 OCR sub-elements toggle — hidden: OCR of retired tile URLs would describe off-screen imagery; re-enable once wired to the live surface snapshot. */}
+            <div className="hidden w-full mb-4 flex items-center justify-between gap-3 px-4 py-3 rounded-2xl border bg-[var(--inner-box-bg)] border-[var(--card-border)]">
               <div className="flex flex-col">
                 <span className="text-[12px] font-bold text-[var(--text-primary)]">OCR sub-elements</span>
                 <span className="text-[10px] font-mono text-[var(--text-secondary)]">{ocrEnabled ? 'point at individual words' : 'whole-tile pointing'}</span>
