@@ -1,8 +1,8 @@
 import React, { forwardRef, useState } from 'react';
-import { Save, SaveAll, FileText, Sigma, Divide, Table } from 'lucide-react';
+import { Save, SaveAll, FileText, Sigma, Divide, Table, Presentation, Plus, Copy } from 'lucide-react';
 import type { MockDoc, Program, ProgramImage } from '../scenarios';
 import { CATEGORY_COLORS } from '../scenarios';
-import { buildWordModel } from './surfaceModels';
+import { buildWordModel, buildPptModel } from './surfaceModels';
 import { Spreadsheet } from './Spreadsheet';
 
 // Functional mini-app surfaces. Every named element in the program set renders as a real
@@ -142,12 +142,62 @@ function ExcelSurface({ program, doc, live, focusTitle, onAction, onElementClick
   );
 }
 
+function PptSurface({ program, doc, live, focusTitle, onAction, onElementClick }: SurfaceProps) {
+  const [draft, setDraft] = useState<string | null>(null);
+  if (doc.kind !== 'powerpoint') return null;
+  const m = buildPptModel(doc);
+  return (
+    <div className="flex flex-col h-full gap-2">
+      <TitleBar icon={<Presentation size={15} />} filename="Pitch deck.pptx" statusLabel={m.statusLabel} />
+      <SurfaceElement img={imgOf(program, 1)} live={live} focusTitle={focusTitle} onElementClick={onElementClick}
+        className="flex items-center gap-1 rounded-lg border border-[var(--card-border)] bg-[var(--bg-color)] p-1.5">
+        <span className="px-2 text-[10px] font-mono uppercase tracking-wide text-[var(--text-secondary)]">Insert</span>
+        <SurfaceElement img={imgOf(program, 2)} live={live} focusTitle={focusTitle} onElementClick={onElementClick}>
+          <RibbonButton icon={<Plus size={16} />} label="New Slide"
+            onClick={() => onAction('insert_object', { target: 'New Slide button' })} />
+        </SurfaceElement>
+        <SurfaceElement img={imgOf(program, 3)} live={live} focusTitle={focusTitle} onElementClick={onElementClick}>
+          <RibbonButton icon={<Copy size={16} />} label="Duplicate"
+            onClick={() => onAction('insert_object', { target: 'Duplicate Slide button', detail: 'duplicate' })} />
+        </SurfaceElement>
+      </SurfaceElement>
+      <div className="flex-1 flex gap-2 min-h-0">
+        {/* filmstrip (chrome, not a named element) */}
+        <div className="w-20 shrink-0 flex flex-col gap-1.5 overflow-y-auto">
+          {m.slides.map((s, i) => (
+            <div key={i} className={`h-12 shrink-0 rounded-md border text-[8px] text-center flex items-center justify-center px-1 leading-tight bg-white dark:bg-[#0f1623] text-[var(--text-primary)] ${i === m.slides.length - 1 ? 'border-[var(--accent-color)]' : 'border-[var(--card-border)]'}`}>
+              {s}
+            </div>
+          ))}
+        </div>
+        <SurfaceElement img={imgOf(program, 4)} live={live} focusTitle={focusTitle} onElementClick={onElementClick}
+          className="flex-1 rounded-lg border border-[var(--card-border)] bg-white dark:bg-[#0f1623] flex items-center justify-center">
+          <input
+            value={draft ?? m.currentTitle}
+            onFocus={() => setDraft(m.currentTitle)}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={() => {
+              if (draft !== null && draft !== m.currentTitle) onAction('edit_content', { target: 'Slide canvas', detail: draft });
+              setDraft(null);
+            }}
+            className="w-3/4 bg-transparent outline-none text-center text-lg font-bold text-slate-900 dark:text-slate-100"
+          />
+          {m.transition && (
+            <span className="absolute bottom-2 right-3 text-[9px] font-mono text-[var(--text-secondary)]">Transition: {m.transition}</span>
+          )}
+        </SurfaceElement>
+      </div>
+    </div>
+  );
+}
+
 /** Dispatcher: one surface per program. Tasks 5-7 fill in the remaining branches. */
 export const ProgramSurface = forwardRef<HTMLDivElement, SurfaceProps>((props, ref) => {
   return (
     <div ref={ref} className="program-surface w-full h-full">
       {props.program.id === 'word' && <WordSurface {...props} />}
       {props.program.id === 'excel' && <ExcelSurface {...props} />}
+      {props.program.id === 'powerpoint' && <PptSurface {...props} />}
     </div>
   );
 });

@@ -3202,7 +3202,7 @@ When the user points and speaks a command, call the appropriate tool — a map t
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3 sm:gap-4 overflow-y-auto pr-2 custom-scrollbar flex-1">
-                {activeProgram === 'word' ? (
+                {activeProgram === 'word' || activeProgram === 'powerpoint' ? (
                   <div className="col-span-2 h-full">
                     <ProgramSurface program={program} doc={mockDoc} live={isLive} focusTitle={focusTitle}
                       onAction={handleSurfaceAction} onElementClick={handleSurfaceElementClick} />
