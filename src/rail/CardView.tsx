@@ -18,13 +18,22 @@ export function CardView({ card, index, mode, whyOpen, flipped, onWhy, onFlip, o
       </div>
     );
   }
-  const dim = mode === 'dimmed';
+  if (mode === 'dimmed') {
+    // §5 dimmed titles: kicker + first line only (no result/notice/affordances).
+    const firstLine = card.t === 'concept' ? card.front : card.t === 'recap' ? card.lines?.[0] : card.text ?? card.prompt;
+    return (
+      <div className="rounded-xl border px-3 py-2 bg-[var(--card-bg)] opacity-40 border-[var(--card-border)]">
+        <span className="text-[9px] font-mono uppercase tracking-widest text-[var(--text-secondary)]">{KICKER[card.t]}{card.subgoal ? ` · ${card.subgoal}` : ''}</span>
+        <p className="text-[13px] font-semibold text-[var(--text-primary)] mt-0.5 truncate">{firstLine}</p>
+      </div>
+    );
+  }
   const boldTarget = (text: string) =>
     card.target && text.includes(card.target)
       ? (<>{text.split(card.target)[0]}<strong>{card.target}</strong>{text.split(card.target).slice(1).join(card.target)}</>)
       : text;
   return (
-    <div className={`rounded-xl border px-3 py-2 bg-[var(--card-bg)] ${dim ? 'opacity-40 border-[var(--card-border)]' : card.state === 'failed' ? 'border-red-400/60' : 'border-[var(--accent-color)]/50 shadow-sm'}`}>
+    <div className={`rounded-xl border px-3 py-2 bg-[var(--card-bg)] ${card.state === 'failed' ? 'border-red-400/60' : 'border-[var(--accent-color)]/50 shadow-sm'}`}>
       <div className="flex items-center justify-between">
         <span className="text-[9px] font-mono uppercase tracking-widest text-[var(--text-secondary)]">{KICKER[card.t]}{card.subgoal ? ` · ${card.subgoal}` : ''}</span>
         {card.target && (
@@ -44,7 +53,7 @@ export function CardView({ card, index, mode, whyOpen, flipped, onWhy, onFlip, o
         <>
           <p className="text-[13px] font-semibold text-[var(--text-primary)] mt-0.5">
             {card.band === 'hollow' && card.t === 'do'
-              ? <>Find <strong>{card.target}</strong> — I can't point at it.</>
+              ? <>Find <strong>{card.target}</strong> — I can't point at it. {card.text && boldTarget(card.text)}</>
               : boldTarget(card.text ?? card.prompt ?? '')}
           </p>
           {card.result && <p className="text-[11px] text-teal-600 dark:text-teal-400 mt-0.5">→ {card.result}</p>}
@@ -57,7 +66,7 @@ export function CardView({ card, index, mode, whyOpen, flipped, onWhy, onFlip, o
           )}
         </>
       )}
-      {!dim && (card.why || (card.entityId && card.band === 'solid')) && (
+      {(card.why || (card.entityId && card.band === 'solid')) && (
         <div className="flex items-center gap-3 justify-end mt-1">
           {card.why && <button onClick={onWhy} className="text-[10px] font-mono text-[var(--text-secondary)] hover:text-[var(--text-primary)]">why?</button>}
           {card.entityId && card.band === 'solid' && <button onClick={onShowMe} className="text-[10px] font-mono text-[var(--accent-color)]">show me</button>}

@@ -28,12 +28,16 @@ describe('railStore', () => {
     expect(s.rail!.activeIndex).toBe(2);
   });
 
-  it('auto-CHECK passes on doc.changed and completes through non-gating recap', () => {
+  it('auto-CHECK passes on doc.changed; trailing RECAP is active (not complete); user action completes the rail', () => {
     let s = reduceRail(initialRailState(), { type: 'rail.set', rail: rail() }, 0);
     s = reduceRail(s, { type: 'user.elementAction', entityId: 'word-2' }, 1);
     s = reduceRail(s, { type: 'doc.changed', doc: applyAction(doc, 'save_file', {}) }, 2);
     expect(s.rail!.cards[2].state).toBe('done');
-    expect(railComplete(s)).toBe(true);   // recap is non-gating: completing the check completes the rail
+    expect(s.rail!.activeIndex).toBe(3);   // recap is now ACTIVE, not auto-completed
+    expect(railComplete(s)).toBe(false);
+    // Any user action advances past the glanceable recap → complete
+    s = reduceRail(s, { type: 'user.elementAction', entityId: 'word-2' }, 3);
+    expect(railComplete(s)).toBe(true);
   });
 
   it('auto-CHECK failure renders failed and does NOT advance', () => {
@@ -71,6 +75,33 @@ describe('railStore', () => {
     expect(s.rail!.cards[2].state).toBe('failed');
     s = reduceRail(s, { type: 'doc.changed', doc: applyAction(doc, 'save_file', {}) }, 3);
     expect(s.rail!.cards[2].state).toBe('done');                              // failed must not block re-evaluation
+    expect(s.rail!.activeIndex).toBe(3);                                      // recap is now ACTIVE
+    expect(railComplete(s)).toBe(false);
+    // user.checkConfirm also advances past non-gating active card
+    s = reduceRail(s, { type: 'user.checkConfirm' }, 4);
     expect(railComplete(s)).toBe(true);
+  });
+
+  it('an ANSWER-only rail renders its card active, not as a stub', () => {
+    const r = respondCallToRail({ seq: 'answer', guideLine: 'Here you go.', cards: [
+      { t: 'answer', text: 'That is the Save button.' },
+    ] }, entities, doc, 0);
+    if ('error' in r) throw new Error(r.error);
+    const s = reduceRail(initialRailState(), { type: 'rail.set', rail: r.rail }, 0);
+    const v = visibleCards(s);
+    expect(v[0].mode).toBe('active');
+    expect(railComplete(s)).toBe(false);
+  });
+
+  it('rail.set alone never flips railComplete', () => {
+    // A rail with only non-gating cards should have its first card ACTIVE, not complete.
+    const r = respondCallToRail({ seq: 'answer', guideLine: 'Here you go.', cards: [
+      { t: 'answer', text: 'That is the Save button.' },
+      { t: 'recap', lines: ['Identified.'] },
+    ] }, entities, doc, 0);
+    if ('error' in r) throw new Error(r.error);
+    const s = reduceRail(initialRailState(), { type: 'rail.set', rail: r.rail }, 0);
+    expect(railComplete(s)).toBe(false);
+    expect(s.rail!.activeIndex).not.toBeNull();
   });
 });

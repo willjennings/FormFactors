@@ -190,7 +190,7 @@ const VOICE_TOOLS: VoiceTool[] = [
   },
   {
     name: 'explain',
-    description: 'Verbally name or describe what the user is pointing at (e.g. "what is this?", "what am I looking at?"). LOW-COMMITMENT: it does NOT change any state. Call it when the user asks to identify something.',
+    description: 'Verbally name what the user is pointing at when they ask "what is this?". IDENTIFY ONLY — say the short name; an ANSWER card renders automatically. For any EXPLANATION of what something does, or any how-to, use the respond tool instead.',
     parameters: { type: 'object', properties: { subject: { type: 'string', description: 'The on-screen element or thing being identified.' } }, required: ['subject'] },
   },
   {
@@ -534,6 +534,8 @@ export default function App() {
     const prev = railStateRef.current;
     const next = reduceRail(prev, e, Date.now());
     // Interaction telemetry — only on the opening/adding direction
+    if (e.type === 'rail.set')
+      e.rail.cards.forEach(c => telemetry.guidance('card_dealt', { taskKey: e.rail.seq, cardType: c.t, band: c.band }));
     if (e.type === 'user.whyToggle' && next.openWhy !== null && next.openWhy !== prev.openWhy)
       telemetry.guidance('why_opened', { taskKey: prev.rail?.seq });
     if (e.type === 'user.flip' && next.flipped.length > prev.flipped.length)
@@ -541,8 +543,9 @@ export default function App() {
     // Dismiss with active step → abandoned
     if (e.type === 'rail.dismiss' && prev.rail && prev.rail.activeIndex !== null)
       telemetry.guidance('rail_abandoned', { taskKey: prev.rail.seq });
-    // Rail completed (activeIndex flipped to null)
-    if (!railComplete(prev) && railComplete(next))
+    // Rail completed (activeIndex flipped to null); suppress on rail.set (belt-and-braces: rail.set
+    // is idempotent and a fresh set should never be treated as an immediate completion).
+    if (e.type !== 'rail.set' && !railComplete(prev) && railComplete(next))
       telemetry.guidance('rail_complete', { taskKey: next.rail?.seq ?? prev.rail?.seq });
     // Check card state transitions
     if (prev.rail && prev.rail.activeIndex !== null) {
@@ -1022,7 +1025,8 @@ export default function App() {
     const fc = { id: call.id, name: call.name, args: call.args };
     // G9 IDEMPOTENCY: drop a duplicate tool call the model re-emitted within the window (a
     // known agent failure mode — e.g. replaying a chain). Ack it so the model doesn't hang.
-    if (callDeduperRef.current.seen(fc.name, argsKey(fc.args), Date.now())) {
+    // respond is exempt: rail.set is idempotent and a rejected payload must be retryable within the window.
+    if (fc.name !== 'respond' && callDeduperRef.current.seen(fc.name, argsKey(fc.args), Date.now())) {
       addLog('info', `Duplicate tool call skipped: ${fc.name}`);
       providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true, deduped: true });
       return;
@@ -1047,7 +1051,6 @@ export default function App() {
         providerRef.current?.sendToolResponse(fc.id, fc.name, { success: false, error: mapped.error });
       } else {
         railDispatchRef.current?.({ type: 'rail.set', rail: mapped.rail });
-        mapped.rail.cards.forEach(() => telemetry.guidance('card_dealt', { taskKey: mapped.rail.seq }));
         addLog('tool', `Tool Call: respond(${mapped.rail.seq}) — ${mapped.rail.cards.length} cards`);
         providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true, rendered: mapped.rail.cards.length });
       }

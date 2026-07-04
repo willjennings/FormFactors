@@ -13,6 +13,9 @@ describe('rail demo', () => {
     let s = reduceRail(initialRailState(), { type: 'rail.set', rail }, 0);
     s = reduceRail(s, { type: 'user.elementAction', entityId: 'word-2' }, 1);
     s = reduceRail(s, { type: 'doc.changed', doc: applyAction(doc, 'save_file', {}) }, 2);
+    // After check passes the trailing recap becomes ACTIVE (not auto-completed); any user
+    // action advances past it.
+    s = reduceRail(s, { type: 'user.elementAction', entityId: 'word-2' }, 3);
     expect(railComplete(s)).toBe(true);
   });
   it('returns a rail for every program (never null on the shipped programs)', () => {

@@ -41,7 +41,7 @@ export function RailPanel({ state, teachingRail, onEvent, onShowMe }: {
       <div
         className="flex items-center justify-between px-1 cursor-grab active:cursor-grabbing select-none touch-none"
         onPointerDown={(e) => { e.stopPropagation(); (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); drag.current = { sx: e.clientX, sy: e.clientY, start: pos }; }}
-        onPointerMove={(e) => { if (drag.current) setPos({ x: drag.current.start.x - (e.clientX - drag.current.sx), y: drag.current.start.y + (e.clientY - drag.current.sy) }); }}
+        onPointerMove={(e) => { if (drag.current) setPos({ x: drag.current.start.x + (e.clientX - drag.current.sx), y: drag.current.start.y + (e.clientY - drag.current.sy) }); }}
         onPointerUp={() => { drag.current = null; }}
       >
         <span className="text-[9px] font-mono uppercase tracking-widest text-[var(--text-secondary)]">{projected.rail.seq}</span>

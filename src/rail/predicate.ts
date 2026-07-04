@@ -5,7 +5,7 @@ import type { MockDoc } from '../scenarios';
 export function evaluatePredicate(doc: MockDoc, expect: { path: string; equals: unknown }): boolean | null {
   let cur: unknown = doc;
   for (const seg of expect.path.split('.')) {
-    if (cur === null || typeof cur !== 'object' || !(seg in (cur as Record<string, unknown>))) return null;
+    if (cur === null || typeof cur !== 'object' || !Object.prototype.hasOwnProperty.call(cur, seg)) return null;
     cur = (cur as Record<string, unknown>)[seg];
   }
   return cur === expect.equals;

@@ -40,6 +40,7 @@ export function TeachingLayer({ entities, program, demo = false, dispatchRef, on
     onStateChange?.(next);
   };
   useEffect(() => { if (dispatchRef) { dispatchRef.current = dispatch; return () => { dispatchRef.current = null; }; } }, [dispatchRef]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { onStateChange?.(stateRef.current); }, []);
 
   // Toast expiry: schedule a re-render 2.6 s after a block lands so toastFresh re-evaluates.

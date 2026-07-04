@@ -67,6 +67,7 @@ export function respondCallToRail(
         if (typeof raw.text !== 'string' || !raw.text) return err(`Card ${i}: ${t.toUpperCase()} requires "text".`);
         card.text = budget(raw.text, t === 'orient' ? BUDGETS.orient : BUDGETS.caution, card);
         if (t === 'orient') card.state = 'done'; // context, never a gate
+        else bindTarget(); // caution is entity-bound per grammar §4; target is optional
         break;
       }
       case 'check': {
@@ -81,6 +82,7 @@ export function respondCallToRail(
           card.expect = { path: ex.path, equals: ex.equals };
         }
         card.text = budget(raw.text, BUDGETS.check, card);
+        bindTarget(); // check is entity-bound per grammar §4; target is optional
         break;
       }
       case 'concept': {
