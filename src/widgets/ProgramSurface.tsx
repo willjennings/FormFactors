@@ -1,8 +1,9 @@
 import React, { forwardRef, useState } from 'react';
-import { Save, SaveAll, FileText } from 'lucide-react';
+import { Save, SaveAll, FileText, Sigma, Divide, Table } from 'lucide-react';
 import type { MockDoc, Program, ProgramImage } from '../scenarios';
 import { CATEGORY_COLORS } from '../scenarios';
 import { buildWordModel } from './surfaceModels';
+import { Spreadsheet } from './Spreadsheet';
 
 // Functional mini-app surfaces. Every named element in the program set renders as a real
 // DOM node stamped data-element-id (the generic measurement contract) so teaching overlays
@@ -15,6 +16,7 @@ export type SurfaceProps = {
   focusTitle?: string;
   onAction: (verb: string, args: { target?: string; detail?: string }) => void;
   onElementClick: (elementId: number) => void;
+  spreadsheetRef?: React.Ref<HTMLDivElement>;
 };
 
 /** Wrapper making one named element measurable + clickable. stopPropagation keeps a click
@@ -115,11 +117,37 @@ function WordSurface({ program, doc, live, focusTitle, onAction, onElementClick 
   );
 }
 
+function ExcelSurface({ program, doc, live, focusTitle, onAction, onElementClick, spreadsheetRef }: SurfaceProps) {
+  if (doc.kind !== 'excel') return null;
+  return (
+    <div className="flex flex-col h-full gap-2">
+      <TitleBar icon={<Table size={15} />} filename="Q2 numbers.xlsx" statusLabel={doc.saved ? 'Saved' : 'Edited'} />
+      <SurfaceElement img={imgOf(program, 1)} live={live} focusTitle={focusTitle} onElementClick={onElementClick}
+        className="flex items-center gap-1 rounded-lg border border-[var(--card-border)] bg-[var(--bg-color)] p-1.5">
+        <span className="px-2 text-[10px] font-mono uppercase tracking-wide text-[var(--text-secondary)]">Formulas</span>
+        <SurfaceElement img={imgOf(program, 2)} live={live} focusTitle={focusTitle} onElementClick={onElementClick}>
+          <RibbonButton icon={<Sigma size={16} />} label="SUM"
+            onClick={() => onAction('insert_object', { target: 'SUM function', detail: 'SUM' })} />
+        </SurfaceElement>
+        <SurfaceElement img={imgOf(program, 3)} live={live} focusTitle={focusTitle} onElementClick={onElementClick}>
+          <RibbonButton icon={<Divide size={16} />} label="AVERAGE"
+            onClick={() => onAction('insert_object', { target: 'AVERAGE function', detail: 'AVERAGE' })} />
+        </SurfaceElement>
+      </SurfaceElement>
+      <div className="flex-1 rounded-lg border border-[var(--card-border)] overflow-hidden">
+        <Spreadsheet ref={spreadsheetRef} doc={doc} elementIds={{ A1: 4 }}
+          onCellClick={(ref) => { if (ref === 'A1') onElementClick(4); }} />
+      </div>
+    </div>
+  );
+}
+
 /** Dispatcher: one surface per program. Tasks 5-7 fill in the remaining branches. */
 export const ProgramSurface = forwardRef<HTMLDivElement, SurfaceProps>((props, ref) => {
   return (
     <div ref={ref} className="program-surface w-full h-full">
       {props.program.id === 'word' && <WordSurface {...props} />}
+      {props.program.id === 'excel' && <ExcelSurface {...props} />}
     </div>
   );
 });

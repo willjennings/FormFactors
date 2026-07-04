@@ -2,10 +2,16 @@ import React, { forwardRef } from 'react';
 import type { MockDoc } from '../scenarios';
 import { buildGridModel } from './spreadsheetGrid';
 
-type Props = { doc: MockDoc; selection?: string | null };
+type Props = {
+  doc: MockDoc;
+  selection?: string | null;
+  /** Optional scene-element stamping: cell ref → data-element-id (e.g. { A1: 4 }). */
+  elementIds?: Record<string, number>;
+  onCellClick?: (ref: string) => void;
+};
 
 /** A real DOM spreadsheet grid bound to MockDoc.excel — the node the vision pipeline snapshots. */
-export const Spreadsheet = forwardRef<HTMLDivElement, Props>(({ doc, selection = null }, ref) => {
+export const Spreadsheet = forwardRef<HTMLDivElement, Props>(({ doc, selection = null, elementIds, onCellClick }, ref) => {
   const model = buildGridModel(doc, selection);
   return (
     <div
@@ -32,6 +38,8 @@ export const Spreadsheet = forwardRef<HTMLDivElement, Props>(({ doc, selection =
                 <td
                   key={cell.ref}
                   data-cell={cell.ref}
+                  data-element-id={elementIds?.[cell.ref]}
+                  onClick={onCellClick ? (e) => { e.stopPropagation(); onCellClick(cell.ref); } : undefined}
                   className={`border border-slate-300 px-3 py-1 text-right ${
                     cell.selected ? 'bg-blue-100 outline outline-2 outline-blue-500' : ''
                   }`}

@@ -67,7 +67,6 @@ import { CallDeduper, argsKey, parseRepair } from './coherence';
 import { assignTargetNumbers, parseTargetSelection } from './input_targets';
 import { ocrImage, terminateOcr, clearOcrCache } from './ocr';
 import type { OcrWord } from './ocr';
-import { Spreadsheet } from './widgets/Spreadsheet';
 import { buildSpreadsheetSnapshot, formatSnapshotForModel } from './widgets/spreadsheetData';
 import { ProgramSurface } from './widgets/ProgramSurface';
 import type { TeachingEvent } from './teaching/types';
@@ -3210,7 +3209,9 @@ When the user points and speaks a command, call the appropriate tool — a map t
                   </div>
                 ) : activeProgram === 'excel' ? (
                   <div className="col-span-2 h-full">
-                    <Spreadsheet ref={spreadsheetRef} doc={mockDoc} />
+                    <ProgramSurface program={program} doc={mockDoc} live={isLive} focusTitle={focusTitle}
+                      onAction={handleSurfaceAction} onElementClick={handleSurfaceElementClick}
+                      spreadsheetRef={spreadsheetRef} />
                   </div>
                 ) : (
                 PHOTOS.map((photo, i) => {
