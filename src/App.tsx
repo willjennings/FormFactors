@@ -3,19 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useRef, useEffect } from 'react';
-import confetti from 'canvas-confetti';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { GoogleGenAI, Modality, GenerateContentResponse } from '@google/genai';
 import type { VoiceTool, VoiceProvider, ProviderKind } from './voice/types';
-import { 
-  Mic, 
-  MicOff, 
-  ChevronRight, 
-  ChevronLeft,
+import {
+  Mic,
   ChevronUp,
   ChevronDown,
   RotateCcw,
-  Lightbulb,
   Settings,
   X,
   CheckCircle,
@@ -70,6 +65,7 @@ import type { OcrWord } from './ocr';
 import { buildSpreadsheetSnapshot, formatSnapshotForModel } from './widgets/spreadsheetData';
 import { ProgramSurface } from './widgets/ProgramSurface';
 import { ProgramWindow } from './shell/ProgramWindow';
+import { Omnibox } from './shell/Omnibox';
 import { clampWindow, loadWindowRect, saveWindowRect, type WindowRect } from './shell/windowState';
 import { docStatusLabel } from './widgets/surfaceModels';
 import type { TeachingEvent } from './teaching/types';
@@ -274,6 +270,13 @@ export default function App() {
   const program = React.useMemo(() => getProgram(activeProgram), [activeProgram]);
   // The carousel is built from the shared task library, filtered + ordered for this program.
   const TASKS = React.useMemo(() => tasksForProgram(activeProgram), [activeProgram]);
+  // Suggestion chips shown in the Omnibox — one per task, color-coded by action category.
+  const suggestions = useMemo(() => TASKS.map(t => ({
+    key: t.key,
+    label: t.title,
+    phrase: t.hint.match(/"(.*?)"/)?.[1] ?? t.title,
+    color: ACTION_CATEGORIES[t.action].color,
+  })), [TASKS]);
   // Tools offered to the voice model = the kept verbs (explain, share) + the action verbs this
   // program exposes. Read at connect time; program swap reconnects (see handleProgramChange).
   const voiceTools = React.useMemo(
@@ -306,7 +309,7 @@ export default function App() {
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [firstRunHint, setFirstRunHint] = useState(true);
-  void drawerOpen; void firstRunHint;
+  void drawerOpen;
   const [showRotateOverlay, setShowRotateOverlay] = useState(false);
   const [showMobileOverlay, setShowMobileOverlay] = useState(false);
   // Testbed: run on phone/tablet to evaluate the paradigm across form factors, bypassing the
@@ -352,7 +355,6 @@ export default function App() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [activePrompt, setActivePrompt] = useState<string | null>(null);
   const [liveTranscription, setLiveTranscription] = useState("");
-  const [typedDraft, setTypedDraft] = useState("");
   const [isConnecting, setIsConnecting] = useState(false);
   const pendingTypedRef = useRef<string | null>(null);
   const lastInputModalityRef = useRef<InputModality>('voice');
@@ -439,9 +441,6 @@ export default function App() {
   const spatialDescriptionRef = useRef<string | null>(null);
 
   const [sendFrequency, setSendFrequency] = useState(150); // Increased frequency for better AI responsiveness
-  const [currentTaskIndex, setCurrentTaskIndex] = useState(0);
-  const [slideDirection, setSlideDirection] = useState(0); // -1 for left, 1 for right
-  const [completedTaskIds, setCompletedTaskIds] = useState<number[]>([]);
   // PHASE G: an outward share request — witness recipient + payload before sending.
   const [shareRequest, setShareRequest] = useState<{ recipient: string; payload?: string; confirmed: boolean } | null>(null);
   // Action verbs (save/edit/format/insert/photo) mutate this mock document; a pending action
@@ -649,39 +648,18 @@ export default function App() {
   }, [bypassDeviceGate]);
 
 
-  const allTasksCompleted = completedTaskIds.length === TASKS.length;
-  const isCongratulationsPage = currentTaskIndex === TASKS.length;
-  const isCurrentTaskDone = !isCongratulationsPage ? completedTaskIds.includes(TASKS[currentTaskIndex].id) : true;
-
-  // The active scenario is the single source of truth for "what the user should do now".
-  const activeTask = isCongratulationsPage ? null : TASKS[currentTaskIndex];
-  // The element this scenario wants the user to point at — highlighted in the gallery
-  // (DOM) and pre-focused on the trace canvas during a live session.
-  const focusTitle = activeTask?.targetElement;
+  // focusTitle: set by chip tap (the task's targetElement), cleared on submit.
+  // Drives the "Point here" ring on the program surface and pre-focuses the trace canvas.
+  const [focusTitle, setFocusTitle] = useState<string | undefined>(undefined);
   useEffect(() => { focusTitleRef.current = focusTitle; }, [focusTitle]);
 
-  // Robust scenario switching: any task change (or program swap) is a deliberate context
-  // switch, so clear transient interaction state — markers, paint, and any pending action —
-  // so the new scenario starts from a clean slate.
+  // Program swap is a deliberate context switch — clear transient interaction state.
   useEffect(() => {
     markersRef.current = [];
     lastMarkerTimeRef.current = {};
     setPersistentPaths([]);
     setPendingAction(null);
-  }, [currentTaskIndex, activeProgram]);
-
-  // Bounds safety: if the program's task count shrinks below the current index, snap back.
-  useEffect(() => {
-    if (currentTaskIndex > TASKS.length) setCurrentTaskIndex(0);
-  }, [TASKS.length, currentTaskIndex]);
-
-  // Jump straight to a scenario (used by the scenario picker). Clamped + animated.
-  const goToTask = (index: number) => {
-    const maxIndex = allTasksCompleted ? TASKS.length : Math.max(0, TASKS.length - 1);
-    const clamped = Math.max(0, Math.min(index, maxIndex));
-    setSlideDirection(clamped >= currentTaskIndex ? 1 : -1);
-    setCurrentTaskIndex(clamped);
-  };
+  }, [activeProgram]);
 
   const addLog = (type: DebugLog['type'], message: string) => {
     setLogs(prev => [{ time: new Date().toLocaleTimeString(), type, message }, ...prev].slice(0, 50));
@@ -1390,10 +1368,8 @@ export default function App() {
     processInputTranscript(text);
     if (providerRef.current) {
       providerRef.current.sendUserText(text);
-      setTypedDraft("");
     } else {
       pendingTypedRef.current = text;
-      setTypedDraft("");
       setIsConnecting(true);
       startLiveSession();
     }
@@ -1405,10 +1381,7 @@ export default function App() {
   // user their text back so nothing is lost.
   const abortPendingTyped = () => {
     setIsConnecting(false);
-    if (pendingTypedRef.current) {
-      setTypedDraft(pendingTypedRef.current);
-      pendingTypedRef.current = null;
-    }
+    pendingTypedRef.current = null;
   };
 
   const startLiveSession = async () => {
@@ -1512,7 +1485,7 @@ export default function App() {
           onClose: () => { setIsLive(false); setIsConnecting(false); sessionRef.current = null; providerRef.current = null; addLog('info', 'Live Link Closed'); },
           onError: (m: string) => {
             setIsConnecting(false);
-            if (pendingTypedRef.current) { setTypedDraft(pendingTypedRef.current); pendingTypedRef.current = null; }
+            pendingTypedRef.current = null;
             let errMsg = m;
             if (errMsg.includes('Permission denied') || errMsg.includes('NotAllowedError')) {
               errMsg = "Microphone access denied. Please check your browser settings and ensure this site has permission to use your microphone.";
@@ -2184,8 +2157,6 @@ export default function App() {
     markersRef.current = [];
     setEntities([]);
     entitiesRef.current = [];
-    setCurrentTaskIndex(0);
-    setCompletedTaskIds([]);
     setPendingAction(null);
     const fresh = initialMockDoc(id);
     setMockDoc(fresh);
@@ -2338,178 +2309,19 @@ export default function App() {
             </ProgramWindow>
           )}
 
+          <Omnibox
+            isLive={isLive} isConnecting={isConnecting}
+            error={lastError} transcript={liveTranscription || null}
+            suggestions={suggestions} firstRunHint={firstRunHint}
+            onSubmit={(text) => { setFirstRunHint(false); setFocusTitle(undefined); sendTypedInput(text); }}
+            onMicToggle={() => { setFirstRunHint(false); isLive ? providerRef.current?.close() : startLiveSession(); }}
+            onChipTap={(s) => setFocusTitle(TASKS.find(t => t.key === s.key)?.targetElement)}
+          />
+
         </main>
 
         {/* Responsive Sidebar */}
         <aside id="sidebar-section" className="w-full lg:w-[400px] p-3 lg:p-6 flex flex-col gap-4 shrink-0 h-auto lg:h-full overflow-visible lg:overflow-y-auto custom-scrollbar">
-          {/* Task Box - Always Visible */}
-          <section id="task-section" className="shrink-0 relative">
-            <AnimatePresence mode="popLayout" custom={slideDirection}>
-              <motion.div
-                key={currentTaskIndex}
-                custom={slideDirection}
-                initial={{ opacity: 0, x: slideDirection * 100 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -slideDirection * 100 }}
-                transition={{ type: "spring", damping: 25, stiffness: 200 }}
-                className="bg-[var(--card-bg)] border border-[var(--card-border)] rounded-2xl p-6 text-[var(--text-primary)] relative overflow-hidden"
-              >
-                {/* Decorative background element */}
-                <div className="absolute -right-4 -top-4 w-24 h-24 bg-[var(--accent-color)]/5 rounded-full blur-2xl" />
-                
-                <div className="flex items-center justify-between mb-5 relative z-10">
-                  <div className="flex items-center gap-2">
-                    <div className="px-3 py-1 rounded-full bg-[var(--inverse-bg)] text-[var(--inverse-text)] text-[10px] font-mono font-bold uppercase tracking-widest">
-                      {isCongratulationsPage ? "COMPLETE" : `Task ${currentTaskIndex + 1}/${TASKS.length}`}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    {/* Jump directly to any scenario — robust switching, not just step-through. */}
-                    <select
-                      value={isCongratulationsPage ? '' : currentTaskIndex}
-                      onChange={(e) => { if (e.target.value !== '') goToTask(Number(e.target.value)); }}
-                      title="Jump to scenario"
-                      className="mr-1 max-w-[150px] text-[11px] font-mono bg-[var(--card-bg)] border border-[var(--card-border)] rounded-lg px-2 py-1 text-[var(--text-primary)]"
-                    >
-                      {isCongratulationsPage && <option value="">Complete</option>}
-                      {TASKS.map((t, i) => (
-                        <option key={t.key} value={i}>{`${i + 1}. ${t.title}`}</option>
-                      ))}
-                    </select>
-                    <button
-                      onClick={() => {
-                        setSlideDirection(-1);
-                        const total = allTasksCompleted ? TASKS.length + 1 : TASKS.length;
-                        setCurrentTaskIndex(prev => (prev - 1 + total) % total);
-                      }}
-                      className="p-1.5 rounded-full hover:bg-[var(--bg-color)] text-[var(--text-secondary)] transition-colors"
-                      title="Previous task"
-                    >
-                      <ChevronLeft size={18} />
-                    </button>
-                    <button
-                      onClick={() => {
-                        setSlideDirection(1);
-                        const total = allTasksCompleted ? TASKS.length + 1 : TASKS.length;
-                        setCurrentTaskIndex(prev => (prev + 1) % total);
-                      }}
-                      className="p-1.5 rounded-full hover:bg-[var(--bg-color)] text-[var(--text-secondary)] transition-colors"
-                      title="Next task"
-                    >
-                      <ChevronRight size={18} />
-                    </button>
-                  </div>
-                </div>
-
-                {isCongratulationsPage ? (
-                  <div className="flex flex-col items-center text-center py-4 relative z-10">
-                    <div className="w-20 h-20 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center mb-4">
-                      <CheckCircle size={40} className="text-green-600 dark:text-green-400" />
-                    </div>
-                    <h4 className="text-xl font-dm font-bold mb-2 text-[var(--text-primary)]">
-                      Congratulations!
-                    </h4>
-                    <p className="text-sm font-dm text-slate-500 mb-8 max-w-[240px]">
-                      You've completed all {TASKS.length} tasks.<br />
-                      Great job!
-                    </p>
-                    {/* 
-                    <button
-                      onClick={() => {
-                        setCompletedTaskIds([]);
-                        setCurrentTaskIndex(0);
-                        setSlideDirection(-1);
-                      }}
-                      className="relative w-full h-[60px] rounded-full font-dm font-bold text-[15px] tracking-[-0.025em] leading-[28px] transition-all flex items-center justify-center active:scale-95 border border-[var(--card-border)] bg-[var(--card-bg)] text-[var(--text-primary)] hover:bg-[#E9F0FE] dark:hover:bg-[#304359] hover:border-[#1A74E8] hover:text-[#1A74E8] dark:hover:text-white group"
-                    >
-                      Try another prototype
-                    </button>
-                    */}
-                  </div>
-                ) : (
-                  <>
-                    <div className="flex gap-4 items-start mb-5 relative z-10">
-                      <div className="w-20 h-20 rounded-xl overflow-hidden shrink-0 border border-[var(--card-border)] shadow-sm bg-[var(--bg-color)]">
-                        <img 
-                          src={TASKS[currentTaskIndex].image} 
-                          alt={TASKS[currentTaskIndex].title}
-                          className="w-full h-full object-cover"
-                          referrerPolicy="no-referrer"
-                          onError={(e) => {
-                            // Fallback if the ImgBB direct link guess fails
-                            (e.target as HTMLImageElement).src = `https://picsum.photos/seed/${TASKS[currentTaskIndex].id}/200/200`;
-                          }}
-                        />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        {(() => {
-                          const meta = ACTION_CATEGORIES[TASKS[currentTaskIndex].action];
-                          return (
-                            <span
-                              className="inline-block mb-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase tracking-wide"
-                              style={{ backgroundColor: `rgba(${meta.color}, 0.15)`, color: `rgb(${meta.color})` }}
-                            >
-                              {meta.label}
-                            </span>
-                          );
-                        })()}
-                        <h4 className="text-base font-dm font-bold mb-1.5 leading-tight text-[var(--text-primary)]">
-                          {TASKS[currentTaskIndex].title}
-                        </h4>
-                        <p className="text-[13px] font-dm text-[var(--text-secondary)] leading-snug">
-                          {TASKS[currentTaskIndex].description}
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="flex flex-col gap-3 relative z-10">
-                      <div className="flex items-center gap-3 bg-[var(--inner-box-bg)] px-6 py-4 rounded-xl">
-                        <Lightbulb size={16} className="text-[var(--text-primary)]" />
-                        <div className="text-xs text-[var(--text-primary)] leading-snug font-dm">
-                          <p className="opacity-50 mb-0.5">You can say:</p>
-                          <p className="font-bold italic text-sm">
-                            {TASKS[currentTaskIndex].hint.match(/"(.*?)"/)?.[0] || ""}
-                          </p>
-                        </div>
-                      </div>
-
-                      <button
-                        onClick={() => {
-                          if (isCurrentTaskDone) {
-                            setCompletedTaskIds(prev => prev.filter(id => id !== TASKS[currentTaskIndex].id));
-                            return;
-                          }
-                          const newCompletedIds = [...completedTaskIds, TASKS[currentTaskIndex].id];
-                          setCompletedTaskIds(newCompletedIds);
-                          confetti({
-                            particleCount: 100,
-                            spread: 70,
-                            origin: { y: 0.6 }
-                          });
-                          
-                          setTimeout(() => {
-                            setSlideDirection(1);
-                            setTimeout(() => {
-                              if (newCompletedIds.length === TASKS.length) {
-                                setCurrentTaskIndex(TASKS.length);
-                              } else {
-                                setCurrentTaskIndex(prev => (prev + 1) % TASKS.length);
-                              }
-                            }, 100);
-                          }, 800);
-                        }}
-                        className={`relative w-full h-[60px] rounded-full font-dm font-bold text-[15px] tracking-[-0.025em] leading-[28px] transition-all flex items-center justify-center active:scale-95 border bg-[var(--card-bg)] border-[var(--card-border)] dark:border-[#495564] text-[var(--text-primary)] hover:bg-[#E7F0FF] hover:border-[#0077F0] hover:text-[#0077F0] dark:hover:bg-[#344256] dark:hover:border-[#0076F0] dark:hover:text-white group`}
-                      >
-                        <CheckCircle size={18} className={`absolute left-6 ${isCurrentTaskDone ? "text-[var(--accent-color)]" : "text-[var(--text-secondary)] opacity-30 group-hover:text-[#0077F0] dark:group-hover:text-[var(--accent-color)] group-hover:opacity-100"}`} />
-                        {isCurrentTaskDone ? 'Done' : 'Mark as complete'}
-                      </button>
-                    </div>
-                  </>
-                )}
-              </motion.div>
-            </AnimatePresence>
-          </section>
-
           {/* Session Controls Box - Buttons */}
           <section className="shrink-0 bg-[var(--card-bg)] border border-[var(--card-border)] rounded-2xl p-6">
             {/* Honest Mode toggle — the A/B switch (confident Google baseline vs honest) */}
@@ -2689,50 +2501,6 @@ export default function App() {
                 </button>
               </div>
             )}
-          </section>
-
-          {/* Listening Box - Separate Section */}
-          <section className="shrink-0 bg-[var(--card-bg)] border border-[var(--card-border)] rounded-2xl p-6 animate-in fade-in slide-in-from-top-2 duration-300">
-            <div className={`${(isProcessing || liveTranscription || isLive) ? 'bg-[var(--inner-box-bg)] border-[var(--accent-color)]' : 'bg-[var(--inner-box-bg)] border-[var(--card-border)]'} border p-5 rounded-2xl flex flex-col gap-4 shadow-sm transition-colors duration-300`}>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <div className={`w-2 h-2 rounded-full ${(isProcessing || liveTranscription || isLive) ? 'bg-[var(--accent-color)]' : 'bg-[var(--text-secondary)] opacity-30'} ${isProcessing ? 'animate-spin' : (isLive || liveTranscription) ? 'animate-pulse-strong' : ''}`} />
-                  <span className={`text-[11px] font-mono font-normal tracking-tight ${(isProcessing || liveTranscription || isLive) ? 'text-[var(--accent-color)] uppercase' : 'text-[var(--text-secondary)] uppercase'}`}>
-                    {isProcessing ? 'Evolving...' : (liveTranscription ? 'Listening...' : (isLive ? 'Listening...' : 'System Idle'))}
-                  </span>
-                </div>
-                <span className={`text-[8px] font-mono uppercase opacity-50 ${(isProcessing || liveTranscription || isLive) ? 'text-[var(--text-primary)]' : 'text-[var(--text-secondary)]'}`}>
-                  {isProcessing ? 'GPU ACTIVE' : (liveTranscription ? 'VOICE' : (isLive ? 'LISTENING' : 'OFFLINE'))}
-                </span>
-              </div>
-
-              <p className={`text-[11px] font-mono leading-relaxed ${(isProcessing || liveTranscription || lastError) ? 'text-[var(--text-primary)] font-normal italic' : 'text-[var(--text-secondary)] font-normal'}`}>
-                {lastError ? (
-                  <span className="text-red-500">Error: {lastError}</span>
-                ) : (
-                  (isProcessing ? activePrompt : liveTranscription) || (isLive ? "..." : "Start point and speak to begin.")
-                )}
-              </p>
-              <form
-                className="flex items-center gap-2"
-                onSubmit={(e) => { e.preventDefault(); sendTypedInput(typedDraft); }}
-              >
-                <input
-                  value={typedDraft}
-                  onChange={(e) => setTypedDraft(e.target.value)}
-                  placeholder="type a command — point while you type"
-                  disabled={isConnecting}
-                  className="flex-1 bg-transparent border border-[var(--card-border)] rounded-lg px-3 py-1.5 text-[11px] font-mono text-[var(--text-primary)] placeholder:text-[var(--text-secondary)] placeholder:opacity-50 focus:outline-none focus:border-[var(--accent-color)] disabled:opacity-40"
-                />
-                <button
-                  type="submit"
-                  disabled={isConnecting || !typedDraft.trim()}
-                  className="px-3 py-1.5 rounded-lg text-[10px] font-mono uppercase tracking-wide bg-[var(--accent-color)]/10 text-[var(--accent-color)] border border-[var(--accent-color)]/30 hover:bg-[var(--accent-color)]/20 disabled:opacity-30 transition-colors"
-                >
-                  {isConnecting ? '…' : 'Send'}
-                </button>
-              </form>
-            </div>
           </section>
 
           {/* PHASE G: Outward share — witness recipient + payload before sending (or a sent receipt). */}
