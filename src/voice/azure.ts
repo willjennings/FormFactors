@@ -15,6 +15,7 @@
 
 import type { VoiceProvider, VoiceSessionConfig, VoiceCallbacks } from './types';
 import { userTextItemFrame, responseCreateFrame } from './frames';
+import { azureRealtimeUrl } from './azureUrl';
 
 const SAMPLE_RATE = 24000; // Azure/OpenAI realtime PCM16 mono
 const FRAME_HEARTBEAT_MS = 500; // vision cadence: at most one image per this interval.
@@ -91,8 +92,7 @@ export function createAzureRealtimeProvider(
       closed = false;
       dispatchedCalls.clear();
       try {
-        const host = endpoint.replace(/^https?:\/\//, '').replace(/\/+$/, '');
-        const url = `wss://${host}/openai/v1/realtime?model=${encodeURIComponent(deployment)}&api-key=${encodeURIComponent(apiKey)}`;
+        const url = azureRealtimeUrl(endpoint, deployment, apiKey);
         ws = new WebSocket(url);
 
         ws.onopen = () => {
