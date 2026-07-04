@@ -59,6 +59,9 @@ import { DebugDrawer } from './shell/DebugDrawer';
 import { clampWindow, loadWindowRect, saveWindowRect, type WindowRect } from './shell/windowState';
 import { docStatusLabel } from './widgets/surfaceModels';
 import type { TeachingEvent, TeachingState } from './teaching/types';
+import { initialRailState, reduceRail, type RailEvent, type RailState } from './rail/railStore';
+import { projectTeaching } from './rail/projectTeaching';
+import { RailPanel } from './rail/RailPanel';
 import { snapshotNode, makeThrottle } from './vision/snapshotNode';
 import { parseTypedSubmit } from './input/typedInput';
 import type { InputModality } from './telemetry';
@@ -503,6 +506,11 @@ export default function App() {
   const surfaceSnapshotRef = useRef<HTMLCanvasElement | null>(null);
   const teachingDispatchRef = useRef<((e: TeachingEvent) => void) | null>(null);
   const [teachingSnapshot, setTeachingSnapshot] = useState<TeachingState | null>(null);
+
+  const [railState, setRailState] = useState<RailState>(initialRailState());
+  const railDispatch = (e: RailEvent) => setRailState(s => reduceRail(s, e, Date.now()));
+  const railDispatchRef = useRef(railDispatch);
+  useEffect(() => { railDispatch({ type: 'doc.changed', doc: mockDoc }); }, [mockDoc]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [pointerPath, setPointerPath] = useState<{ x: number, y: number, timestamp: number }[]>([]);
   const [persistentPaths, setPersistentPaths] = useState<{ x: number, y: number }[][]>([]);
@@ -1066,6 +1074,7 @@ export default function App() {
   const handleSurfaceElementClick = (elementId: number) => {
     const entity = entitiesRef.current.find(e => e.id === `${program.id}-${elementId}`);
     if (entity) teachingDispatchRef.current?.({ type: 'user.stepAction', entityId: entity.id });
+    if (entity) railDispatch({ type: 'user.elementAction', entityId: entity.id });
     const idx = program.images.findIndex(im => im.id === elementId);
     if (isLive && idx >= 0) selectTargetByNumber(idx + 1);
   };
@@ -2356,6 +2365,13 @@ export default function App() {
             onSubmit={(text) => { setFirstRunHint(false); setFocusTitle(undefined); sendTypedInput(text); }}
             onMicToggle={() => { setFirstRunHint(false); isLive ? providerRef.current?.close() : startLiveSession(); }}
             onChipTap={(s) => setFocusTitle(TASKS.find(t => t.key === s.key)?.targetElement)}
+          />
+
+          <RailPanel
+            state={railState}
+            teachingRail={teachingSnapshot ? projectTeaching(teachingSnapshot) : null}
+            onEvent={railDispatch}
+            onShowMe={(id) => teachingDispatchRef.current?.({ type: 'teach.highlight', entityId: id as EntityId })}
           />
 
           {/* Witness cards — confirm/cancel by button or voice. */}
