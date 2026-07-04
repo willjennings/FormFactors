@@ -61,6 +61,7 @@ import { docStatusLabel } from './widgets/surfaceModels';
 import type { TeachingEvent, TeachingState } from './teaching/types';
 import { initialRailState, reduceRail, railComplete, type RailEvent, type RailState } from './rail/railStore';
 import { respondCallToRail } from './rail/respondCallToRail';
+import { buildRailDemo } from './rail/demoRail';
 import { projectTeaching } from './rail/projectTeaching';
 import { RailPanel } from './rail/RailPanel';
 import { snapshotNode, makeThrottle } from './vision/snapshotNode';
@@ -374,6 +375,7 @@ export default function App() {
   const [hoveredId, setHoveredId] = useState<EntityId | null>(null);
   const perceivedLabelsRef = useRef<PerceivedCache>({});
   const teachMode = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('teach');
+  const railMode = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('rail');
   const hoveredIdRef = useRef<EntityId | null>(null);
   // Throttle state for proactive hover grounding (non-Gemini backends).
   const lastHoverHintRef = useRef<string | null>(null);
@@ -563,6 +565,24 @@ export default function App() {
   const railDispatchRef = useRef(railDispatch);
   railDispatchRef.current = railDispatch;
   useEffect(() => { railDispatch({ type: 'doc.changed', doc: mockDoc }); }, [mockDoc]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Demo driver: play the scripted rail once entities exist. StrictMode-safe: `played` is set
+  // when the first dispatch FIRES (not when scheduled), and cleanup re-arms only if nothing fired yet.
+  const railScheduled = useRef(false);
+  const railPlayed = useRef(false);
+  useEffect(() => {
+    if (!railMode || railScheduled.current || entities.length < 4) return;
+    railScheduled.current = true;
+    const timer = setTimeout(() => {
+      railPlayed.current = true;
+      const demoRail = buildRailDemo(program, entitiesRef.current, mockDocRef.current, Date.now());
+      if (demoRail) railDispatchRef.current({ type: 'rail.set', rail: demoRail });
+    }, 800);
+    return () => {
+      clearTimeout(timer);
+      if (!railPlayed.current) railScheduled.current = false;
+    };
+  }, [railMode, entities.length, program]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [pointerPath, setPointerPath] = useState<{ x: number, y: number, timestamp: number }[]>([]);
   const [persistentPaths, setPersistentPaths] = useState<{ x: number, y: number }[][]>([]);
