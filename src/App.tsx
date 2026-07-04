@@ -7,10 +7,6 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { GoogleGenAI, Modality, GenerateContentResponse } from '@google/genai';
 import type { VoiceTool, VoiceProvider, ProviderKind } from './voice/types';
 import {
-  Mic,
-  ChevronUp,
-  ChevronDown,
-  RotateCcw,
   Settings,
   X,
   CheckCircle,
@@ -20,7 +16,6 @@ import {
   Moon,
   Laptop,
   Shield,
-  ShieldCheck
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { MenuBar } from './shell/MenuBar';
@@ -55,7 +50,7 @@ import type { SceneEntity, EntityId } from './entities/registry';
 import { TeachingLayer } from './teaching/TeachingLayer';
 import { emitFeedbackAudio, FEEDBACK_OPTIONS } from './feedback';
 import type { FeedbackMode, FeedbackEvent } from './feedback';
-import { primeEarcons, playEarcon, EARCON_KINDS } from './feedback/earcons';
+import { primeEarcons } from './feedback/earcons';
 import { telemetry, detectDevice } from './telemetry';
 import { referents } from './referents';
 import { CallDeduper, argsKey, parseRepair } from './coherence';
@@ -316,7 +311,6 @@ export default function App() {
   // desktop-only gate + the mobile/rotate overlays.
   const [bypassDeviceGate, setBypassDeviceGate] = useState(false);
 
-  const [isDebugOpen, setIsDebugOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(() => {
     if (typeof window !== 'undefined') {
@@ -493,13 +487,6 @@ export default function App() {
   // Visual feedback channel — always on (the minimum-feedback floor), independent of DIAL B.
   const [feedbackToast, setFeedbackToast] = useState<{ outcome: FeedbackEvent['outcome']; label: string; at: number } | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Refresh tick so the live telemetry readout updates during a session.
-  const [telemetryTick, setTelemetryTick] = useState(0);
-  useEffect(() => {
-    if (!isLive) return;
-    const id = setInterval(() => setTelemetryTick(t => t + 1), 1000);
-    return () => clearInterval(id);
-  }, [isLive]);
 
   // Single entry point for action feedback: routes audio per DIAL B and always shows a toast.
   const emitFeedback = (ev: FeedbackEvent) => {
