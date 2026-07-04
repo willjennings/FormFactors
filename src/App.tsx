@@ -2003,8 +2003,8 @@ export default function App() {
   }, [isPainting, mainSize]);
   
   const handlePointerDown = (e: React.PointerEvent) => {
-    if (!isLive) return;
-
+    // Pointer visuals work with or without a session (gap 8): painting, hover, and markers
+    // are local. Everything that costs tokens stays behind providerRef (null offline).
     const rect = mainContainerRef.current?.getBoundingClientRect();
 
     if (rect) {
@@ -2359,7 +2359,7 @@ export default function App() {
   }
 
   return (
-    <div className={`flex flex-col h-screen bg-[var(--bg-color)] bg-dots text-[var(--text-primary)] overflow-hidden font-sans selection:bg-indigo-500/30 ${isLive ? 'custom-cursor-active' : ''}`}>
+    <div className={`flex flex-col h-screen bg-[var(--bg-color)] bg-dots text-[var(--text-primary)] overflow-hidden font-sans selection:bg-indigo-500/30 custom-cursor-active`}>
       <div className="flex-1 overflow-hidden">
         <main
           ref={mainContainerRef}
@@ -2381,12 +2381,13 @@ export default function App() {
             ref={traceCanvasRef}
             width={mainSize.width}
             height={mainSize.height}
-            className={`absolute inset-0 z-50 pointer-events-none ${isLive ? 'opacity-100' : 'opacity-0'} transition-opacity duration-300`}
+            className={`absolute inset-0 z-50 pointer-events-none opacity-100 transition-opacity duration-300`}
           />
           <TeachingLayer entities={entities} program={program} demo={teachMode} dispatchRef={teachingDispatchRef} onStateChange={setTeachingSnapshot} />
           {/* G6 FEEDFORWARD: live "what I'll act on" preview as the cursor moves, so the user
-              sees the interpretation forming BEFORE they speak (closes the gulf of execution). */}
-          {isLive && (
+              sees the interpretation forming BEFORE they speak (closes the gulf of execution).
+              Shown with or without a session — the pointer is alive offline; only hints cost. */}
+          {(
             <div className="absolute top-3 left-1/2 -translate-x-1/2 z-50 pointer-events-none flex items-center gap-2 px-3 py-1.5 rounded-full border border-[var(--card-border)] bg-[var(--card-bg)]/90 backdrop-blur shadow-sm">
               <span className={`w-2 h-2 rounded-full ${hoveredId ? 'bg-[var(--accent-color)] animate-pulse' : 'bg-[var(--text-secondary)] opacity-40'}`} />
               <span className="text-[11px] font-mono text-[var(--text-primary)]">
