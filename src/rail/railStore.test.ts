@@ -63,4 +63,14 @@ describe('railStore', () => {
     expect(v.find(x => x.index === 0)!.mode).toBe('stub');
     expect(v.find(x => x.index === 2)!.mode).toBe('dimmed');
   });
+
+  it('a failed auto-CHECK re-evaluates and passes on a later doc.changed (retry path)', () => {
+    let s = reduceRail(initialRailState(), { type: 'rail.set', rail: rail() }, 0);
+    s = reduceRail(s, { type: 'user.elementAction', entityId: 'word-2' }, 1);
+    s = reduceRail(s, { type: 'doc.changed', doc }, 2);                       // still unsaved → failed
+    expect(s.rail!.cards[2].state).toBe('failed');
+    s = reduceRail(s, { type: 'doc.changed', doc: applyAction(doc, 'save_file', {}) }, 3);
+    expect(s.rail!.cards[2].state).toBe('done');                              // failed must not block re-evaluation
+    expect(railComplete(s)).toBe(true);
+  });
 });
