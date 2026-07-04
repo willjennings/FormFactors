@@ -58,7 +58,7 @@ import { Omnibox } from './shell/Omnibox';
 import { DebugDrawer } from './shell/DebugDrawer';
 import { clampWindow, loadWindowRect, saveWindowRect, type WindowRect } from './shell/windowState';
 import { docStatusLabel } from './widgets/surfaceModels';
-import type { TeachingEvent } from './teaching/types';
+import type { TeachingEvent, TeachingState } from './teaching/types';
 import { snapshotNode, makeThrottle } from './vision/snapshotNode';
 import { parseTypedSubmit } from './input/typedInput';
 import type { InputModality } from './telemetry';
@@ -502,6 +502,7 @@ export default function App() {
   const surfaceRef = useRef<HTMLDivElement>(null);
   const surfaceSnapshotRef = useRef<HTMLCanvasElement | null>(null);
   const teachingDispatchRef = useRef<((e: TeachingEvent) => void) | null>(null);
+  const [teachingSnapshot, setTeachingSnapshot] = useState<TeachingState | null>(null);
 
   const [pointerPath, setPointerPath] = useState<{ x: number, y: number, timestamp: number }[]>([]);
   const [persistentPaths, setPersistentPaths] = useState<{ x: number, y: number }[][]>([]);
@@ -2280,7 +2281,7 @@ export default function App() {
             height={mainSize.height}
             className={`absolute inset-0 z-50 pointer-events-none ${isLive ? 'opacity-100' : 'opacity-0'} transition-opacity duration-300`}
           />
-          {teachMode && <TeachingLayer entities={entities} program={program} demo dispatchRef={teachingDispatchRef} />}
+          <TeachingLayer entities={entities} program={program} demo={teachMode} dispatchRef={teachingDispatchRef} onStateChange={setTeachingSnapshot} />
           {/* G6 FEEDFORWARD: live "what I'll act on" preview as the cursor moves, so the user
               sees the interpretation forming BEFORE they speak (closes the gulf of execution). */}
           {isLive && (

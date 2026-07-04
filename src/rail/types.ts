@@ -15,6 +15,7 @@ export interface RailCard {
   verify?: 'auto' | 'user';            // check
   expect?: { path: string; equals: unknown };        // check auto
   state: CardState;
+  subgoal?: string;                    // teaching sequences
 }
 export interface Rail { seq: string; cards: RailCard[]; activeIndex: number | null; guideLine?: string; startedAt: number; }
 export const BUDGETS = { doAction: 90, doResult: 60, answer: 80, orient: 90, check: 80, caution: 90, conceptFront: 60, conceptBack: 160, conceptAnalogy: 80, tryPrompt: 90, tryNotice: 60, recapLine: 60, recapLines: 3 } as const;

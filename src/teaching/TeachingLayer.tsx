@@ -16,9 +16,10 @@ type Props = {
   program: Program;
   demo?: boolean;
   dispatchRef?: React.MutableRefObject<((e: TeachingEvent) => void) | null>; // Plan 2 seam
+  onStateChange?: (s: TeachingState) => void;
 };
 
-export function TeachingLayer({ entities, program, demo = false, dispatchRef }: Props) {
+export function TeachingLayer({ entities, program, demo = false, dispatchRef, onStateChange }: Props) {
   const [state, setState] = useState<TeachingState>(() => ({ ...initialTeachingState(), competence: loadCompetence() }));
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -36,8 +37,10 @@ export function TeachingLayer({ entities, program, demo = false, dispatchRef }: 
     if (e.type === 'user.stepAction' && next.sequence && prior.sequence && (next.sequence.blockedAttempts > prior.sequence.blockedAttempts)) telemetry.guidance('blocked', { taskKey: prior.sequence.taskKey });
     if (e.type === 'user.stepAction' && prior.sequence && prior.sequence.activeIndex !== null && !prior.sequence.paused && prior.sequence.steps[prior.sequence.activeIndex].entityId === e.entityId) telemetry.guidance('step_done', { taskKey: prior.sequence.taskKey });
     setState(next);
+    onStateChange?.(next);
   };
   useEffect(() => { if (dispatchRef) { dispatchRef.current = dispatch; return () => { dispatchRef.current = null; }; } }, [dispatchRef]);
+  useEffect(() => { onStateChange?.(stateRef.current); }, []);
 
   // Toast expiry: schedule a re-render 2.6 s after a block lands so toastFresh re-evaluates.
   const [, forceTick] = useState(0);
