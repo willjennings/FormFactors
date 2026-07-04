@@ -6,7 +6,6 @@ import { getProgram } from '../scenarios';
 
 const layoutFor = (programId: 'word' | 'excel') => ({
   items: getProgram(programId).images.map((img, i) => ({ id: img.id, bbox: { ymin: i * 100, xmin: 0, ymax: i * 100 + 90, xmax: 200 } })),
-  map: { ymin: 0, xmin: 500, ymax: 400, xmax: 900 },
 });
 
 describe('demo script', () => {

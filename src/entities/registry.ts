@@ -8,13 +8,11 @@ import type { PerceivedCache } from '../perception/perceiveTile';
 export type EntityId = string & { __brand: 'EntityId' };
 const asId = (s: string): EntityId => s as EntityId;
 
-export const MAP_ENTITY_ID: EntityId = asId('map');
-
 export interface SceneEntity {
   id: EntityId;
   title: string;                              // registered name — data, not a reasoning key
-  url: string;                                // '' for the map
-  category: ElementCategory | 'map';
+  url: string;
+  category: ElementCategory;
   perceivedLabel?: string;
   aliases: string[];                          // normalized names the model may use
   bbox: [number, number, number, number];     // ymin,xmin,ymax,xmax (0-1000)
@@ -24,12 +22,12 @@ const normText = (s: string): string =>
   s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
 
 type LayoutBox = { ymin: number; xmin: number; ymax: number; xmax: number };
-type Layout = { items: { id: number; bbox: LayoutBox }[]; map: LayoutBox } | null;
+type Layout = { items: { id: number; bbox: LayoutBox }[] } | null;
 
 const toTuple = (b: LayoutBox | undefined): [number, number, number, number] =>
   b ? [b.ymin, b.xmin, b.ymax, b.xmax] : [0, 0, 0, 0];
 
-/** Single source for the scene: one entity per program image + the map. Pure & derived. */
+/** Single source for the scene: one entity per program element. Pure & derived. */
 export function buildEntities(program: Program, perceived: PerceivedCache, layout: Layout): SceneEntity[] {
   const tiles: SceneEntity[] = program.images.map((img) => {
     const p = perceived[img.url];
@@ -46,12 +44,7 @@ export function buildEntities(program: Program, perceived: PerceivedCache, layou
       bbox: toTuple(layout?.items.find((it) => it.id === img.id)?.bbox),
     };
   });
-  const map: SceneEntity = {
-    id: MAP_ENTITY_ID, title: 'Google Maps', url: '', category: 'map',
-    aliases: [normText('Google Maps'), 'map', 'the map'],
-    bbox: toTuple(layout?.map),
-  };
-  return [...tiles, map];
+  return tiles;
 }
 
 export function entityById(entities: SceneEntity[], id: EntityId | null | undefined): SceneEntity | undefined {

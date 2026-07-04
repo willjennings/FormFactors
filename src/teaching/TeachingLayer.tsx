@@ -54,7 +54,7 @@ export function TeachingLayer({ entities, program, demo = false, dispatchRef }: 
   const scheduled = useRef(false);
   const played = useRef(false);
   useEffect(() => {
-    if (!demo || scheduled.current || entities.filter((e) => e.category !== 'map').length < 3) return;
+    if (!demo || scheduled.current || entities.length < 3) return;
     scheduled.current = true;
     const timers = buildDemoScript(program, entities).map(({ at, event }) =>
       setTimeout(() => { played.current = true; dispatch(event); }, at));
@@ -78,7 +78,7 @@ export function TeachingLayer({ entities, program, demo = false, dispatchRef }: 
   const seq = state.sequence;
   // Scrim only leaf controls/content. 'program' chrome contains nested elements (Save sits
   // inside the Ribbon) — scrimming the container would block the sequence target itself.
-  const tileIds = entities.filter((e) => e.category !== 'map' && e.category !== 'program').map((e) => e.id);
+  const tileIds = entities.filter((e) => e.category !== 'program').map((e) => e.id);
   const blocked = blockedEntityIds(state, tileIds);
   const toastFresh = seq?.lastBlocked && Date.now() - seq.lastBlocked.at < 2500;
 

@@ -144,7 +144,6 @@ function computePointingConfidence(
 
   // 2. Geometric: cursor sits inside more than one photo region → ambiguous overlap.
   const containing = entities.filter(o => {
-    if (o.category === 'map') return false;
     const [ymin, xmin, ymax, xmax] = o.bbox;
     return hX >= xmin && hX <= xmax && hY >= ymin && hY <= ymax;
   });
@@ -289,7 +288,7 @@ export default function App() {
   const categoryMapRef = useRef<Record<string, ElementCategory>>({});
   React.useEffect(() => {
     const m: Record<string, ElementCategory> = {};
-    for (const e of entitiesRef.current) if (e.category !== 'map') m[e.id] = e.category as ElementCategory;
+    for (const e of entitiesRef.current) m[e.id] = e.category as ElementCategory;
     categoryMapRef.current = m;
   }, [entities]);
   const categoryOf = (id?: EntityId | null): ElementCategory =>
@@ -469,7 +468,6 @@ export default function App() {
   // relative bbox into the live tile bbox. Returns the word text + its containing element.
   const wordAt = (x: number, y: number): { word: string; photoTitle: string } | null => {
     for (const obj of entitiesRef.current) {
-      if (obj.category === 'map') continue;
       const [tymin, txmin, tymax, txmax] = obj.bbox;
       if (x < txmin || x > txmax || y < tymin || y > tymax) continue;
       const words = ocrWordsRef.current[obj.title];
@@ -516,7 +514,6 @@ export default function App() {
   };
   const [layoutBounds, setLayoutBounds] = useState<{
     photos: BBox;
-    map: BBox;
     photoItems: { id: number; bbox: BBox }[];
     surface?: BBox;
   } | null>(null);
@@ -598,7 +595,6 @@ export default function App() {
         // Update the scene entities for Gemini (single source of truth).
         const es = buildEntities(program, perceivedLabelsRef.current, {
           items: photoItems.map(it => ({ id: it.id, bbox: it.bbox })),
-          map: { ymin: 0, xmin: 0, ymax: 0, xmax: 0 },
         });
         setEntities(es);
         entitiesRef.current = es;
@@ -1031,7 +1027,7 @@ MARKERS (Visual Anchors):
 
 ON-SCREEN ELEMENTS (the user points at these — use these names exactly):
 ${entities.length
-  ? entities.filter(e => e.category !== 'map').map(e => `- ${displayName(e)}`).join('\n')
+  ? entities.map(e => `- ${displayName(e)}`).join('\n')
   : program.images.map(img => `- ${img.title}`).join('\n')}
 
 USER CAPABILITIES:
@@ -1436,7 +1432,7 @@ When the user points and speaks a command, call the appropriate tool — a map t
         telemetry.deixis(kw, foundObject.title, focusTitleRef.current ?? null, confidence.level, lastInputModalityRef.current);
 
         // G4: remember this referent so later turns can resolve "make THAT bold" / "send IT".
-        if (foundObject.category !== 'map') referents.note(displayName(foundObject), 'pointed', foundObject.id);
+        referents.note(displayName(foundObject), 'pointed', foundObject.id);
 
         // Proactive pattern-offer seam retired with the tourism payload; re-aim at program behavior when a goal model exists.
 

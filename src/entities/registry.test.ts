@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  buildEntities, entityById, entityByTitle, displayName, resolveEchoedTarget, MAP_ENTITY_ID,
+  buildEntities, entityById, entityByTitle, displayName, resolveEchoedTarget,
 } from './registry';
 import { getProgram } from '../scenarios';
 import type { PerceivedCache } from '../perception/perceiveTile';
@@ -9,19 +9,16 @@ const excel = getProgram('excel');
 const box = (n: number) => ({ ymin: n, xmin: n, ymax: n + 100, xmax: n + 100 });
 const layout = {
   items: excel.images.map((img, i) => ({ id: img.id, bbox: box(i * 10) })),
-  map: box(500),
 };
 const perceived: PerceivedCache = {
   [excel.images[3].url]: { status: 'done', label: 'grid of numbers' }, // 'Cell A1' tile
 };
 
 describe('buildEntities', () => {
-  it('builds one entity per image plus the map, ids stable and prefixed', () => {
+  it('builds one entity per image, ids stable and prefixed', () => {
     const es = buildEntities(excel, {}, layout);
-    expect(es).toHaveLength(excel.images.length + 1);
+    expect(es).toHaveLength(excel.images.length);
     expect(es[0].id).toBe(`excel-${excel.images[0].id}`);
-    expect(es[es.length - 1].id).toBe(MAP_ENTITY_ID);
-    expect(es[es.length - 1].category).toBe('map');
   });
   it('merges perceived labels into aliases and displayName', () => {
     const es = buildEntities(excel, perceived, layout);
@@ -33,7 +30,7 @@ describe('buildEntities', () => {
   });
   it('without layout returns entities with zero bboxes (not empty)', () => {
     const es = buildEntities(excel, {}, null);
-    expect(es).toHaveLength(excel.images.length + 1);
+    expect(es).toHaveLength(excel.images.length);
     expect(es[0].bbox).toEqual([0, 0, 0, 0]);
   });
   it('displayName falls back to title without perception; undefined → empty string', () => {
