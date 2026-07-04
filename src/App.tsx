@@ -5,7 +5,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import confetti from 'canvas-confetti';
-import { GoogleGenAI, Modality, Type, GenerateContentResponse } from '@google/genai';
+import { GoogleGenAI, Modality, GenerateContentResponse } from '@google/genai';
 import type { VoiceTool, VoiceProvider, ProviderKind } from './voice/types';
 import { 
   Mic, 
@@ -101,8 +101,6 @@ interface DebugLog {
 }
 
 // --- Constants ---
-const BASE_SIZE = 800;
-const INITIAL_IMAGE = "https://picsum.photos/seed/london-map/800/800";
 const MAGIC_KEYWORDS = [
   "this", "that", "here", "there", "it", "that one", "this one", 
   "hear", "hair", "their", "they're", "this spot", "that spot", 
@@ -349,9 +347,6 @@ export default function App() {
   useEffect(() => {
     try { setIsEmbedded(window.self !== window.top); } catch { setIsEmbedded(true); }
   }, []);
-  const [currentImage, setCurrentImage] = useState(INITIAL_IMAGE);
-  const [history, setHistory] = useState<{ image: string; objects: SceneEntity[] }[]>([]);
-  const [dims, setDims] = useState({ width: BASE_SIZE, height: BASE_SIZE });
   const [mainSize, setMainSize] = useState({ width: 0, height: 0 });
   const [isProcessing, setIsProcessing] = useState(false);
   const [activePrompt, setActivePrompt] = useState<string | null>(null);
@@ -360,19 +355,8 @@ export default function App() {
   const [isConnecting, setIsConnecting] = useState(false);
   const pendingTypedRef = useRef<string | null>(null);
   const lastInputModalityRef = useRef<InputModality>('voice');
-  const [pendingEdit, setPendingEdit] = useState<{
-    prompt: string; 
-    bbox: BBox; 
-    marker?: { x: number, y: number };
-    destMarker?: { x: number, y: number };
-    objectName?: string;
-    id: string; 
-    name: string;
-    receivedAt: number;
-  } | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
   const [logs, setLogs] = useState<DebugLog[]>([]);
-  const [currentCoords, setCurrentCoords] = useState({ x: 500, y: 500 });
   const [mousePos, setMousePos] = useState({ x: -100, y: -100 });
   const [isPainting, setIsPainting] = useState(false);
   const [trailMousePos, setTrailMousePos] = useState({ x: 0, y: 0 });
@@ -436,7 +420,6 @@ export default function App() {
   }, [activeProgram]);
 
   // Refs for logic
-  const persistentCanvasRef = useRef<HTMLCanvasElement>(null);
   const traceCanvasRef = useRef<HTMLCanvasElement>(null);
   const mainContainerRef = useRef<HTMLElement>(null);
   const cursorRef = useRef<{x: number, y: number}>({x: 500, y: 500}); // Normalized 0-1000
@@ -455,7 +438,6 @@ export default function App() {
   const resetTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastExecutedPromptRef = useRef<string | null>(null);
   const isProcessingRef = useRef(false);
-  const hasPendingEditRef = useRef(false);
   const lastProcessedTranscriptionRef = useRef<string>("");
   const spatialDescriptionRef = useRef<string | null>(null);
 
@@ -577,49 +559,6 @@ export default function App() {
     return () => clearInterval(timer);
   }, [persistentPaths.length]);
   */
-
-  const captureImageArea = async (element: { type: string, content: string, x: number, y: number, width: number, height: number }, points: { x: number, y: number }[]) => {
-    if (element.type !== 'image' || !element.content) return null;
-    // 1. Calculate the bounding box of the painted path
-    const minX = Math.min(...points.map(p => p.x));
-    const maxX = Math.max(...points.map(p => p.x));
-    const minY = Math.min(...points.map(p => p.y));
-    const maxY = Math.max(...points.map(p => p.y));
-    // 2. Calculate coordinates relative to the image element
-    const localMinX = Math.max(0, minX - element.x);
-    const localMinY = Math.max(0, minY - element.y);
-    const localWidth = Math.min(element.width, maxX - minX);
-    const localHeight = Math.min(element.height, maxY - minY);
-    if (localWidth < 5 || localHeight < 5) return null;
-    // 3. Setup canvas for extraction
-    const canvas = document.createElement('canvas');
-    const maxDim = 640; // Target resolution
-    const scale = Math.min(1, maxDim / Math.max(localWidth, localHeight));
-    canvas.width = localWidth * scale;
-    canvas.height = localHeight * scale;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return null;
-    return new Promise<{ url: string, box: { x: number, y: number, width: number, height: number } }>((resolve) => {
-      const img = new Image();
-      img.crossOrigin = "anonymous";
-      img.onload = () => {
-        // Draw ONLY the selected portion of the image onto the canvas
-        ctx.drawImage(
-          img,
-          (localMinX / element.width) * img.width, // Source X
-          (localMinY / element.height) * img.height, // Source Y
-          (localWidth / element.width) * img.width, // Source Width
-          (localHeight / element.height) * img.height,// Source Height
-          0, 0, canvas.width, canvas.height // Destination
-        );
-        resolve({
-          url: canvas.toDataURL('image/jpeg', 0.8),
-          box: { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
-        });
-      };
-      img.src = element.content;
-    });
-  };
 
   useEffect(() => {
     const updateLayout = () => {
@@ -744,45 +683,6 @@ export default function App() {
     setSlideDirection(clamped >= currentTaskIndex ? 1 : -1);
     setCurrentTaskIndex(clamped);
   };
-
-  useEffect(() => {
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.src = INITIAL_IMAGE + "?t=" + Date.now();
-    img.onload = () => {
-      // Force square dimensions
-      const w = BASE_SIZE;
-      const h = BASE_SIZE;
-      setDims({ width: w, height: h });
-
-      const pCanvas = persistentCanvasRef.current;
-      if (!pCanvas) return;
-      pCanvas.width = w;
-      pCanvas.height = h;
-      const ctx = pCanvas.getContext('2d');
-      if (!ctx) return;
-      
-      // Draw the image to fill the square canvas by cropping to center
-      const imgAspect = img.naturalWidth / img.naturalHeight;
-      let sx, sy, sWidth, sHeight;
-      if (imgAspect > 1) {
-        // Landscape: crop sides
-        sHeight = img.naturalHeight;
-        sWidth = img.naturalHeight;
-        sx = (img.naturalWidth - sWidth) / 2;
-        sy = 0;
-      } else {
-        // Portrait: crop top/bottom
-        sWidth = img.naturalWidth;
-        sHeight = img.naturalWidth;
-        sx = 0;
-        sy = (img.naturalHeight - sHeight) / 2;
-      }
-      
-      ctx.drawImage(img, sx, sy, sWidth, sHeight, 0, 0, w, h);
-      setCurrentImage(pCanvas.toDataURL('image/png'));
-    };
-  }, []);
 
   const addLog = (type: DebugLog['type'], message: string) => {
     setLogs(prev => [{ time: new Date().toLocaleTimeString(), type, message }, ...prev].slice(0, 50));
@@ -982,251 +882,6 @@ export default function App() {
       // Keep up to 2 markers to support "Move this to here"
       markersRef.current = [newMarker, ...markersRef.current].slice(0, 2);
       addLog('event', `Keyword detected: "${text}"`);
-    }
-  };
-
-  const getClosestAspectRatio = () => {
-    const ratio = dims.width / dims.height;
-    const targets = [
-      { label: "1:1", val: 1 },
-      { label: "4:3", val: 4/3 },
-      { label: "3:4", val: 3/4 },
-      { label: "16:9", val: 16/9 },
-      { label: "9:16", val: 9/16 }
-    ];
-    return targets.reduce((prev, curr) => 
-      Math.abs(curr.val - ratio) < Math.abs(prev.val - ratio) ? curr : prev
-    ).label;
-  };
-
-  const executeImageEdit = async (editPrompt: string, bbox: BBox, marker?: { x: number, y: number }, dest?: { x: number, y: number }, objectName?: string) => {
-    setIsProcessing(true);
-    isProcessingRef.current = true;
-
-    setPendingEdit(null); // Clear immediately so we don't overwrite new commands that arrive during processing
-    hasPendingEditRef.current = false;
-    
-    // Cleanup the prompt to remove any technical coordinates Gemini might have included
-    const cleanEditPrompt = editPrompt
-      .replace(/\[\d+\s*,\s*\d+\]/g, "")
-      .replace(/\[\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*\d+\]/g, "")
-      .replace(/\s+/g, " ")
-      .trim();
-
-    lastExecutedPromptRef.current = cleanEditPrompt;
-    addLog('gemini', `Editing: ${cleanEditPrompt}`);
-    
-    // Notify the AI that we are starting the generation (provider-agnostic so Azure/OpenAI
-    // get the same context Gemini does, not just the raw Gemini session).
-    providerRef.current?.sendTextHint(`[SYSTEM: Starting image generation for "${cleanEditPrompt}". Please wait for the result before giving further instructions.]`);
-
-    try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
-      const pCanvas = persistentCanvasRef.current;
-      if (!pCanvas) return;
-      
-      const currentPixelsBase64 = pCanvas.toDataURL('image/png').split(',')[1];
-
-      const response: GenerateContentResponse = await ai.models.generateContent({
-        model: 'gemini-2.5-flash-image',
-        contents: {
-          parts: [
-            { inlineData: { data: currentPixelsBase64, mimeType: 'image/png' } },
-            { text: `IMAGE EDITING TASK:
-Modify the provided image according to this instruction: "${cleanEditPrompt}".
-CRITICAL - NO NUMBERS OR TEXT IN IMAGE:
-- DO NOT DRAW ANY NUMBERS.
-- DO NOT DRAW ANY COORDINATES.
-- DO NOT DRAW ANY TEXT, LABELS, OR CAPTIONS.
-- DO NOT DRAW ANY BOUNDING BOXES OR UI ELEMENTS.
-- The output MUST be a clean, natural image. Any technical annotations will result in a failure.
-
-The target is located at: [${bbox.ymin}, ${bbox.xmin}, ${bbox.ymax}, ${bbox.xmax}].
-
-CRITICAL - CLEAN SLATE:
-- This is a NEW request. Ignore all previous instructions, previous object locations, or previous edits.
-- The image provided is the CURRENT and ONLY source of truth.
-
-${marker ? `TARGET LOCATION: The operation should be centered exactly at the location indicated by the spatial analysis.` : ''}
-${spatialDescriptionRef.current ? `AGENT 1 SPATIAL ANALYSIS: ${spatialDescriptionRef.current}` : ''}
-
-OPERATION TYPE:
-- If the instruction is to "ADD" or "PUT" something new (e.g., "add a tree"), draw the new object at the TARGET LOCATION.
-- If the instruction is to "CHANGE" or "MODIFY" an existing object (e.g., "make it blue"), modify the object already at the TARGET LOCATION.
-
-${dest ? `MOVE OPERATION: You MUST move the object from the SOURCE to the DESTINATION.
-- STEP 1: ERASE the object from the SOURCE LOCATION [${Math.round(marker!.x)}, ${Math.round(marker!.y)}] and fill the area with the natural background.
-- STEP 2: DRAW the object at the DESTINATION LOCATION [${Math.round(dest.x)}, ${Math.round(dest.y)}]. The object's logical center MUST be placed exactly at these coordinates.
-${(dest.x >= 584 && dest.y >= 866) ? '- NOTE: This destination is in the bottom right area of the image. Ensure the object is placed precisely at the provided coordinates.' : ''}
-- RESULT: The object MUST NOT exist at the source location in the final image. It must appear at the destination and ONLY at the destination. No ghosts, no duplicates, no approximations.
-- SURGICAL PRECISION: This is a relocation task. The background at the destination must be modified to accommodate the object, and the background at the source must be restored to its natural state.` : ''}
-
-CRITICAL - NO VISUAL OVERLAYS:
-- ABSOLUTELY NO NUMBERS: Do not draw any numbers (like [850, 250]) on the image.
-- ABSOLUTELY NO BOXES: Do not draw any bounding boxes or outlines.
-- ABSOLUTELY NO TEXT: Do not draw any labels, captions, or text.
-- ABSOLUTELY NO UI: Do not draw any crosshairs, markers, or interface elements.
-- The coordinates provided in this prompt are for your INTERNAL MATH ONLY. If they appear in the final pixels, you have FAILED.
-
-CRITICAL - NO EXTRA OBJECTS:
-- ONLY the requested change should occur.
-- Do NOT add background items, extra characters, decorations, or any objects not explicitly mentioned in the instruction.
-- If the instruction is "move the crab", ONLY the crab should move. Do not add a shell, a rock, or another crab.
-- NO CLONING: Unless the user explicitly says "copy", "clone", or "duplicate", you MUST NOT create a second instance of an object. A "move" request is a relocation, not a duplication.
-- Keep the background (sand, sky, water) 100% identical to the input.
-
-CRITICAL CONSTRAINTS - ABSOLUTELY NO ZOOMING OR CROPPING:
-1. ZERO ZOOM: The scale of the entire scene must remain 100% identical. Do not move the camera closer.
-2. ZERO CROP: The output image must contain the exact same boundaries as the input.
-3. PIXEL-PERFECT ALIGNMENT: If the input and output were overlaid, every pixel outside the modified area must align perfectly.
-4. NO RE-CENTERING: Do not center the image on the modified object. Keep the original composition.
-5. NO RE-SCALING: The output resolution and aspect ratio must be a 1:1 match to the input.
-6. FIXED CAMERA: Imagine the camera is on a tripod and cannot move. Only the object at the specified locations changes.
-7. SURGICAL EDIT: ONLY modify the specific object at the provided location. If there are other similar objects in the scene (e.g., other starfish), they MUST remain in their original colors and positions. Do not apply the change to the whole class of objects, only the individual instance pointed at.
-8. IN-PLACE REPLACEMENT: You MUST replace the existing pixels of the object at the specified location. Do not add a new object nearby; instead, transform the existing one. The original object at those coordinates MUST be gone, replaced by the new version described in the prompt.
-9. DELETION: If the user asks to remove something, you must fill the area with the background that would naturally be behind it. Do not leave artifacts or "ghosts" of the original object.
-10. NO DUPLICATION: Never leave the original object in place while adding a new one. The edit must be a replacement, not an addition. If moving an object, it MUST be completely erased from the source location.
-11. NO GHOSTING: Ensure the original object is completely removed from its original position. There should be no "ghost", faint outline, or artifact of the old object remaining. The source area must be seamlessly filled with background pixels.
-12. NO OVERLAP: The new version of the object must occupy the same spatial volume as the old one. Do not place the new object next to the old one. It must be a direct pixel-for-pixel replacement where possible.
-13. NO NEW OBJECTS: Do not add any objects that were not explicitly requested. If the instruction is to "move" or "change" something, only that specific instance should be affected. Do not add background elements, extra characters, or random items.
-14. NO BACKGROUND DRIFT: The background textures, colors, and patterns must remain identical. Do not "re-imagine" the sand, sky, or water. Keep them exactly as they are in the input.
-15. STARFISH ISOLATION: There are multiple starfish in the scene. You MUST ONLY change the one at the specified location.
-16. ZERO TECHNICAL OVERLAYS: ABSOLUTELY NO numbers, bounding boxes, labels, text, or UI elements. The output must be a clean, natural-looking image. If you include any text or numbers from the prompt in the image, you have FAILED the task.
-17. DESTINATION ACCURACY: When moving an object to [${dest ? `${Math.round(dest.x)}, ${Math.round(dest.y)}` : 'N/A'}], ensure the object is placed precisely at those coordinates. Do not approximate.
-18. SOURCE CLEANUP: When moving an object, the source area [${marker ? `${Math.round(marker.x)}, ${Math.round(marker.y)}` : 'N/A'}] MUST be filled with background. No trace of the object should remain at the source.
-19. PURE IMAGE OUTPUT: The final result must be a photographic/artistic image with NO annotations. Any coordinate numbers or boxes appearing in the image will result in a total failure of the task.
-20. SINGLE INSTANCE RULE: You are moving the EXACT object identified at the source. Do not create a new version of it while leaving the old one. The object must disappear from point A and appear at point B. No exceptions. Any duplication is a failure.
-21. NO HALLUCINATED ADDITIONS: Do not add any items that were not in the original image or explicitly requested. If you move a snowman, do not add a scarf if it didn't have one.
-22. TOTAL ISOLATION: Imagine the object is in a vacuum. Only that object is affected. Every other object in the scene (the sun, the clouds, the other monsters, the snowman, etc.) must remain in their exact same pixels. If you move the crab, the snowman must not even shift by a single pixel. Any change to an unrequested object is a failure.
-23. DEFAULT MOVE BEHAVIOR: Unless the user explicitly uses words like "copy", "clone", "duplicate", or "add another", any request to change an object's location MUST result in its removal from the original source coordinates. Relocation is the default; duplication is the exception.
-24. OBJECT RELOCATION: When moving an object, ensure it is placed exactly at the specified destination coordinates. Do not approximate or move it to a different area than requested.` }
-          ],
-        },
-        config: {
-          imageConfig: {
-            aspectRatio: getClosestAspectRatio() as any
-          },
-          systemInstruction: "You are a surgical, non-destructive image editor. Your ONLY job is to apply a local modification while keeping the rest of the image 100% identical. You NEVER duplicate or clone objects unless explicitly asked to 'copy' or 'duplicate'. A 'move' command ALWAYS implies erasing the source and drawing at the destination. You NEVER add numbers, boxes, labels, text, or UI elements to the image. ABSOLUTELY NO COORDINATES OR NUMBERS SHOULD BE RENDERED IN THE OUTPUT. You NEVER add extra objects or decorations. You NEVER crop, NEVER zoom, and NEVER change the camera perspective. You always return the full, original scene with pixel-perfect consistency for all areas outside the target modification. Every unrequested object in the scene must remain in its exact original pixel state. Any text or numbers in the output image is a critical failure."
-        }
-      });
-
-      const newImgPart = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
-      const newImgData = newImgPart?.inlineData?.data;
-
-      if (newImgData) {
-        const img = new Image();
-        img.onload = () => {
-          const ctx = pCanvas.getContext('2d');
-          if (ctx) {
-            // Save current state to history before updating
-            const currentImgData = pCanvas.toDataURL('image/png');
-            setHistory(prev => [...prev, { image: currentImgData, objects: [...entities] }]);
-
-            ctx.clearRect(0, 0, dims.width, dims.height);
-            ctx.drawImage(img, 0, 0, dims.width, dims.height);
-            setCurrentImage(pCanvas.toDataURL('image/png'));
-            addLog('gemini', 'Canvas evolved.');
-            
-            // UPDATE MARKING COORDINATES IF MOVED OR REMOVED
-            if (marker && objectName) {
-              const lowerPrompt = editPrompt.toLowerCase();
-              const isRemoval = lowerPrompt.includes("remove") || lowerPrompt.includes("delete") || lowerPrompt.includes("erase");
-              
-              if (isRemoval) {
-                setEntities(prev => prev.filter(e => e.title !== objectName));
-                addLog('info', `Removed "${objectName}" from spatial map.`);
-              } else if (dest) {
-                setEntities(prev => prev.map(e => {
-                  if (e.title === objectName) {
-                    const dx = dest.x - marker.x;
-                    const dy = dest.y - marker.y;
-                    const [ymin, xmin, ymax, xmax] = e.bbox;
-                    return {
-                      ...e,
-                      bbox: [ymin + dy, xmin + dx, ymax + dy, xmax + dx] as [number, number, number, number]
-                    };
-                  }
-                  return e;
-                }));
-                addLog('info', `Updated marking for "${objectName}" to new location.`);
-              }
-            }
-
-            // Celebration! Burst from the marker's location
-            const lastMarker = markersRef.current[0];
-            const rect = traceCanvasRef.current?.getBoundingClientRect();
-            
-            if (lastMarker && rect) {
-              const originX = (rect.left + (lastMarker.x / 1000) * rect.width) / window.innerWidth;
-              const originY = (rect.top + (lastMarker.y / 1000) * rect.height) / window.innerHeight;
-              
-              confetti({
-                particleCount: 150,
-                spread: 90,
-                origin: { x: originX, y: originY },
-                colors: ['#857FE7', '#ffffff', '#FFD700'],
-                gravity: 0.8,
-                scalar: 1.2,
-                drift: 0,
-                ticks: 200
-              });
-            } else {
-              confetti({
-                particleCount: 150,
-                spread: 70,
-                origin: { y: 0.6 },
-                colors: ['#857FE7', '#ffffff', '#A5A0F3']
-              });
-            }
-
-            // MEMORY RESET: Clear markers and notify AI to forget previous context
-            markersRef.current = [];
-            spatialDescriptionRef.current = null; // CLEAR AGENT 1 MEMORY
-            lastProcessedTranscriptionRef.current = "";
-            providerRef.current?.sendTextHint(`[SYSTEM: IMAGE UPDATED. All previous markers, coordinates, and commands are now OBSOLETE. The scene has changed. Treat the current view as a completely fresh start. Forget all previous locations. DO NOT SPEAK OR ACKNOWLEDGE THIS MESSAGE.]`);
-
-            // CRITICAL: Clear control state IMMEDIATELY to prevent repeat edits
-            setActivePrompt(null);
-            setIsProcessing(false); 
-            isProcessingRef.current = false;
-            spatialDescriptionRef.current = null; // CLEAR AGENT 1 MEMORY
-            cursorHistoryRef.current = []; // Wipe history to prevent stale "historical" lookups
-            
-            // DELAY: Keep the visual marker and keyword visible DURING the confetti, 
-            // then reset them after 2 seconds as requested.
-            if (resetTimeoutRef.current) clearTimeout(resetTimeoutRef.current);
-            resetTimeoutRef.current = setTimeout(() => {
-              markersRef.current = [];
-              lastMarkerTimeRef.current = {};
-              setLiveTranscription("");
-              resetTimeoutRef.current = null;
-            }, 2000);
-            
-            // Explicitly notify the live session that the image has changed
-            // Use a very strong "HARD RESET" instruction to clear AI's mental state
-            lastExecutedPromptRef.current = null; // Clear on success so the user can repeat a command if they want to
-            providerRef.current?.sendTextHint("[SYSTEM HARD RESET]: The image has evolved. FORGET all previous markers, coordinates, and object positions. The current video frame is the ONLY source of truth. Treat this as a brand new session with a new image. READY FOR NEW COMMAND. DO NOT SPEAK OR GREET THE USER. STAY SILENT UNTIL THE USER SPEAKS.");
-          }
-        };
-        img.onerror = () => {
-          setIsProcessing(false);
-          setActivePrompt(null);
-          addLog('info', 'Failed to load evolved image.');
-        };
-        img.src = `data:image/png;base64,${newImgData}`;
-      } else {
-        setIsProcessing(false);
-        isProcessingRef.current = false;
-        setActivePrompt(null);
-        spatialDescriptionRef.current = null;
-        addLog('info', 'No image data in response.');
-      }
-    } catch (err) {
-      addLog('info', `Edit error: ${err}`);
-      setIsProcessing(false);
-      isProcessingRef.current = false;
-      setActivePrompt(null);
-      spatialDescriptionRef.current = null;
     }
   };
 
@@ -2004,30 +1659,6 @@ When the user points and speaks a command, call the appropriate tool — a map t
     }
   };
 
-  // Auto-execute logic: Wait for silence after a command is detected
-  useEffect(() => {
-    if (!pendingEdit || isProcessing) return;
-
-    const timer = setInterval(() => {
-      const now = Date.now();
-      const timeSinceTranscription = now - lastTranscriptionTimeRef.current;
-
-      // Handle Image Edits (Evolving)
-      if (pendingEdit) {
-        const timeSinceReceived = now - pendingEdit.receivedAt;
-        // Wait for 1.5s of silence for image edits (reduced from 2.5s)
-        if (lastTranscriptionTimeRef.current > 0 && timeSinceTranscription > 1500 && timeSinceReceived > 1000) {
-          setActivePrompt(pendingEdit.prompt);
-          executeImageEdit(pendingEdit.prompt, pendingEdit.bbox, pendingEdit.marker, pendingEdit.destMarker, pendingEdit.objectName);
-          providerRef.current?.sendToolResponse(pendingEdit.id, pendingEdit.name, { result: "ok" });
-          setPendingEdit(null);
-        }
-      }
-    }, 100);
-
-    return () => clearInterval(timer);
-  }, [pendingEdit, isProcessing]);
-
   // Keyboard Fallback
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -2283,7 +1914,7 @@ When the user points and speaks a command, call the appropriate tool — a map t
     };
     render();
     return () => cancelAnimationFrame(frame);
-  }, [dims, showMarkings, isLive]); // Re-run when dimensions, markings, or live state changes
+  }, [showMarkings, isLive]); // Re-run when markings or live state changes
 
   const handlePointerMove = React.useCallback((e: React.PointerEvent | PointerEvent) => {
     const rect = mainContainerRef.current?.getBoundingClientRect();
@@ -2296,7 +1927,6 @@ When the user points and speaks a command, call the appropriate tool — a map t
     const now = Date.now();
     const coords = { x, y };
     cursorRef.current = coords;
-    setCurrentCoords(coords);
     setTrailMousePos({
       x: e.clientX - rect.left,
       y: e.clientY - rect.top
@@ -2392,10 +2022,10 @@ When the user points and speaks a command, call the appropriate tool — a map t
     }
   };
 
-  const handlePointerUp = React.useCallback(async () => {
+  const handlePointerUp = React.useCallback(() => {
     setIsPainting(false);
 
-    // 1. Check if we have a path and are hovering an image
+    // Check if we have a path and are hovering an element
     if (pointerPath.length > 5 && hoveredIdRef.current) {
       // Add to persistent paths so it stays visible while speaking
       setPersistentPaths(prev => [...prev, pointerPath.map(p => ({ x: p.x, y: p.y }))]);
@@ -2404,64 +2034,25 @@ When the user points and speaks a command, call the appropriate tool — a map t
       const found = entityById(entitiesRef.current, hoveredId);
 
       if (found) {
-        let content = currentImage;
-        if (found.category !== 'map' && found.url) {
-          content = found.url;
-        }
+        // Calculate the center of the circled area from the path bounding box
+        const xs = pointerPath.map(p => p.x);
+        const ys = pointerPath.map(p => p.y);
+        const centerX = (Math.min(...xs) + Math.max(...xs)) / 2;
+        const centerY = (Math.min(...ys) + Math.max(...ys)) / 2;
 
-        const element = {
-          type: 'image',
-          content,
-          x: found.bbox[1],
-          y: found.bbox[0],
-          width: found.bbox[3] - found.bbox[1],
-          height: found.bbox[2] - found.bbox[0]
-        };
+        // Drop a silent marker at the center of the circled area
+        addMarker("", centerX, centerY);
 
-        // 2. Capture the area
-        const result = await captureImageArea(element, pointerPath);
-        
-        if (result) {
-          const { url: croppedUrl, box } = result;
-          
-          // Add a silent marker at the center of the circled area
-          const centerX = box.x + box.width / 2;
-          const centerY = box.y + box.height / 2;
-          addMarker("", centerX, centerY);
-          
-          // Send a circle-gesture hint to whichever backend is live (core context).
-          if (providerRef.current) {
-            const markerIndex = markersRef.current.length; // Approximate index
-            providerRef.current.sendTextHint(`[SYSTEM: User circled an area on ${displayName(found)} and a marker M${markerIndex} has been placed at [${Math.round(centerX)}, ${Math.round(centerY)}].]`);
-          }
-
-          // 3. Send the cropped circled region as an image turn. Gemini-only: this uses
-          // sendClientContent (no provider-interface equivalent); OpenAI relies on the
-          // sparse vision frames instead.
-          if (sessionRef.current) {
-            const [mime, data] = croppedUrl.split(',');
-            const mimeType = mime.split(':')[1].split(';')[0];
-
-            addLog('gemini', `Sending circled region of ${displayName(found)} to Gemini`);
-
-            // Send the image as a "turn" in the conversation
-            sessionRef.current.sendClientContent({
-              turns: [{
-                role: "user",
-                parts: [
-                  { text: `[SYSTEM] The user just circled this region on ${displayName(found)}. Focus on it.` },
-                  { inlineData: { mimeType, data } }
-                ]
-              }],
-              turnComplete: false // Do NOT trigger immediate response, wait for user to finish speaking
-            });
-          }
+        // Send a circle-gesture hint to whichever backend is live (core context).
+        if (providerRef.current) {
+          const markerIndex = markersRef.current.length; // Approximate index
+          providerRef.current.sendTextHint(`[SYSTEM: User circled an area on ${displayName(found)} and a marker M${markerIndex} has been placed at [${Math.round(centerX)}, ${Math.round(centerY)}].]`);
         }
       }
     }
-    // Clear path after capture
+    // Clear path after gesture
     setPointerPath([]);
-  }, [pointerPath, currentImage]);
+  }, [pointerPath]);
 
   // Global cursor tracking to prevent "stuck" UI cursor
   useEffect(() => {
@@ -2646,7 +2237,7 @@ When the user points and speaks a command, call the appropriate tool — a map t
       }, 'image/jpeg', 0.6);
     }, sendFrequency);
     return () => clearInterval(interval);
-  }, [isLive, sendFrequency, dims, layoutBounds, activeProgram]);
+  }, [isLive, sendFrequency, layoutBounds, activeProgram]);
 
   // Refresh the real-pixel surface snapshot (throttled, fail-soft) for the vision frame.
   useEffect(() => {
@@ -2681,42 +2272,6 @@ When the user points and speaks a command, call the appropriate tool — a map t
       void terminateOcr(); // free the OCR worker
     };
   }, []);
-  const resetCanvas = () => {
-    const ctx = persistentCanvasRef.current?.getContext('2d');
-    if(ctx) {
-      const img = new Image();
-      img.crossOrigin = "anonymous";
-      img.src = INITIAL_IMAGE;
-      img.onload = () => {
-        // Use the same cropping logic as initial load
-        const imgAspect = img.naturalWidth / img.naturalHeight;
-        let sx, sy, sWidth, sHeight;
-        if (imgAspect > 1) {
-          sHeight = img.naturalHeight;
-          sWidth = img.naturalHeight;
-          sx = (img.naturalWidth - sWidth) / 2;
-          sy = 0;
-        } else {
-          sWidth = img.naturalWidth;
-          sHeight = img.naturalWidth;
-          sx = 0;
-          sy = (img.naturalHeight - sHeight) / 2;
-        }
-        
-        ctx.clearRect(0, 0, dims.width, dims.height);
-        ctx.drawImage(img, sx, sy, sWidth, sHeight, 0, 0, dims.width, dims.height);
-        setCurrentImage(persistentCanvasRef.current!.toDataURL('image/png'));
-        const baseEntities = buildEntities(program, perceivedLabelsRef.current, null);
-        setEntities(baseEntities);
-        entitiesRef.current = baseEntities;
-        setHistory([]); // Clear history on full reset
-        addLog('info', 'Canvas Reset.');
-        // Clear markers on reset
-        markersRef.current = [];
-        lastMarkerTimeRef.current = {};
-      }
-    }
-  };
 
   // Swap the active program (Word/Excel/PowerPoint/Photo). Clears selection + task progress,
   // resets the mock document, and lets the layout effect recompute bboxes for the new images.
@@ -2759,7 +2314,6 @@ When the user points and speaks a command, call the appropriate tool — a map t
   };
 
   const handleReset = () => {
-    setHistory([]);
     setPersistentPaths([]);
     setPointerPath([]);
     const baseEntities = buildEntities(program, perceivedLabelsRef.current, null);
@@ -2772,35 +2326,6 @@ When the user points and speaks a command, call the appropriate tool — a map t
     mockDocRef.current = freshDoc;
     setUndoStack([]);
     referents.clear();
-
-    const pCanvas = persistentCanvasRef.current;
-    if (pCanvas) {
-      const ctx = pCanvas.getContext('2d');
-      const img = new Image();
-      img.crossOrigin = "anonymous";
-      img.src = INITIAL_IMAGE + "?t=" + Date.now();
-      img.onload = () => {
-        const w = dims.width;
-        const h = dims.height;
-        const imgAspect = img.naturalWidth / img.naturalHeight;
-        let sx, sy, sWidth, sHeight;
-        if (imgAspect > 1) {
-          sHeight = img.naturalHeight;
-          sWidth = img.naturalHeight;
-          sx = (img.naturalWidth - sWidth) / 2;
-          sy = 0;
-        } else {
-          sWidth = img.naturalWidth;
-          sHeight = img.naturalWidth;
-          sx = 0;
-          sy = (img.naturalHeight - sHeight) / 2;
-        }
-        ctx?.clearRect(0, 0, w, h);
-        ctx?.drawImage(img, sx, sy, sWidth, sHeight, 0, 0, w, h);
-        setCurrentImage(pCanvas.toDataURL('image/png'));
-      };
-    }
-    
     addLog('info', 'Map reset to original state.');
   };
 
@@ -2926,7 +2451,6 @@ When the user points and speaks a command, call the appropriate tool — a map t
             </button>
           </div>
 
-          <canvas ref={persistentCanvasRef} className="hidden" />
         </main>
 
         {/* Responsive Sidebar */}
@@ -3282,24 +2806,24 @@ When the user points and speaks a command, call the appropriate tool — a map t
 
           {/* Listening Box - Separate Section */}
           <section className="shrink-0 bg-[var(--card-bg)] border border-[var(--card-border)] rounded-2xl p-6 animate-in fade-in slide-in-from-top-2 duration-300">
-            <div className={`${(pendingEdit || isProcessing || liveTranscription || isLive) ? 'bg-[var(--inner-box-bg)] border-[var(--accent-color)]' : 'bg-[var(--inner-box-bg)] border-[var(--card-border)]'} border p-5 rounded-2xl flex flex-col gap-4 shadow-sm transition-colors duration-300`}>
+            <div className={`${(isProcessing || liveTranscription || isLive) ? 'bg-[var(--inner-box-bg)] border-[var(--accent-color)]' : 'bg-[var(--inner-box-bg)] border-[var(--card-border)]'} border p-5 rounded-2xl flex flex-col gap-4 shadow-sm transition-colors duration-300`}>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <div className={`w-2 h-2 rounded-full ${(pendingEdit || isProcessing || liveTranscription || isLive) ? 'bg-[var(--accent-color)]' : 'bg-[var(--text-secondary)] opacity-30'} ${isProcessing ? 'animate-spin' : (isLive || pendingEdit || liveTranscription) ? 'animate-pulse-strong' : ''}`} />
-                  <span className={`text-[11px] font-mono font-normal tracking-tight ${(pendingEdit || isProcessing || liveTranscription || isLive) ? 'text-[var(--accent-color)] uppercase' : 'text-[var(--text-secondary)] uppercase'}`}>
-                    {isProcessing ? 'Evolving...' : (liveTranscription || pendingEdit ? 'Listening...' : (isLive ? 'Listening...' : 'System Idle'))}
+                  <div className={`w-2 h-2 rounded-full ${(isProcessing || liveTranscription || isLive) ? 'bg-[var(--accent-color)]' : 'bg-[var(--text-secondary)] opacity-30'} ${isProcessing ? 'animate-spin' : (isLive || liveTranscription) ? 'animate-pulse-strong' : ''}`} />
+                  <span className={`text-[11px] font-mono font-normal tracking-tight ${(isProcessing || liveTranscription || isLive) ? 'text-[var(--accent-color)] uppercase' : 'text-[var(--text-secondary)] uppercase'}`}>
+                    {isProcessing ? 'Evolving...' : (liveTranscription ? 'Listening...' : (isLive ? 'Listening...' : 'System Idle'))}
                   </span>
                 </div>
-                <span className={`text-[8px] font-mono uppercase opacity-50 ${(pendingEdit || isProcessing || liveTranscription || isLive) ? 'text-[var(--text-primary)]' : 'text-[var(--text-secondary)]'}`}>
-                  {isProcessing ? 'GPU ACTIVE' : (liveTranscription || pendingEdit ? 'VOICE' : (isLive ? 'LISTENING' : 'OFFLINE'))}
+                <span className={`text-[8px] font-mono uppercase opacity-50 ${(isProcessing || liveTranscription || isLive) ? 'text-[var(--text-primary)]' : 'text-[var(--text-secondary)]'}`}>
+                  {isProcessing ? 'GPU ACTIVE' : (liveTranscription ? 'VOICE' : (isLive ? 'LISTENING' : 'OFFLINE'))}
                 </span>
               </div>
 
-              <p className={`text-[11px] font-mono leading-relaxed ${(pendingEdit || isProcessing || liveTranscription || lastError) ? 'text-[var(--text-primary)] font-normal italic' : 'text-[var(--text-secondary)] font-normal'}`}>
+              <p className={`text-[11px] font-mono leading-relaxed ${(isProcessing || liveTranscription || lastError) ? 'text-[var(--text-primary)] font-normal italic' : 'text-[var(--text-secondary)] font-normal'}`}>
                 {lastError ? (
                   <span className="text-red-500">Error: {lastError}</span>
                 ) : (
-                  (isProcessing ? activePrompt : (liveTranscription || pendingEdit?.prompt)) || (isLive ? "..." : "Start point and speak to begin.")
+                  (isProcessing ? activePrompt : liveTranscription) || (isLive ? "..." : "Start point and speak to begin.")
                 )}
               </p>
               <form
@@ -3428,36 +2952,6 @@ When the user points and speaks a command, call the appropriate tool — a map t
 
             {isDebugOpen && (
               <div className="px-6 pb-6 flex flex-col h-full space-y-6 overflow-y-auto custom-scrollbar">
-                <section className="flex items-center gap-4 bg-[var(--bg-color)] p-4 rounded-2xl border border-[var(--card-border)]">
-              <div className="flex-1 min-w-0">
-                <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest block mb-1">AI Vision State</label>
-                <p className="text-[9px] text-slate-400 italic leading-tight mb-2">Magnified view of your target.</p>
-                {markersRef.current[0]?.identifiedObject && !["BOTTOM RIGHT AREA", "MONSTER ISLAND", "MIDDLE ISLAND", "LEFT ISLAND", "MONSTER ISLAND (TOP RIGHT)", "MIDDLE ISLAND (CENTER)", "LEFT ISLAND (LEFT SIDE)"].includes(markersRef.current[0].identifiedObject) && (
-                  <div className="inline-flex items-center gap-1.5 bg-green-500/10 text-green-600 text-[8px] font-black px-2 py-1 rounded-lg uppercase tracking-widest border border-green-500/20 animate-in fade-in slide-in-from-left-2">
-                    <div className="w-1 h-1 rounded-full bg-green-500 animate-pulse" />
-                    {markersRef.current[0].identifiedObject}
-                  </div>
-                )}
-              </div>
-              <div 
-                className="w-20 h-20 shrink-0 bg-slate-100 rounded-xl border border-black/5 overflow-hidden shadow-inner relative"
-                style={{
-                  backgroundImage: `url(${currentImage})`,
-                  backgroundSize: '300%',
-                  backgroundPosition: `${((currentCoords.x / 1000) * 3 - 0.5) / 2 * 100}% ${((currentCoords.y / 1000) * 3 - 0.5) / 2 * 100}%`,
-                  backgroundRepeat: 'no-repeat',
-                }}
-              >
-                {/* Smooth Crosshair Overlay */}
-                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                  <div className="w-full h-[1px] bg-red-500/30" />
-                  <div className="h-full w-[1px] bg-red-500/30 absolute" />
-                  <div className="w-4 h-4 border border-red-500/40 rounded-full bg-red-500/5" />
-                </div>
-                {!isLive && <div className="absolute inset-0 bg-[var(--card-bg)] opacity-80 flex items-center justify-center text-[8px] text-[var(--text-secondary)] uppercase font-black">Offline</div>}
-              </div>
-            </section>
-
             <section className="flex-1 min-h-[200px] bg-[var(--bg-color)] rounded-2xl p-6 border border-[var(--card-border)] flex flex-col overflow-hidden">
               <span className="text-[9px] font-black uppercase text-slate-400 mb-4 tracking-widest">Operation Stream</span>
               <div className="flex-1 font-mono text-[9px] space-y-3 overflow-y-auto custom-scrollbar pr-2">
