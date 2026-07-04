@@ -1,6 +1,14 @@
-// @vitest-environment jsdom
 import { describe, it, expect } from 'vitest';
 import { clampWindow, loadWindowRect, saveWindowRect } from './windowState';
+
+// In-memory sessionStorage stub — keeps the suite dependency-free (node env has no storage).
+const store = new Map<string, string>();
+(globalThis as any).sessionStorage = {
+  getItem: (k: string) => store.get(k) ?? null,
+  setItem: (k: string, v: string) => { store.set(k, String(v)); },
+  removeItem: (k: string) => { store.delete(k); },
+  clear: () => { store.clear(); },
+} as Storage;
 
 describe('windowState', () => {
   it('clamps below minimum size up to 320x240', () => {
