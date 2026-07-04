@@ -16,10 +16,13 @@ export function RailPanel({ state, teachingRail, onEvent, onShowMe }: {
   const drag = useRef<{ sx: number; sy: number; start: { x: number; y: number } } | null>(null);
 
   const respond = state.rail;
-  const projected = respond ? state : teachingRail ? { rail: teachingRail, openWhy: null, flipped: [] } : null;
+  const projected: RailState | null = respond
+    ? state
+    : teachingRail ? { rail: teachingRail, openWhy: null, flipped: [] as number[] }
+    : null;
   if (!projected?.rail) return null;
   const isProjection = !respond;
-  const cards = visibleCards(projected as RailState);
+  const cards = visibleCards(projected);
 
   if (collapsed) {
     return (
@@ -50,8 +53,8 @@ export function RailPanel({ state, teachingRail, onEvent, onShowMe }: {
       {cards.map(({ card, index, mode }) => (
         <CardView key={index} card={card} index={index} mode={mode}
           whyOpen={state.openWhy === index} flipped={state.flipped.includes(index)}
-          onWhy={() => onEvent({ type: 'user.whyToggle', index })}
-          onFlip={() => onEvent({ type: 'user.flip', index })}
+          onWhy={() => { if (!isProjection) onEvent({ type: 'user.whyToggle', index }); }}
+          onFlip={() => { if (!isProjection) onEvent({ type: 'user.flip', index }); }}
           onShowMe={() => card.entityId && onShowMe(card.entityId)}
           onCheckConfirm={() => onEvent({ type: 'user.checkConfirm' })}
         />

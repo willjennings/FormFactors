@@ -44,7 +44,7 @@ export function CardView({ card, index, mode, whyOpen, flipped, onWhy, onFlip, o
         <>
           <p className="text-[13px] font-semibold text-[var(--text-primary)] mt-0.5">
             {card.band === 'hollow' && card.t === 'do'
-              ? <>Find <strong>{card.target}</strong> — I can't point at it. {card.text && boldTarget(card.text)}</>
+              ? <>Find <strong>{card.target}</strong> — I can't point at it.</>
               : boldTarget(card.text ?? card.prompt ?? '')}
           </p>
           {card.result && <p className="text-[11px] text-teal-600 dark:text-teal-400 mt-0.5">→ {card.result}</p>}
