@@ -7,14 +7,8 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { GoogleGenAI, Modality, GenerateContentResponse } from '@google/genai';
 import type { VoiceTool, VoiceProvider, ProviderKind } from './voice/types';
 import {
-  Settings,
   X,
   CheckCircle,
-  Plus,
-  MoreVertical,
-  Sun,
-  Moon,
-  Laptop,
   Shield,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -346,8 +340,6 @@ export default function App() {
     try { setIsEmbedded(window.self !== window.top); } catch { setIsEmbedded(true); }
   }, []);
   const [mainSize, setMainSize] = useState({ width: 0, height: 0 });
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [activePrompt, setActivePrompt] = useState<string | null>(null);
   const [liveTranscription, setLiveTranscription] = useState("");
   const [isConnecting, setIsConnecting] = useState(false);
   const pendingTypedRef = useRef<string | null>(null);
@@ -428,11 +420,7 @@ export default function App() {
   const lastAudioTimeRef = useRef(0);
   const audioQueueRef = useRef<Int16Array[]>([]);
   const transcriptionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const resetTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const lastExecutedPromptRef = useRef<string | null>(null);
-  const isProcessingRef = useRef(false);
   const lastProcessedTranscriptionRef = useRef<string>("");
-  const spatialDescriptionRef = useRef<string | null>(null);
 
   const [sendFrequency, setSendFrequency] = useState(150); // Increased frequency for better AI responsiveness
   // PHASE G: an outward share request — witness recipient + payload before sending.
@@ -1287,11 +1275,6 @@ export default function App() {
         "this spot", "that spot", "right here", "right there"
       ].includes(kw);
 
-      // RESET SPATIAL DESCRIPTION IF NEW INTERACTION STARTS
-      if (!isDestination) {
-        spatialDescriptionRef.current = null;
-      }
-
       const hX = Math.round(focusPoint.x);
       const hY = Math.round(focusPoint.y);
 
@@ -1366,11 +1349,6 @@ export default function App() {
         }
       }
 
-      // AGENT 1: SPATIAL ANALYST REMOVED
-      // (This was for image editing which is not used in this map/gallery app)
-      if (isDestination) {
-        spatialDescriptionRef.current = null;
-      }
     });
   };
 
@@ -2162,7 +2140,6 @@ export default function App() {
   useEffect(() => {
     return () => {
       if (transcriptionTimeoutRef.current) clearTimeout(transcriptionTimeoutRef.current);
-      if (resetTimeoutRef.current) clearTimeout(resetTimeoutRef.current);
       void terminateOcr(); // free the OCR worker
     };
   }, []);
