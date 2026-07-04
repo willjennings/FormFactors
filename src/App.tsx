@@ -66,6 +66,7 @@ import { buildSpreadsheetSnapshot, formatSnapshotForModel } from './widgets/spre
 import { ProgramSurface } from './widgets/ProgramSurface';
 import { ProgramWindow } from './shell/ProgramWindow';
 import { Omnibox } from './shell/Omnibox';
+import { DebugDrawer } from './shell/DebugDrawer';
 import { clampWindow, loadWindowRect, saveWindowRect, type WindowRect } from './shell/windowState';
 import { docStatusLabel } from './widgets/surfaceModels';
 import type { TeachingEvent } from './teaching/types';
@@ -309,7 +310,6 @@ export default function App() {
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [firstRunHint, setFirstRunHint] = useState(true);
-  void drawerOpen;
   const [showRotateOverlay, setShowRotateOverlay] = useState(false);
   const [showMobileOverlay, setShowMobileOverlay] = useState(false);
   // Testbed: run on phone/tablet to evaluate the paradigm across form factors, bypassing the
@@ -1536,6 +1536,7 @@ export default function App() {
   // Keyboard Fallback
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); handleUndo(); return; }
       if (!isLive) return;
       if (e.key === 't') addMarker("this");
       if (e.key === 'i') addMarker("it");
@@ -1545,7 +1546,8 @@ export default function App() {
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [isLive, activeProgram]);
+    // undoStack is a dep so ⌘Z never fires a stale handleUndo (its closure reads the stack).
+  }, [isLive, activeProgram, undoStack]);
 
   // Visual Shimmering Loop
   useEffect(() => {
@@ -2223,7 +2225,7 @@ export default function App() {
 
   return (
     <div className={`flex flex-col h-screen bg-[var(--bg-color)] bg-dots text-[var(--text-primary)] overflow-hidden font-sans selection:bg-indigo-500/30 ${isLive ? 'custom-cursor-active' : ''}`}>
-      <div className="flex-1 flex flex-col lg:flex-row overflow-y-auto lg:overflow-hidden custom-scrollbar">
+      <div className="flex-1 overflow-hidden">
         <main
           ref={mainContainerRef}
           onPointerMove={handlePointerMove}
@@ -2231,7 +2233,7 @@ export default function App() {
           onPointerUp={handlePointerUp}
           onPointerLeave={handlePointerUp}
           style={{ touchAction: isLive ? 'none' : 'auto' }}
-          className="flex-1 relative min-h-[60vh] lg:min-h-0 bg-[var(--bg-color)]"
+          className="h-full w-full relative bg-[var(--bg-color)]"
         >
           <div aria-hidden className="absolute inset-0 pointer-events-none opacity-[0.04] bg-[radial-gradient(circle_at_1px_1px,currentColor_1px,transparent_0)] [background-size:24px_24px]" />
           <MenuBar isLive={isLive} isConnecting={isConnecting} isDarkMode={isDarkMode} onToggleTheme={() => setIsDarkMode(!isDarkMode)} onToggleDrawer={() => setDrawerOpen(o => !o)} />
@@ -2278,7 +2280,7 @@ export default function App() {
           {feedbackToast && (
             <div
               key={feedbackToast.at}
-              className={`absolute bottom-4 left-1/2 -translate-x-1/2 z-[60] pointer-events-none flex items-center gap-2 px-4 py-2 rounded-full shadow-lg border backdrop-blur animate-in fade-in slide-in-from-bottom-2 duration-200 ${
+              className={`absolute bottom-4 left-1/2 -translate-x-1/2 z-[60] pointer-events-none [&>button]:pointer-events-auto flex items-center gap-2 px-4 py-2 rounded-full shadow-lg border backdrop-blur animate-in fade-in slide-in-from-bottom-2 duration-200 ${
                 feedbackToast.outcome === 'error'
                   ? 'bg-red-500/10 border-red-500/40 text-red-600 dark:text-red-400'
                   : feedbackToast.outcome === 'needs-confirm'
@@ -2292,6 +2294,9 @@ export default function App() {
                   ? <Shield size={14} />
                   : <CheckCircle size={14} className="text-green-500" />}
               <span className="text-[12px] font-mono">{feedbackToast.label}</span>
+              {feedbackToast.outcome !== 'error' && undoStack.length > 0 && (
+                <button onClick={handleUndo} className="pointer-events-auto ml-1 underline decoration-dotted text-[11px] font-mono">undo</button>
+              )}
             </div>
           )}
 
@@ -2318,332 +2323,95 @@ export default function App() {
             onChipTap={(s) => setFocusTitle(TASKS.find(t => t.key === s.key)?.targetElement)}
           />
 
-        </main>
-
-        {/* Responsive Sidebar */}
-        <aside id="sidebar-section" className="w-full lg:w-[400px] p-3 lg:p-6 flex flex-col gap-4 shrink-0 h-auto lg:h-full overflow-visible lg:overflow-y-auto custom-scrollbar">
-          {/* Session Controls Box - Buttons */}
-          <section className="shrink-0 bg-[var(--card-bg)] border border-[var(--card-border)] rounded-2xl p-6">
-            {/* Honest Mode toggle — the A/B switch (confident Google baseline vs honest) */}
-            <button
-              onClick={() => setHonestMode(h => !h)}
-              title={honestMode
-                ? "Honest mode ON — carries confidence, asks when a photo is ambiguous"
-                : "Confident baseline — treats every hint as absolute truth (Google default)"}
-              className={`w-full mb-4 flex items-center justify-between gap-3 px-4 py-3 rounded-2xl border transition-all ${
-                honestMode
-                  ? 'bg-green-500/10 border-green-500/40'
-                  : 'bg-[var(--inner-box-bg)] border-[var(--card-border)] hover:border-[var(--accent-color)]'
-              }`}
-            >
-              <div className="flex items-center gap-2.5 min-w-0">
-                {honestMode
-                  ? <ShieldCheck size={18} className="text-green-500 shrink-0" />
-                  : <Shield size={18} className="text-[var(--text-secondary)] shrink-0" />}
-                <div className="flex flex-col items-start min-w-0">
-                  <span className="text-[12px] font-bold text-[var(--text-primary)] leading-tight">Honest mode</span>
-                  <span className="text-[10px] font-mono text-[var(--text-secondary)] leading-tight truncate">
-                    {honestMode ? 'Asks when unsure' : 'Confident (Google baseline)'}
+          {/* Witness cards — parked here temporarily (Task 9 gives them buttons + final home) */}
+          <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-30 w-[min(560px,88vw)] flex flex-col gap-2">
+            {shareRequest && (
+              <section className={`shrink-0 bg-[var(--card-bg)] border rounded-2xl p-6 animate-in fade-in slide-in-from-top-2 duration-300 ${shareRequest.confirmed ? 'border-green-500/50' : 'border-amber-500/40'}`}>
+                <div className="flex items-center gap-2 mb-3">
+                  {shareRequest.confirmed
+                    ? <CheckCircle size={16} className="text-green-500" />
+                    : <Shield size={16} className="text-amber-500" />}
+                  <span className={`text-[11px] font-mono font-bold uppercase tracking-widest ${shareRequest.confirmed ? 'text-green-500' : 'text-amber-500'}`}>
+                    {shareRequest.confirmed ? 'Sent' : 'About to send — confirm'}
                   </span>
                 </div>
-              </div>
-              <div className={`relative w-11 h-6 rounded-full shrink-0 transition-colors ${honestMode ? 'bg-green-500' : 'bg-slate-300 dark:bg-slate-600'}`}>
-                <div className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${honestMode ? 'translate-x-5' : 'translate-x-0'}`} />
-              </div>
-            </button>
-            <div className="w-full mb-4 flex items-center justify-between gap-3 px-4 py-3 rounded-2xl border bg-[var(--inner-box-bg)] border-[var(--card-border)]">
-              <span className="text-[12px] font-bold text-[var(--text-primary)]">Program</span>
-              <select
-                value={activeProgram}
-                onChange={(e) => handleProgramChange(e.target.value as ProgramId)}
-                className="text-[12px] font-mono bg-[var(--card-bg)] border border-[var(--card-border)] rounded-lg px-2 py-1 text-[var(--text-primary)]"
-              >
-                {PROGRAMS.map(p => (
-                  <option key={p.id} value={p.id}>{p.label}</option>
-                ))}
-              </select>
-            </div>
-            <div className="w-full mb-4 flex items-center justify-between gap-3 px-4 py-3 rounded-2xl border bg-[var(--inner-box-bg)] border-[var(--card-border)]">
-              <span className="text-[12px] font-bold text-[var(--text-primary)]">Voice backend</span>
-              <select
-                value={voiceBackend}
-                onChange={(e) => setVoiceBackend(e.target.value as ProviderKind)}
-                className="text-[12px] font-mono bg-[var(--card-bg)] border border-[var(--card-border)] rounded-lg px-2 py-1 text-[var(--text-primary)]"
-              >
-                <option value="gemini">Gemini</option>
-                <option value="azure">RTV2 (Azure Realtime)</option>
-              </select>
-            </div>
-            {/* DIAL A — autonomy/friction: how readily verbs commit vs. witness-render first. */}
-            <div className="w-full mb-4 flex items-center justify-between gap-3 px-4 py-3 rounded-2xl border bg-[var(--inner-box-bg)] border-[var(--card-border)]">
-              <span className="text-[12px] font-bold text-[var(--text-primary)]" title="How readily actions commit vs. ask you to confirm first">Autonomy</span>
-              <select
-                value={autonomy}
-                onChange={(e) => setAutonomy(e.target.value as Autonomy)}
-                className="text-[12px] font-mono bg-[var(--card-bg)] border border-[var(--card-border)] rounded-lg px-2 py-1 text-[var(--text-primary)]"
-              >
-                {AUTONOMY_OPTIONS.map(o => (
-                  <option key={o.id} value={o.id}>{o.label}</option>
-                ))}
-              </select>
-            </div>
-            {/* DIAL B — feedback modality: how the app confirms (the model never self-confirms). */}
-            <div className="w-full mb-4 flex items-center justify-between gap-3 px-4 py-3 rounded-2xl border bg-[var(--inner-box-bg)] border-[var(--card-border)]">
-              <span className="text-[12px] font-bold text-[var(--text-primary)]" title="How the app confirms actions — the assistant stays silent on success">Feedback</span>
-              <select
-                value={feedbackMode}
-                onChange={(e) => setFeedbackMode(e.target.value as FeedbackMode)}
-                className="text-[12px] font-mono bg-[var(--card-bg)] border border-[var(--card-border)] rounded-lg px-2 py-1 text-[var(--text-primary)]"
-              >
-                {FEEDBACK_OPTIONS.map(o => (
-                  <option key={o.id} value={o.id}>{o.label}</option>
-                ))}
-              </select>
-            </div>
-            {/* Audition the earcon set without a live session (clicking unlocks the audio ctx). */}
-            <div className="w-full mb-4 px-4 py-3 rounded-2xl border bg-[var(--inner-box-bg)] border-[var(--card-border)]">
-              <span className="text-[11px] font-mono uppercase tracking-wide text-[var(--text-secondary)]">Audition earcons</span>
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {EARCON_KINDS.map(kind => (
-                  <button
-                    key={kind}
-                    onClick={() => playEarcon(kind)}
-                    className="px-2 py-1 rounded-md text-[10px] font-mono border bg-[var(--card-bg)] border-[var(--card-border)] text-[var(--text-primary)] hover:border-[#0077F0] hover:text-[#0077F0] dark:hover:text-white transition-colors active:scale-95"
-                    title={`Play "${kind}" earcon`}
-                  >
-                    {kind.replace('commit-', '')}
-                  </button>
-                ))}
-              </div>
-            </div>
-            {/* G3 OCR sub-elements toggle — hidden: OCR of retired tile URLs would describe off-screen imagery; re-enable once wired to the live surface snapshot. */}
-            <div className="hidden w-full mb-4 flex items-center justify-between gap-3 px-4 py-3 rounded-2xl border bg-[var(--inner-box-bg)] border-[var(--card-border)]">
-              <div className="flex flex-col">
-                <span className="text-[12px] font-bold text-[var(--text-primary)]">OCR sub-elements</span>
-                <span className="text-[10px] font-mono text-[var(--text-secondary)]">{ocrEnabled ? 'point at individual words' : 'whole-tile pointing'}</span>
-              </div>
-              <button
-                onClick={() => { setOcrEnabled(v => { const nv = !v; if (!nv) { ocrWordsRef.current = {}; setHoveredWord(null); } return nv; }); }}
-                className={`relative w-11 h-6 rounded-full shrink-0 transition-colors ${ocrEnabled ? 'bg-green-500' : 'bg-slate-300 dark:bg-slate-600'}`}
-                title="Recognize text in the screenshots (downloads an OCR model the first time; needs network)"
-              >
-                <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${ocrEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
-              </button>
-            </div>
-            {/* Testbed telemetry — live metrics for the active config + a JSON export. */}
-            {(() => {
-              void telemetryTick; // re-read on tick
-              const device = detectDevice();
-              const tm = telemetry.metrics();
-              const cal = tm.deixis.calibration;
-              return (
-                <div className="w-full mb-4 px-4 py-3 rounded-2xl border bg-[var(--inner-box-bg)] border-[var(--card-border)]">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-[11px] font-mono uppercase tracking-wide text-[var(--text-secondary)]">Testbed</span>
-                    <span className="text-[10px] font-mono text-[var(--text-secondary)]">{device.formFactor} · {device.width}×{device.height} · {device.pointer}</span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] font-mono text-[var(--text-primary)]">
-                    <span className="text-[var(--text-secondary)]">Deixis acc</span>
-                    <span>{tm.deixis.accuracy === null ? '—' : `${Math.round(tm.deixis.accuracy * 100)}% (${tm.deixis.correct}/${tm.deixis.graded})`}</span>
-                    <span className="text-[var(--text-secondary)]">Calibration</span>
-                    <span>hi {cal.high.correct}/{cal.high.n} · lo {cal.low.correct}/{cal.low.n}</span>
-                    <span className="text-[var(--text-secondary)]">Actions</span>
-                    <span>{tm.actions.total} ({tm.actions.commits}✓ {tm.actions.witnesses}?)</span>
-                    <span className="text-[var(--text-secondary)]">Grounding</span>
-                    <span>{tm.grounding.agreementRate === null ? '—' : `${Math.round(tm.grounding.agreementRate * 100)}% (${tm.grounding.agree}/${tm.grounding.total})`}</span>
-                    <span className="text-[var(--text-secondary)]">Corrections</span>
-                    <span>{tm.corrections} ({Math.round(tm.correctionRate * 100)}%)</span>
-                    <span className="text-[var(--text-secondary)]">Errors</span>
-                    <span>{tm.errors}</span>
-                  </div>
-                  <button
-                    onClick={() => telemetry.exportJSON()}
-                    className="mt-2 w-full px-2 py-1 rounded-md text-[11px] font-mono border bg-[var(--card-bg)] border-[var(--card-border)] text-[var(--text-primary)] hover:border-[#0077F0] hover:text-[#0077F0] dark:hover:text-white transition-colors active:scale-95"
-                  >
-                    Export session JSON
-                  </button>
-                </div>
-              );
-            })()}
-            {isEmbedded && !isLive && (
-              <div className="w-full mb-3 px-4 py-3 rounded-2xl border border-amber-500/40 bg-amber-500/5">
-                <p className="text-[11px] font-mono text-[var(--text-secondary)] leading-relaxed mb-2">
-                  Running in an embedded preview — the microphone is usually blocked here. Open in a full tab to grant mic access.
-                </p>
-                <button
-                  onClick={() => window.open(window.location.href, '_blank', 'noopener')}
-                  className="w-full h-[40px] rounded-full font-dm font-bold text-[12px] flex items-center justify-center gap-2 border border-amber-500/60 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 transition-colors"
-                >
-                  Open in a new tab ↗
-                </button>
-              </div>
-            )}
-            {!isLive ? (
-              <button
-                onClick={startLiveSession}
-                className="w-full h-[60px] rounded-full font-dm font-bold text-[15px] tracking-[-0.025em] leading-[28px] transition-all shadow-lg bg-[var(--inverse-bg)] text-[var(--inverse-text)] hover:opacity-90 hover:scale-[1.02] active:scale-98 flex items-center justify-center gap-3"
-              >
-                <Mic size={20} /> Start Point and Speak
-              </button>
-            ) : (
-              <div className="flex gap-2">
-                <button 
-                  onClick={() => providerRef.current?.close()}
-                  className="flex-1 h-[60px] rounded-full font-dm font-bold text-[15px] tracking-[-0.025em] leading-[28px] transition-all shadow-lg bg-[var(--inverse-bg)] text-[var(--inverse-text)] hover:opacity-90 hover:scale-[1.02] active:scale-98 flex items-center justify-center gap-3"
-                >
-                  End Session
-                </button>
-                <button 
-                  onClick={handleReset}
-                  className="flex-1 h-[60px] rounded-full font-dm font-bold text-[15px] tracking-[-0.025em] leading-[28px] transition-all flex items-center justify-center active:scale-95 border bg-[var(--card-bg)] border-[var(--card-border)] dark:border-[#495564] text-[var(--text-primary)] hover:bg-[#E7F0FF] hover:border-[#0077F0] hover:text-[#0077F0] dark:hover:bg-[#344256] dark:hover:border-[#0076F0] dark:hover:text-white"
-                >
-                  <RotateCcw size={18} className="mr-2" /> Reset
-                </button>
-              </div>
-            )}
-          </section>
-
-          {/* PHASE G: Outward share — witness recipient + payload before sending (or a sent receipt). */}
-          {shareRequest && (
-            <section className={`shrink-0 bg-[var(--card-bg)] border rounded-2xl p-6 animate-in fade-in slide-in-from-top-2 duration-300 ${shareRequest.confirmed ? 'border-green-500/50' : 'border-amber-500/40'}`}>
-              <div className="flex items-center gap-2 mb-3">
-                {shareRequest.confirmed
-                  ? <CheckCircle size={16} className="text-green-500" />
-                  : <Shield size={16} className="text-amber-500" />}
-                <span className={`text-[11px] font-mono font-bold uppercase tracking-widest ${shareRequest.confirmed ? 'text-green-500' : 'text-amber-500'}`}>
-                  {shareRequest.confirmed ? 'Sent' : 'About to send — confirm'}
-                </span>
-              </div>
-              <div className="flex flex-col gap-1.5 mb-3">
-                <div className="flex items-center gap-2 text-sm text-[var(--text-primary)]">
-                  <span className="text-[10px] font-mono uppercase text-[var(--text-secondary)] w-16 shrink-0">To</span>
-                  <span className="font-semibold">{shareRequest.recipient}</span>
-                </div>
-                <div className="flex items-center gap-2 text-sm text-[var(--text-primary)]">
-                  <span className="text-[10px] font-mono uppercase text-[var(--text-secondary)] w-16 shrink-0">Payload</span>
-                  <span>{shareRequest.payload ?? 'this'}</span>
-                </div>
-              </div>
-              {!shareRequest.confirmed && (
-                <p className="text-[11px] font-mono text-[var(--text-secondary)]">Say <span className="text-amber-500 font-bold">"yes, send it"</span> to confirm.</p>
-              )}
-            </section>
-          )}
-
-          {/* Action verb — witness-render the interpretation before committing (honest mode),
-              or a "done" receipt after it commits. Same grammar as the share card above. */}
-          {pendingAction && (
-            <section className={`shrink-0 bg-[var(--card-bg)] border rounded-2xl p-6 animate-in fade-in slide-in-from-top-2 duration-300 ${pendingAction.confirmed ? 'border-green-500/50' : 'border-amber-500/40'}`}>
-              <div className="flex items-center gap-2 mb-3">
-                {pendingAction.confirmed
-                  ? <CheckCircle size={16} className="text-green-500" />
-                  : <Shield size={16} className="text-amber-500" />}
-                <span className={`text-[11px] font-mono font-bold uppercase tracking-widest ${pendingAction.confirmed ? 'text-green-500' : 'text-amber-500'}`}>
-                  {pendingAction.confirmed ? 'Done' : 'About to act — confirm'}
-                </span>
-              </div>
-              <div className="flex flex-col gap-1.5 mb-3">
-                <div className="flex items-center gap-2 text-sm text-[var(--text-primary)]">
-                  <span className="text-[10px] font-mono uppercase text-[var(--text-secondary)] w-16 shrink-0">Action</span>
-                  <span className="font-semibold">{pendingAction.label}</span>
-                </div>
-                <div className="flex items-center gap-2 text-sm text-[var(--text-primary)]">
-                  <span className="text-[10px] font-mono uppercase text-[var(--text-secondary)] w-16 shrink-0">Target</span>
-                  <span>{pendingAction.target}</span>
-                </div>
-                {pendingAction.detail && (
+                <div className="flex flex-col gap-1.5 mb-3">
                   <div className="flex items-center gap-2 text-sm text-[var(--text-primary)]">
-                    <span className="text-[10px] font-mono uppercase text-[var(--text-secondary)] w-16 shrink-0">Detail</span>
-                    <span>{pendingAction.detail}</span>
+                    <span className="text-[10px] font-mono uppercase text-[var(--text-secondary)] w-16 shrink-0">To</span>
+                    <span className="font-semibold">{shareRequest.recipient}</span>
                   </div>
-                )}
-              </div>
-              {pendingAction.note && (
-                <p className="text-[11px] font-mono text-amber-600 dark:text-amber-400 mb-2">⚠ {pendingAction.note}</p>
-              )}
-              {!pendingAction.confirmed && (
-                <p className="text-[11px] font-mono text-[var(--text-secondary)]">Say <span className="text-amber-500 font-bold">"yes, do it"</span> to confirm.</p>
-              )}
-            </section>
-          )}
-
-          {/* Mock document preview — the action verbs visibly mutate this. */}
-          {isLive && (
-            <section className="shrink-0 bg-[var(--card-bg)] border border-[var(--card-border)] rounded-2xl p-6">
-              <div className="flex items-center justify-end mb-2 -mt-2">
-                <button
-                  onClick={handleUndo}
-                  disabled={undoStack.length === 0}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono border transition-colors ${
-                    undoStack.length === 0
-                      ? 'opacity-40 cursor-not-allowed border-[var(--card-border)] text-[var(--text-secondary)]'
-                      : 'border-[var(--card-border)] text-[var(--text-primary)] hover:border-[#0077F0] hover:text-[#0077F0] dark:hover:text-white active:scale-95'
-                  }`}
-                  title="Undo the last document change"
-                >
-                  <RotateCcw size={13} /> Undo{undoStack.length ? ` (${undoStack.length})` : ''}
-                </button>
-              </div>
-              <div className="text-[10px] font-mono uppercase tracking-wide text-[var(--text-secondary)] mb-1.5">World state (as the model reads it)</div>
-              <div className="text-[11px] font-mono text-[var(--text-primary)] break-words leading-relaxed">{serializeMockDoc(mockDoc)}</div>
-            </section>
-          )}
-
-          {/* Control Center Box - Minimizable (Hidden for now) */}
-            <div className={`hidden flex-col bg-[var(--card-bg)] border border-[var(--card-border)] shadow-lg rounded-2xl overflow-hidden transition-all duration-500 ease-in-out ${isDebugOpen ? 'flex-1' : 'h-[72px] shrink-0'}`}>
-            {/* Header with Toggle */}
-            <div 
-              className="p-6 flex items-center justify-between cursor-pointer hover:bg-[var(--bg-color)] transition-colors shrink-0"
-              onClick={() => setIsDebugOpen(!isDebugOpen)}
-            >
-              <div className="flex items-center gap-3">
-                <div className={`w-2.5 h-2.5 rounded-full ${isLive ? 'bg-green-500 animate-pulse' : 'bg-slate-300 dark:bg-slate-700'}`} />
-                <span className="text-[11px] font-black uppercase tracking-[0.2em] text-[var(--text-secondary)]">Control Center</span>
-              </div>
-              <div className="p-2 rounded-xl bg-[var(--bg-color)] text-[var(--text-secondary)]">
-                {isDebugOpen ? <ChevronDown size={18} /> : <ChevronUp size={18} />}
-              </div>
-            </div>
-
-            {isDebugOpen && (
-              <div className="px-6 pb-6 flex flex-col h-full space-y-6 overflow-y-auto custom-scrollbar">
-            <section className="flex-1 min-h-[200px] bg-[var(--bg-color)] rounded-2xl p-6 border border-[var(--card-border)] flex flex-col overflow-hidden">
-              <span className="text-[9px] font-black uppercase text-slate-400 mb-4 tracking-widest">Operation Stream</span>
-              <div className="flex-1 font-mono text-[9px] space-y-3 overflow-y-auto custom-scrollbar pr-2">
-                {logs.map((l, i) => (
-                  <div key={i} className="flex flex-col gap-1 border-b border-black/5 pb-2">
-                    <div className="flex justify-between items-center opacity-40">
-                      <span>{l.time}</span>
-                      <span className="uppercase text-[7px]">{l.type}</span>
-                    </div>
-                    <span className={l.type === 'gemini' ? 'text-[var(--accent-color)]' : 'text-[var(--text-secondary)]'}>{l.message}</span>
+                  <div className="flex items-center gap-2 text-sm text-[var(--text-primary)]">
+                    <span className="text-[10px] font-mono uppercase text-[var(--text-secondary)] w-16 shrink-0">Payload</span>
+                    <span>{shareRequest.payload ?? 'this'}</span>
                   </div>
-                ))}
-              </div>
-            </section>
-
-            <section className="flex items-center gap-4 pt-2">
-              <div className="flex-1 space-y-2">
-                <div className="flex justify-between text-[8px] font-bold text-slate-400 uppercase tracking-widest">
-                  <span>Refresh Rate</span>
-                  <span>{sendFrequency}ms</span>
                 </div>
-                <input 
-                  type="range" 
-                  min="300" 
-                  max="2000" 
-                  step="100" 
-                  value={sendFrequency} 
-                  onChange={e => setSendFrequency(Number(e.target.value))} 
-                  className="w-full h-1 bg-black/5 rounded-full accent-[var(--accent-color)] appearance-none cursor-pointer" 
-                />
-              </div>
-            </section>
+                {!shareRequest.confirmed && (
+                  <p className="text-[11px] font-mono text-[var(--text-secondary)]">Say <span className="text-amber-500 font-bold">"yes, send it"</span> to confirm.</p>
+                )}
+              </section>
+            )}
+            {pendingAction && (
+              <section className={`shrink-0 bg-[var(--card-bg)] border rounded-2xl p-6 animate-in fade-in slide-in-from-top-2 duration-300 ${pendingAction.confirmed ? 'border-green-500/50' : 'border-amber-500/40'}`}>
+                <div className="flex items-center gap-2 mb-3">
+                  {pendingAction.confirmed
+                    ? <CheckCircle size={16} className="text-green-500" />
+                    : <Shield size={16} className="text-amber-500" />}
+                  <span className={`text-[11px] font-mono font-bold uppercase tracking-widest ${pendingAction.confirmed ? 'text-green-500' : 'text-amber-500'}`}>
+                    {pendingAction.confirmed ? 'Done' : 'About to act — confirm'}
+                  </span>
+                </div>
+                <div className="flex flex-col gap-1.5 mb-3">
+                  <div className="flex items-center gap-2 text-sm text-[var(--text-primary)]">
+                    <span className="text-[10px] font-mono uppercase text-[var(--text-secondary)] w-16 shrink-0">Action</span>
+                    <span className="font-semibold">{pendingAction.label}</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-sm text-[var(--text-primary)]">
+                    <span className="text-[10px] font-mono uppercase text-[var(--text-secondary)] w-16 shrink-0">Target</span>
+                    <span>{pendingAction.target}</span>
+                  </div>
+                  {pendingAction.detail && (
+                    <div className="flex items-center gap-2 text-sm text-[var(--text-primary)]">
+                      <span className="text-[10px] font-mono uppercase text-[var(--text-secondary)] w-16 shrink-0">Detail</span>
+                      <span>{pendingAction.detail}</span>
+                    </div>
+                  )}
+                </div>
+                {pendingAction.note && (
+                  <p className="text-[11px] font-mono text-amber-600 dark:text-amber-400 mb-2">⚠ {pendingAction.note}</p>
+                )}
+                {!pendingAction.confirmed && (
+                  <p className="text-[11px] font-mono text-[var(--text-secondary)]">Say <span className="text-amber-500 font-bold">"yes, do it"</span> to confirm.</p>
+                )}
+              </section>
+            )}
           </div>
-        )}
+
+        </main>
+
+        <DebugDrawer
+          open={drawerOpen}
+          onClose={() => setDrawerOpen(false)}
+          honestMode={honestMode}
+          onHonestMode={setHonestMode}
+          voiceBackend={voiceBackend}
+          onVoiceBackend={setVoiceBackend}
+          autonomy={autonomy}
+          onAutonomy={setAutonomy}
+          feedbackMode={feedbackMode}
+          onFeedbackMode={setFeedbackMode}
+          sendFrequency={sendFrequency}
+          onSendFrequency={setSendFrequency}
+          worldState={serializeMockDoc(mockDoc)}
+          undoCount={undoStack.length}
+          onUndo={handleUndo}
+          onEndSession={() => providerRef.current?.close()}
+          onReset={handleReset}
+          isLive={isLive}
+          logs={logs}
+          isEmbedded={isEmbedded}
+        />
+
       </div>
-    </aside>
-  </div>
 
   {/* Custom Cursor */}
   {isLive && (
