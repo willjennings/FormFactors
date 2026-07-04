@@ -69,6 +69,8 @@ import { ocrImage, terminateOcr, clearOcrCache } from './ocr';
 import type { OcrWord } from './ocr';
 import { Spreadsheet } from './widgets/Spreadsheet';
 import { buildSpreadsheetSnapshot, formatSnapshotForModel } from './widgets/spreadsheetData';
+import { ProgramSurface } from './widgets/ProgramSurface';
+import type { TeachingEvent } from './teaching/types';
 import { snapshotNode, makeThrottle } from './vision/snapshotNode';
 import { parseTypedSubmit } from './input/typedInput';
 import type { InputModality } from './telemetry';
@@ -577,6 +579,7 @@ export default function App() {
   } | null>(null);
   const spreadsheetRef = useRef<HTMLDivElement>(null);
   const spreadsheetSnapshotRef = useRef<HTMLCanvasElement | null>(null);
+  const teachingDispatchRef = useRef<((e: TeachingEvent) => void) | null>(null);
 
   const [pointerPath, setPointerPath] = useState<{ x: number, y: number, timestamp: number }[]>([]);
   const [persistentPaths, setPersistentPaths] = useState<{ x: number, y: number }[][]>([]);
@@ -1664,6 +1667,32 @@ When the user points and speaks a command, call the appropriate tool — a map t
     telemetry.deixis('number', entity.title, focusTitleRef.current ?? null, 'high', 'direct');
     addLog('event', `Selected target ${n}: ${displayName(entity)}`);
     providerRef.current?.sendTextHint(`[USER SELECTED target ${n}: ${displayName(entity)} (numbered selection). Treat this as what they are pointing at.]`);
+  };
+
+  // Surface element click: deixis (numbered-selection path) + teaching step action. This is
+  // how a click on a REAL control both selects it and advances an active teach sequence.
+  const handleSurfaceElementClick = (elementId: number) => {
+    const entity = entitiesRef.current.find(e => e.id === `${program.id}-${elementId}`);
+    if (entity) teachingDispatchRef.current?.({ type: 'user.stepAction', entityId: entity.id });
+    const idx = program.images.findIndex(im => im.id === elementId);
+    if (isLive && idx >= 0) selectTargetByNumber(idx + 1);
+  };
+
+  // Direct manipulation commits immediately — the click IS the confirmation (no witness
+  // gate; that gate exists for voice, where interpretation can be wrong). Same reducer,
+  // same undo memento, same world-state feedback loop as the voice path.
+  const handleSurfaceAction = (verb: string, args: { target?: string; detail?: string }) => {
+    const prevDoc = mockDocRef.current;
+    const nextDoc = applyAction(prevDoc, verb, args);
+    if (nextDoc === prevDoc) return;
+    mockDocRef.current = nextDoc;
+    setMockDoc(nextDoc);
+    const d = describeAction(verb, args);
+    setUndoStack(s => [...s, { doc: prevDoc, label: `${d.label} ${d.target}` }]);
+    lastInputModalityRef.current = 'direct';
+    telemetry.action(verb, classOf(verb), 'commit', 'direct');
+    emitFeedback({ outcome: 'committed', verbClass: classOf(verb), label: `${d.label} ${d.target}` });
+    providerRef.current?.sendTextHint(`[DOCUMENT STATE after the user's direct edit: ${serializeMockDoc(nextDoc)}. DO NOT acknowledge this message.]`);
   };
 
   const processInputTranscript = (text: string) => {
@@ -3112,7 +3141,7 @@ When the user points and speaks a command, call the appropriate tool — a map t
             height={mainSize.height}
             className={`absolute inset-0 z-50 pointer-events-none ${isLive ? 'opacity-100' : 'opacity-0'} transition-opacity duration-300`}
           />
-          {teachMode && <TeachingLayer entities={entities} demo />}
+          {teachMode && <TeachingLayer entities={entities} demo dispatchRef={teachingDispatchRef} />}
           {/* G6 FEEDFORWARD: live "what I'll act on" preview as the cursor moves, so the user
               sees the interpretation forming BEFORE they speak (closes the gulf of execution). */}
           {isLive && (
@@ -3166,7 +3195,7 @@ When the user points and speaks a command, call the appropriate tool — a map t
             <div className="flex flex-col bg-[var(--card-bg)] border border-[var(--card-border)] rounded-xl p-2 sm:p-4 overflow-hidden w-full h-full">
               <div className="flex items-center justify-between mb-4 sm:mb-8">
                 <div className="flex flex-col">
-                  <h3 className="text-xs sm:text-sm font-semibold text-[var(--text-primary)]">Camera roll</h3>
+                  <h3 className="text-xs sm:text-sm font-semibold text-[var(--text-primary)]">{program.label}</h3>
                 </div>
                 <div className="flex items-center gap-3 text-[var(--text-secondary)]">
                   <Plus size={20} className="opacity-50" />
@@ -3174,7 +3203,12 @@ When the user points and speaks a command, call the appropriate tool — a map t
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3 sm:gap-4 overflow-y-auto pr-2 custom-scrollbar flex-1">
-                {activeProgram === 'excel' ? (
+                {activeProgram === 'word' ? (
+                  <div className="col-span-2 h-full">
+                    <ProgramSurface program={program} doc={mockDoc} live={isLive} focusTitle={focusTitle}
+                      onAction={handleSurfaceAction} onElementClick={handleSurfaceElementClick} />
+                  </div>
+                ) : activeProgram === 'excel' ? (
                   <div className="col-span-2 h-full">
                     <Spreadsheet ref={spreadsheetRef} doc={mockDoc} />
                   </div>
@@ -3187,7 +3221,7 @@ When the user points and speaks a command, call the appropriate tool — a map t
                     <div
                       key={photo.id}
                       data-element-id={photo.id}
-                      onClick={() => isLive && selectTargetByNumber(i + 1)}
+                      onClick={() => handleSurfaceElementClick(photo.id)}
                       className={`photo-item relative aspect-[3/4] rounded-lg overflow-hidden border bg-[var(--card-bg)] transition-all duration-300 cursor-pointer shadow-sm ${isFocus ? 'border-transparent' : 'border-[var(--card-border)]'}`}
                       style={isFocus ? { boxShadow: `0 0 0 3px rgb(${tone}), 0 0 16px 2px rgba(${tone}, 0.45)` } : undefined}
                     >

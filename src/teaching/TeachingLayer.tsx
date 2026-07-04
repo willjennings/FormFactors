@@ -74,7 +74,9 @@ export function TeachingLayer({ entities, demo = false, dispatchRef }: Props) {
   const scaffold = visibleScaffold(state);
   const step = activeStep(state);
   const seq = state.sequence;
-  const tileIds = entities.filter((e) => e.category !== 'map').map((e) => e.id);
+  // Scrim only leaf controls/content. 'program' chrome contains nested elements (Save sits
+  // inside the Ribbon) — scrimming the container would block the sequence target itself.
+  const tileIds = entities.filter((e) => e.category !== 'map' && e.category !== 'program').map((e) => e.id);
   const blocked = blockedEntityIds(state, tileIds);
   const toastFresh = seq?.lastBlocked && Date.now() - seq.lastBlocked.at < 2500;
 
@@ -126,9 +128,8 @@ export function TeachingLayer({ entities, demo = false, dispatchRef }: Props) {
             if (!b) return null;
             const showRing = scaffold.markers || scaffold.highlightOnly;
             return (
-              <div className={`absolute rounded-xl pointer-events-auto cursor-pointer ${showRing ? 'ring-4 ring-[var(--accent-color)] shadow-[0_0_28px_rgba(99,102,241,0.45)]' : ''}`}
-                   style={b}
-                   onClick={() => { dispatch({ type: 'user.stepAction', entityId: step.entityId }); }}>
+              <div className={`absolute rounded-xl pointer-events-none ${showRing ? 'ring-4 ring-[var(--accent-color)] shadow-[0_0_28px_rgba(99,102,241,0.45)]' : ''}`}
+                   style={b}>
                 {scaffold.markers && seq.activeIndex !== null && (
                   <span className="absolute -top-3 -left-3 w-7 h-7 rounded-full bg-[var(--accent-color)] text-white text-sm font-bold flex items-center justify-center shadow">
                     {seq.activeIndex + 1}
