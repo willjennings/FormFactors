@@ -281,7 +281,7 @@ export default function App() {
     }
     return map;
   }, [program]);
-  // Scene source of truth: the entity registry (one entity per program image + the map).
+  // Scene source of truth: the entity registry (one entity per program element).
   const [entities, setEntities] = useState<SceneEntity[]>([]);
   const entitiesRef = useRef<SceneEntity[]>([]);
   // id → category, read live by the canvas renderer (kept in a ref to avoid stale closures).
@@ -587,7 +587,6 @@ export default function App() {
         const surfEl = main.querySelector('.program-surface');
         setLayoutBounds({
           photos: toBBox(pRect),
-          map: { ymin: 0, xmin: 0, ymax: 0, xmax: 0 },
           photoItems,
           surface: surfEl ? toBBox((surfEl as HTMLElement).getBoundingClientRect()) : undefined,
         });
