@@ -52,7 +52,6 @@ import {
   serializeMockDoc,
 } from './scenarios';
 import type { ProgramId, ElementCategory, MockDoc, Program, Autonomy } from './scenarios';
-import { perceiveTileLabel, loadImageAsBase64 } from './perception/perceiveTile';
 import type { PerceivedCache } from './perception/perceiveTile';
 import { buildEntities, entityById, entityByTitle, displayName, MAP_ENTITY_ID, resolveEchoedTarget } from './entities/registry';
 import type { SceneEntity, EntityId } from './entities/registry';
@@ -286,8 +285,6 @@ export default function App() {
   // --- Active program (Word / Excel / PowerPoint) — single source of truth for content ---
   const [activeProgram, setActiveProgram] = useState<ProgramId>(DEFAULT_PROGRAM);
   const program = React.useMemo(() => getProgram(activeProgram), [activeProgram]);
-  // Derive the legacy constant shapes from the active program so the rest of App is unchanged.
-  const PHOTOS = program.images;
   // The carousel is built from the shared task library, filtered + ordered for this program.
   const TASKS = React.useMemo(() => tasksForProgram(activeProgram), [activeProgram]);
   // Tools offered to the voice model = the original tourism verbs + the action verbs this
@@ -406,7 +403,6 @@ export default function App() {
   const [trailMousePos, setTrailMousePos] = useState({ x: 0, y: 0 });
   const [hoveredId, setHoveredId] = useState<EntityId | null>(null);
   const perceivedLabelsRef = useRef<PerceivedCache>({});
-  const [perceivedVersion, setPerceivedVersion] = useState(0);
   const teachMode = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('teach');
   const hoveredIdRef = useRef<EntityId | null>(null);
   // Throttle state for proactive hover grounding (non-Gemini backends).
@@ -574,10 +570,10 @@ export default function App() {
     photos: BBox;
     map: BBox;
     photoItems: { id: number; bbox: BBox }[];
-    spreadsheet?: BBox;
+    surface?: BBox;
   } | null>(null);
-  const spreadsheetRef = useRef<HTMLDivElement>(null);
-  const spreadsheetSnapshotRef = useRef<HTMLCanvasElement | null>(null);
+  const surfaceRef = useRef<HTMLDivElement>(null);
+  const surfaceSnapshotRef = useRef<HTMLCanvasElement | null>(null);
   const teachingDispatchRef = useRef<((e: TeachingEvent) => void) | null>(null);
 
   const [pointerPath, setPointerPath] = useState<{ x: number, y: number, timestamp: number }[]>([]);
@@ -688,12 +684,12 @@ export default function App() {
           return Number.isFinite(id) ? { id, bbox: toBBox(el.getBoundingClientRect()) } : null;
         }).filter(Boolean) as { id: number; bbox: BBox }[];
         
-        const ssEl = main.querySelector('.spreadsheet-box');
+        const surfEl = main.querySelector('.program-surface');
         setLayoutBounds({
           photos: toBBox(pRect),
           map: toBBox(mRect),
           photoItems,
-          spreadsheet: ssEl ? toBBox((ssEl as HTMLElement).getBoundingClientRect()) : undefined,
+          surface: surfEl ? toBBox((surfEl as HTMLElement).getBoundingClientRect()) : undefined,
         });
 
         // Update the scene entities for Gemini (single source of truth).
@@ -730,7 +726,7 @@ export default function App() {
       window.removeEventListener('resize', updateLayout);
       window.removeEventListener('scroll', updateLayout, true);
     };
-  }, [isLive, activeProgram, perceivedVersion]); // Recalculate when live starts, layout changes, program swaps, or perception lands
+  }, [isLive, activeProgram]); // Recalculate when live starts, layout changes, or program swaps
 
   useEffect(() => {
     const checkDevice = () => {
@@ -2706,22 +2702,6 @@ When the user points and speaks a command, call the appropriate tool — a map t
     };
   }, [handlePointerMove, handlePointerUp]);
 
-  // CORS-loaded image cache for the vision frame (G1: real pixels, not a labeled schematic).
-  // Only successfully CORS-clean images are drawn — anything that won't load clean stays a
-  // labeled box, so the offscreen canvas never taints and toBlob keeps encoding.
-  const visionImgCacheRef = useRef<Record<string, HTMLImageElement | 'failed' | 'loading'>>({});
-  useEffect(() => {
-    if (!isLive) return;
-    for (const img of program.images) {
-      if (visionImgCacheRef.current[img.url]) continue;
-      visionImgCacheRef.current[img.url] = 'loading';
-      const el = new Image();
-      el.crossOrigin = 'anonymous';
-      el.onload = () => { visionImgCacheRef.current[img.url] = el; };
-      el.onerror = () => { visionImgCacheRef.current[img.url] = 'failed'; };
-      el.src = img.url;
-    }
-  }, [isLive, activeProgram]);
 
   // G3 OCR: when enabled during a live session, recognize words in each gallery screenshot
   // and tell the model the text content. Failures (offline / blocked model assets) are
@@ -2746,34 +2726,9 @@ When the user points and speaks a command, call the appropriate tool — a map t
     return () => { cancelled = true; };
   }, [ocrEnabled, isLive, activeProgram]);
 
-  // Real-perception: name each tile from its actual pixels once, cached by URL. Fail-soft —
-  // any failure leaves the tile without a perceived label, so resolveTileName falls back to title.
-  useEffect(() => {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) return;
-    const genai = new GoogleGenAI({ apiKey });
-    let cancelled = false;
-    (async () => {
-      for (const photo of PHOTOS) {
-        if (perceivedLabelsRef.current[photo.url]) continue; // perceive once per URL
-        perceivedLabelsRef.current[photo.url] = { status: 'pending' };
-        try {
-          const { base64, mimeType } = await loadImageAsBase64(photo.url);
-          if (cancelled) return;
-          const label = await perceiveTileLabel(genai, base64, mimeType);
-          if (cancelled) return;
-          perceivedLabelsRef.current[photo.url] = label ? { status: 'done', label } : { status: 'failed' };
-          if (label) addLog('info', `perceived "${label}" vs registered "${photo.title}"`);
-        } catch (e: any) {
-          if (cancelled) return;
-          perceivedLabelsRef.current[photo.url] = { status: 'failed' };
-          addLog('info', `perception failed for ${photo.title}: ${e?.message ?? e}`);
-        }
-        setPerceivedVersion((v) => v + 1);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [PHOTOS]);
+  // Tile perception retired with the picsum tiles: the surfaces ARE self-describing DOM,
+  // so registered titles are literally what's on screen. The PerceivedCache seam stays
+  // (buildEntities accepts it) for a future surface-snapshot-based perception pass.
 
   // Vision pipeline
   useEffect(() => {
@@ -2803,35 +2758,30 @@ When the user points and speaks a command, call the appropriate tool — a map t
       ctx.fillRect((p.xmin/1000)*VISION_SIZE, (p.ymin/1000)*VISION_SIZE, ((p.xmax-p.xmin)/1000)*VISION_SIZE, ((p.ymax-p.ymin)/1000)*VISION_SIZE);
       ctx.strokeRect((p.xmin/1000)*VISION_SIZE, (p.ymin/1000)*VISION_SIZE, ((p.xmax-p.xmin)/1000)*VISION_SIZE, ((p.ymax-p.ymin)/1000)*VISION_SIZE);
 
-      // Draw Photo Items — REAL pixels when the CORS-clean image is loaded, else a labeled box.
-      // On a transient snapshot failure, last-good canvas is retained intentionally; [SPREADSHEET DATA] text hint stays authoritative.
-      const ssCanvas = spreadsheetSnapshotRef.current;
-      if (activeProgram === 'excel' && ssCanvas) {
-        const b = layoutBounds.spreadsheet ?? layoutBounds.photos;
+      // Draw the program surface — REAL pixels when the snapshot is fresh, else labeled
+      // boxes per element (honest fallback: labels only, never stale imagery).
+      const sCanvas = surfaceSnapshotRef.current;
+      if (sCanvas) {
+        const b = layoutBounds.surface ?? layoutBounds.photos;
         const dx = (b.xmin / 1000) * VISION_SIZE, dy = (b.ymin / 1000) * VISION_SIZE;
         const dw = ((b.xmax - b.xmin) / 1000) * VISION_SIZE, dh = ((b.ymax - b.ymin) / 1000) * VISION_SIZE;
-        try { ctx.drawImage(ssCanvas, dx, dy, dw, dh); } catch { /* keep canvas clean */ }
+        try { ctx.drawImage(sCanvas, dx, dy, dw, dh); } catch { /* keep canvas clean */ }
         ctx.strokeStyle = '#e5e5e5';
         ctx.strokeRect(dx, dy, dw, dh);
       } else {
-        layoutBounds.photoItems.forEach((item, i) => {
+        layoutBounds.photoItems.forEach((item) => {
           const b = item.bbox;
           const dx = (b.xmin/1000)*VISION_SIZE, dy = (b.ymin/1000)*VISION_SIZE;
           const dw = ((b.xmax-b.xmin)/1000)*VISION_SIZE, dh = ((b.ymax-b.ymin)/1000)*VISION_SIZE;
-          const cached = visionImgCacheRef.current[PHOTOS[i]?.url ?? ''];
-          if (cached && cached !== 'failed' && cached !== 'loading') {
-            try { ctx.drawImage(cached, dx, dy, dw, dh); } catch { /* keep canvas clean */ }
-            ctx.strokeStyle = '#e5e5e5';
-            ctx.strokeRect(dx, dy, dw, dh);
-          } else {
-            ctx.fillStyle = '#f1f5f9';
-            ctx.fillRect(dx, dy, dw, dh);
-            ctx.strokeRect(dx, dy, dw, dh);
-            ctx.fillStyle = '#64748b';
-            ctx.font = 'bold 8px sans-serif';
-            ctx.textAlign = 'center';
-            ctx.fillText(PHOTOS[i].title, dx + dw / 2, dy + dh / 2);
-          }
+          ctx.fillStyle = '#f1f5f9';
+          ctx.fillRect(dx, dy, dw, dh);
+          ctx.strokeStyle = '#e5e5e5';
+          ctx.strokeRect(dx, dy, dw, dh);
+          ctx.fillStyle = '#64748b';
+          ctx.font = 'bold 8px sans-serif';
+          ctx.textAlign = 'center';
+          const title = program.images.find(im => im.id === item.id)?.title ?? '';
+          ctx.fillText(title, dx + dw / 2, dy + dh / 2);
         });
       }
 
@@ -2935,20 +2885,20 @@ When the user points and speaks a command, call the appropriate tool — a map t
     return () => clearInterval(interval);
   }, [isLive, sendFrequency, dims, layoutBounds, activeProgram]);
 
-  // Refresh the real-pixel spreadsheet snapshot (throttled, fail-soft) for the vision frame.
+  // Refresh the real-pixel surface snapshot (throttled, fail-soft) for the vision frame.
   useEffect(() => {
-    if (!isLive || activeProgram !== 'excel') {
-      spreadsheetSnapshotRef.current = null;
+    if (!isLive) {
+      surfaceSnapshotRef.current = null;
       return;
     }
     let cancelled = false;
     const gate = makeThrottle(500);
     const tick = async () => {
       if (cancelled || !gate(Date.now())) return;
-      const node = spreadsheetRef.current;
+      const node = surfaceRef.current;
       if (!node) return;
       const canvas = await snapshotNode(node);
-      if (!cancelled && canvas) spreadsheetSnapshotRef.current = canvas;
+      if (!cancelled && canvas) surfaceSnapshotRef.current = canvas;
     };
     const interval = setInterval(tick, 250);
     return () => { cancelled = true; clearInterval(interval); };
@@ -3203,9 +3153,8 @@ When the user points and speaks a command, call the appropriate tool — a map t
               </div>
               <div className="grid grid-cols-2 gap-3 sm:gap-4 overflow-y-auto pr-2 custom-scrollbar flex-1">
                 <div className="col-span-2 h-full">
-                  <ProgramSurface program={program} doc={mockDoc} live={isLive} focusTitle={focusTitle}
-                    onAction={handleSurfaceAction} onElementClick={handleSurfaceElementClick}
-                    spreadsheetRef={spreadsheetRef} />
+                  <ProgramSurface ref={surfaceRef} program={program} doc={mockDoc} live={isLive} focusTitle={focusTitle}
+                    onAction={handleSurfaceAction} onElementClick={handleSurfaceElementClick} />
                 </div>
               </div>
             </div>

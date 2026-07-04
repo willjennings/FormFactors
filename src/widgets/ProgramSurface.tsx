@@ -16,7 +16,6 @@ export type SurfaceProps = {
   focusTitle?: string;
   onAction: (verb: string, args: { target?: string; detail?: string }) => void;
   onElementClick: (elementId: number) => void;
-  spreadsheetRef?: React.Ref<HTMLDivElement>;
 };
 
 /** Wrapper making one named element measurable + clickable. stopPropagation keeps a click
@@ -117,7 +116,7 @@ function WordSurface({ program, doc, live, focusTitle, onAction, onElementClick 
   );
 }
 
-function ExcelSurface({ program, doc, live, focusTitle, onAction, onElementClick, spreadsheetRef }: SurfaceProps) {
+function ExcelSurface({ program, doc, live, focusTitle, onAction, onElementClick }: SurfaceProps) {
   if (doc.kind !== 'excel') return null;
   return (
     <div className="flex flex-col h-full gap-2">
@@ -135,7 +134,7 @@ function ExcelSurface({ program, doc, live, focusTitle, onAction, onElementClick
         </SurfaceElement>
       </SurfaceElement>
       <div className="flex-1 rounded-lg border border-[var(--card-border)] overflow-hidden">
-        <Spreadsheet ref={spreadsheetRef} doc={doc} elementIds={{ A1: 4 }}
+        <Spreadsheet doc={doc} elementIds={{ A1: 4 }}
           onCellClick={(ref) => { if (ref === 'A1') onElementClick(4); }} />
       </div>
     </div>
