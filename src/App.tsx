@@ -56,7 +56,6 @@ import type { PerceivedCache } from './perception/perceiveTile';
 import { buildEntities, entityById, entityByTitle, displayName, MAP_ENTITY_ID, resolveEchoedTarget } from './entities/registry';
 import type { SceneEntity, EntityId } from './entities/registry';
 import { TeachingLayer } from './teaching/TeachingLayer';
-import { MockPreview } from './components/MockPreview';
 import { emitFeedbackAudio, FEEDBACK_OPTIONS } from './feedback';
 import type { FeedbackMode, FeedbackEvent } from './feedback';
 import { primeEarcons, playEarcon, EARCON_KINDS } from './feedback/earcons';
@@ -3689,7 +3688,8 @@ When the user points and speaks a command, call the appropriate tool — a map t
                   <RotateCcw size={13} /> Undo{undoStack.length ? ` (${undoStack.length})` : ''}
                 </button>
               </div>
-              <MockPreview doc={mockDoc} />
+              <div className="text-[10px] font-mono uppercase tracking-wide text-[var(--text-secondary)] mb-1.5">World state (as the model reads it)</div>
+              <div className="text-[11px] font-mono text-[var(--text-primary)] break-words leading-relaxed">{serializeMockDoc(mockDoc)}</div>
             </section>
           )}
 
