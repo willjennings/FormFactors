@@ -679,12 +679,11 @@ export default function App() {
           xmax: ((r.right - mainRect.left) / mainRect.width) * 1000,
         });
         
-        const photoItems = Array.from(photosEl.querySelectorAll('.photo-item')).map((el, i) => {
-          if (i >= PHOTOS.length) return null;
-          return {
-            id: PHOTOS[i].id,
-            bbox: toBBox((el as HTMLElement).getBoundingClientRect())
-          };
+        // Generic element contract: anything with data-element-id is a measurable scene
+        // element (tiles today, surface controls after the surface migration).
+        const photoItems = Array.from(photosEl.querySelectorAll<HTMLElement>('[data-element-id]')).map((el: HTMLElement) => {
+          const id = Number(el.dataset.elementId);
+          return Number.isFinite(id) ? { id, bbox: toBBox(el.getBoundingClientRect()) } : null;
         }).filter(Boolean) as { id: number; bbox: BBox }[];
         
         const ssEl = main.querySelector('.spreadsheet-box');
@@ -3187,6 +3186,7 @@ When the user points and speaks a command, call the appropriate tool — a map t
                   return (
                     <div
                       key={photo.id}
+                      data-element-id={photo.id}
                       onClick={() => isLive && selectTargetByNumber(i + 1)}
                       className={`photo-item relative aspect-[3/4] rounded-lg overflow-hidden border bg-[var(--card-bg)] transition-all duration-300 cursor-pointer shadow-sm ${isFocus ? 'border-transparent' : 'border-[var(--card-border)]'}`}
                       style={isFocus ? { boxShadow: `0 0 0 3px rgb(${tone}), 0 0 16px 2px rgba(${tone}, 0.45)` } : undefined}
