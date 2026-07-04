@@ -1,8 +1,8 @@
 import React, { forwardRef, useState } from 'react';
-import { Save, SaveAll, FileText, Sigma, Divide, Table, Presentation, Plus, Copy } from 'lucide-react';
+import { Save, SaveAll, FileText, Sigma, Divide, Table, Presentation, Plus, Copy, Image as ImageIcon, Crop as CropIcon, Maximize2 } from 'lucide-react';
 import type { MockDoc, Program, ProgramImage } from '../scenarios';
 import { CATEGORY_COLORS } from '../scenarios';
-import { buildWordModel, buildPptModel } from './surfaceModels';
+import { buildWordModel, buildPptModel, buildPhotoModel } from './surfaceModels';
 import { Spreadsheet } from './Spreadsheet';
 
 // Functional mini-app surfaces. Every named element in the program set renders as a real
@@ -191,6 +191,45 @@ function PptSurface({ program, doc, live, focusTitle, onAction, onElementClick }
   );
 }
 
+const PHOTO_CANVAS_URL = 'https://picsum.photos/seed/photo-canvas/800/600'; // the CONTENT being edited (honest: it is an image)
+
+function PhotoSurface({ program, doc, live, focusTitle, onAction, onElementClick }: SurfaceProps) {
+  if (doc.kind !== 'photo') return null;
+  const m = buildPhotoModel(doc);
+  return (
+    <div className="flex flex-col h-full gap-2">
+      <TitleBar icon={<ImageIcon size={15} />} filename="IMG_2041.jpg" statusLabel={m.statusLabel} />
+      <SurfaceElement img={imgOf(program, 1)} live={live} focusTitle={focusTitle} onElementClick={onElementClick}
+        className="flex items-center gap-1 rounded-lg border border-[var(--card-border)] bg-[var(--bg-color)] p-1.5">
+        <span className="px-2 text-[10px] font-mono uppercase tracking-wide text-[var(--text-secondary)]">Tools</span>
+        <SurfaceElement img={imgOf(program, 2)} live={live} focusTitle={focusTitle} onElementClick={onElementClick}>
+          <RibbonButton icon={<CropIcon size={16} />} label="Crop"
+            onClick={() => onAction('photo_edit', { target: 'Crop tool', detail: 'crop' })} />
+        </SurfaceElement>
+        <SurfaceElement img={imgOf(program, 3)} live={live} focusTitle={focusTitle} onElementClick={onElementClick}>
+          <RibbonButton icon={<Maximize2 size={16} />} label="Resize"
+            onClick={() => onAction('photo_edit', { target: 'Resize tool', detail: 'resize' })} />
+        </SurfaceElement>
+      </SurfaceElement>
+      <SurfaceElement img={imgOf(program, 4)} live={live} focusTitle={focusTitle} onElementClick={onElementClick}
+        className="flex-1 rounded-lg border border-[var(--card-border)] overflow-hidden flex items-center justify-center"
+      >
+        <div className="w-full h-full flex items-center justify-center"
+          style={{ background: m.bgRemoved ? 'repeating-conic-gradient(#cbd5e1 0% 25%, #f1f5f9 0% 50%) 50% / 16px 16px' : 'var(--bg-color)' }}>
+          <img src={PHOTO_CANVAS_URL} alt="Photo being edited" referrerPolicy="no-referrer" draggable="false"
+            className={`object-cover transition-all duration-300 ${m.cropped ? 'scale-[1.35]' : ''}`}
+            style={{
+              filter: m.filterCss,
+              width: m.resized ? '70%' : '100%',
+              height: m.resized ? '70%' : '100%',
+              clipPath: m.bgRemoved ? 'ellipse(38% 46% at 50% 50%)' : undefined,
+            }} />
+        </div>
+      </SurfaceElement>
+    </div>
+  );
+}
+
 /** Dispatcher: one surface per program. Tasks 5-7 fill in the remaining branches. */
 export const ProgramSurface = forwardRef<HTMLDivElement, SurfaceProps>((props, ref) => {
   return (
@@ -198,6 +237,7 @@ export const ProgramSurface = forwardRef<HTMLDivElement, SurfaceProps>((props, r
       {props.program.id === 'word' && <WordSurface {...props} />}
       {props.program.id === 'excel' && <ExcelSurface {...props} />}
       {props.program.id === 'powerpoint' && <PptSurface {...props} />}
+      {props.program.id === 'photo' && <PhotoSurface {...props} />}
     </div>
   );
 });

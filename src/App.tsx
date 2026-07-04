@@ -3202,48 +3202,11 @@ When the user points and speaks a command, call the appropriate tool — a map t
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3 sm:gap-4 overflow-y-auto pr-2 custom-scrollbar flex-1">
-                {activeProgram === 'word' || activeProgram === 'powerpoint' ? (
-                  <div className="col-span-2 h-full">
-                    <ProgramSurface program={program} doc={mockDoc} live={isLive} focusTitle={focusTitle}
-                      onAction={handleSurfaceAction} onElementClick={handleSurfaceElementClick} />
-                  </div>
-                ) : activeProgram === 'excel' ? (
-                  <div className="col-span-2 h-full">
-                    <ProgramSurface program={program} doc={mockDoc} live={isLive} focusTitle={focusTitle}
-                      onAction={handleSurfaceAction} onElementClick={handleSurfaceElementClick}
-                      spreadsheetRef={spreadsheetRef} />
-                  </div>
-                ) : (
-                PHOTOS.map((photo, i) => {
-                  // Highlight the element the active scenario wants the user to point at.
-                  const isFocus = !!focusTitle && photo.title === focusTitle;
-                  const tone = CATEGORY_COLORS[photo.category];
-                  return (
-                    <div
-                      key={photo.id}
-                      data-element-id={photo.id}
-                      onClick={() => handleSurfaceElementClick(photo.id)}
-                      className={`photo-item relative aspect-[3/4] rounded-lg overflow-hidden border bg-[var(--card-bg)] transition-all duration-300 cursor-pointer shadow-sm ${isFocus ? 'border-transparent' : 'border-[var(--card-border)]'}`}
-                      style={isFocus ? { boxShadow: `0 0 0 3px rgb(${tone}), 0 0 16px 2px rgba(${tone}, 0.45)` } : undefined}
-                    >
-                      <img src={photo.url} alt={photo.title} className="w-full h-full object-cover" referrerPolicy="no-referrer" draggable="false" />
-                      {/* G8: numbered target — say "number N", press N, or tap. */}
-                      {isLive && (
-                        <span className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-black/70 text-white text-[10px] font-mono font-bold flex items-center justify-center">
-                          {i + 1}
-                        </span>
-                      )}
-                      {isFocus && (
-                        <span
-                          className="absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded-md text-[9px] font-mono font-bold uppercase tracking-wide text-white"
-                          style={{ backgroundColor: `rgb(${tone})` }}
-                        >
-                          Point here
-                        </span>
-                      )}
-                    </div>
-                  );
-                }))}
+                <div className="col-span-2 h-full">
+                  <ProgramSurface program={program} doc={mockDoc} live={isLive} focusTitle={focusTitle}
+                    onAction={handleSurfaceAction} onElementClick={handleSurfaceElementClick}
+                    spreadsheetRef={spreadsheetRef} />
+                </div>
               </div>
             </div>
           </div>
