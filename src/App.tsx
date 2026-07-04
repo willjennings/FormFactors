@@ -269,7 +269,7 @@ export default function App() {
   const program = React.useMemo(() => getProgram(activeProgram), [activeProgram]);
   // The carousel is built from the shared task library, filtered + ordered for this program.
   const TASKS = React.useMemo(() => tasksForProgram(activeProgram), [activeProgram]);
-  // Tools offered to the voice model = the original tourism verbs + the action verbs this
+  // Tools offered to the voice model = the kept verbs (explain, share) + the action verbs this
   // program exposes. Read at connect time; program swap reconnects (see handleProgramChange).
   const voiceTools = React.useMemo(
     () => [...VOICE_TOOLS, ...buildActionTools(activeProgram)],
@@ -1336,7 +1336,7 @@ export default function App() {
         // G4: remember this referent so later turns can resolve "make THAT bold" / "send IT".
         referents.note(displayName(foundObject), 'pointed', foundObject.id);
 
-        // Proactive pattern-offer seam retired with the tourism payload; re-aim at program behavior when a goal model exists.
+        // Proactive pattern-offer seam retired with the map-era payload; re-aim at program behavior when a goal model exists.
 
         // SEND DEIXIS HINT to whichever backend is live.
         if (providerRef.current) {
