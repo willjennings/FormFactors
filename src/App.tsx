@@ -28,6 +28,8 @@ import {
   ShieldCheck
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { MenuBar } from './shell/MenuBar';
+import { Dock } from './shell/Dock';
 import { CursorTrail, CursorResources } from './components/CursorEffects';
 import { createGeminiProvider } from './voice/gemini';
 import { createOpenAIRealtimeProvider } from './voice/openai';
@@ -302,19 +304,15 @@ export default function App() {
   // stale closures since the render loop's effect doesn't re-run on every task switch).
   const focusTitleRef = useRef<string | undefined>(undefined);
 
-  const [showWelcome, setShowWelcome] = useState(true);
-  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [firstRunHint, setFirstRunHint] = useState(true);
+  void drawerOpen; void firstRunHint;
   const [showRotateOverlay, setShowRotateOverlay] = useState(false);
   const [showMobileOverlay, setShowMobileOverlay] = useState(false);
   // Testbed: run on phone/tablet to evaluate the paradigm across form factors, bypassing the
   // desktop-only gate + the mobile/rotate overlays.
   const [bypassDeviceGate, setBypassDeviceGate] = useState(false);
 
-  const handleDismissWelcome = (e?: React.MouseEvent) => {
-    if (e) e.stopPropagation();
-    setShowWelcome(false);
-    setShowOnboarding(true);
-  };
   const [isDebugOpen, setIsDebugOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(() => {
@@ -371,17 +369,13 @@ export default function App() {
   const lastHoverHintRef = useRef<string | null>(null);
   const lastHoverHintAtRef = useRef(0);
 
-  const showWelcomeRef = useRef(showWelcome);
-  const showOnboardingRef = useRef(showOnboarding);
   const showRotateOverlayRef = useRef(showRotateOverlay);
   const showMobileOverlayRef = useRef(showMobileOverlay);
 
   useEffect(() => {
-    showWelcomeRef.current = showWelcome;
-    showOnboardingRef.current = showOnboarding;
     showRotateOverlayRef.current = showRotateOverlay;
     showMobileOverlayRef.current = showMobileOverlay;
-  }, [showWelcome, showOnboarding, showRotateOverlay, showMobileOverlay]);
+  }, [showRotateOverlay, showMobileOverlay]);
 
   // honestMode is read live by the hint builder (Diff 1) and at connect time by the
   // prompt selector (Diffs 2/3). Mirror it into a ref so both can read it without
@@ -1530,12 +1524,12 @@ export default function App() {
           },
           onInputTranscript: (text: string) => { lastInputModalityRef.current = 'voice'; processInputTranscript(text); },
           onToolCall: (call) => {
-            if (showOnboardingRef.current || showWelcomeRef.current || showRotateOverlayRef.current || showMobileOverlayRef.current) return;
+            if (showRotateOverlayRef.current || showMobileOverlayRef.current) return;
             if (lastTranscriptionTimeRef.current === 0) { addLog('info', 'Ignoring tool call before first transcription'); return; }
             handleVoiceToolCall(call);
           },
           onResponseStart: () => {
-            if (showOnboardingRef.current || showWelcomeRef.current || showRotateOverlayRef.current || showMobileOverlayRef.current) return;
+            if (showRotateOverlayRef.current || showMobileOverlayRef.current) return;
             if (lastTranscriptionTimeRef.current === 0) { addLog('info', 'Ignoring model turn before first transcription'); return; }
             setPersistentPaths([]);
             setLiveTranscription("");
@@ -2269,6 +2263,8 @@ export default function App() {
           className="flex-1 relative min-h-[60vh] lg:min-h-0 bg-[var(--bg-color)]"
         >
           <div aria-hidden className="absolute inset-0 pointer-events-none opacity-[0.04] bg-[radial-gradient(circle_at_1px_1px,currentColor_1px,transparent_0)] [background-size:24px_24px]" />
+          <MenuBar isLive={isLive} isConnecting={isConnecting} isDarkMode={isDarkMode} onToggleTheme={() => setIsDarkMode(!isDarkMode)} onToggleDrawer={() => setDrawerOpen(o => !o)} />
+          <Dock active={activeProgram} onSelect={handleProgramChange} onReopen={() => setWindowOpen(true)} />
           <CursorResources mode={isPainting ? 'painting' : 'off'} color="#3b82f6" />
           <CursorTrail isActive={isPainting} mousePos={trailMousePos} color="#3b82f6" />
           <PaintLayer paths={persistentPaths} activePath={pointerPath} containerSize={mainSize} />
@@ -2341,23 +2337,13 @@ export default function App() {
                 onAction={handleSurfaceAction} onElementClick={handleSurfaceElementClick} />
             </ProgramWindow>
           )}
-          {/* Theme Toggle Button */}
-          <div className="absolute top-3 left-4 lg:top-6 sm:left-8 z-50">
-            <button 
-              onClick={() => setIsDarkMode(!isDarkMode)}
-              className="p-2 bg-[var(--card-bg)] border border-[var(--card-border)] rounded-lg hover:opacity-80 transition-all text-[var(--text-primary)] shadow-sm"
-              title={isDarkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}
-            >
-              {isDarkMode ? <Sun size={18} fill="white" fillOpacity={0.5} /> : <Moon size={18} fill="white" fillOpacity={0.5} />}
-            </button>
-          </div>
 
         </main>
 
         {/* Responsive Sidebar */}
         <aside id="sidebar-section" className="w-full lg:w-[400px] p-3 lg:p-6 flex flex-col gap-4 shrink-0 h-auto lg:h-full overflow-visible lg:overflow-y-auto custom-scrollbar">
           {/* Task Box - Always Visible */}
-          <section id="task-section" className={`shrink-0 relative ${showOnboarding ? 'z-[10001]' : ''}`}>
+          <section id="task-section" className="shrink-0 relative">
             <AnimatePresence mode="popLayout" custom={slideDirection}>
               <motion.div
                 key={currentTaskIndex}
@@ -2907,99 +2893,6 @@ export default function App() {
       </svg>
     </div>
   )}
-
-  {/* Welcome Modal */}
-  <AnimatePresence>
-    {showWelcome && (
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-black/40 dark:bg-white/20 backdrop-blur-sm"
-        onClick={handleDismissWelcome}
-      >
-            <motion.div
-              initial={{ scale: 0.9, opacity: 0, y: 20 }}
-              animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.9, opacity: 0, y: 20 }}
-              transition={{ type: "spring", damping: 25, stiffness: 300 }}
-              className="bg-[var(--card-bg)] border border-[var(--card-border)] rounded-[32px] shadow-2xl w-[90vw] max-w-2xl relative overflow-hidden"
-              onClick={(e) => e.stopPropagation()}
-            >
-            <div className="flex flex-col items-stretch">
-              <div className="p-[6vh] sm:p-[8vh] pb-0">
-                <h2 className="text-[clamp(1.5rem,6vh,3rem)] font-inter font-bold text-[var(--text-primary)] mb-[2vh] tracking-[-0.04em] leading-[1.1]">
-                  Point and Speak
-                  <br />
-                  <span className="text-[var(--accent-color)]">with the AI-Pointer</span>
-                </h2>
-                <div className="text-[var(--text-secondary)] font-inter font-normal leading-tight text-[clamp(0.875rem,2.2vh,1rem)]">
-                  <p>
-                    Experience the power of an AI-enabled pointer.
-                    <br />
-                    Just point and speak to get directions and find things.
-                  </p>
-                </div>
-              </div>
-
-              <div className="px-[6vh] sm:px-[8vh] mt-[2vh] flex-grow flex items-center justify-center min-h-0">
-                <img 
-                  src="https://www.gstatic.com/aistudio/ai-pointer-find/flow-graphic.png" 
-                  alt="gPointer Preview" 
-                  className="w-full h-auto max-h-[35vh] object-contain block"
-                />
-              </div>
-              
-              <div className="p-[6vh] sm:p-[8vh] pt-0 mt-[2vh]">
-                <button
-                  onClick={handleDismissWelcome}
-                  className="w-full h-[clamp(48px,8vh,64px)] bg-[var(--inverse-bg)] text-[var(--inverse-text)] rounded-full font-dm font-bold text-[clamp(0.9rem,2.5vh,1.125rem)] hover:opacity-90 transition-all active:scale-[0.98] shadow-lg shrink-0 flex items-center justify-center gap-2"
-                >
-                  <Mic className="w-5 h-5" />
-                  Start Point and Speak
-                </button>
-              </div>
-            </div>
-          </motion.div>
-      </motion.div>
-    )}
-  </AnimatePresence>
-
-  <AnimatePresence>
-    {showOnboarding && (
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        className="fixed inset-0 z-[10000] pointer-events-none"
-      >
-        <div className="absolute inset-0 bg-black/40 backdrop-blur-[4px] pointer-events-auto" onClick={() => setShowOnboarding(false)} />
-        <motion.div
-          initial={{ opacity: 0, x: 20 }}
-          animate={{ opacity: 1, x: 0 }}
-          className="absolute top-[10%] right-[320px] sm:right-[370px] lg:right-[420px] z-[10002] pointer-events-auto"
-        >
-          <div className="bg-[var(--card-bg)] border border-[var(--card-border)] text-[var(--text-primary)] p-6 rounded-2xl shadow-2xl max-w-[240px] relative">
-            {/* Arrow */}
-            <div className="absolute top-1/2 -right-2 -translate-y-1/2 w-4 h-4 bg-[var(--card-bg)] border-r border-t border-[var(--card-border)] rotate-45" />
-            
-            <p className="font-dm font-bold text-lg leading-tight mb-2 relative z-10">Try to complete these tasks</p>
-            <p className="text-sm font-dm text-[var(--text-secondary)] mb-5 relative z-10">Follow the instructions in the task cards to explore the app's features.</p>
-            <button 
-              onClick={() => {
-                setShowOnboarding(false);
-                startLiveSession();
-              }}
-              className="w-full h-[48px] bg-[var(--inverse-bg)] text-[var(--inverse-text)] rounded-full font-dm font-bold text-sm hover:opacity-90 transition-all active:scale-[0.98] shadow-md flex items-center justify-center relative z-10 gap-2"
-            >
-              <Mic className="w-4 h-4" />
-              Start
-            </button>
-          </div>
-        </motion.div>
-      </motion.div>
-    )}
-  </AnimatePresence>
 
   <AnimatePresence>
     {showMobileOverlay && (
