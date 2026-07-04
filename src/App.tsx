@@ -531,9 +531,11 @@ export default function App() {
   const railDispatch = (e: RailEvent) => {
     const prev = railStateRef.current;
     const next = reduceRail(prev, e, Date.now());
-    // Interaction telemetry
-    if (e.type === 'user.whyToggle') telemetry.guidance('why_opened', { taskKey: prev.rail?.seq });
-    if (e.type === 'user.flip') telemetry.guidance('card_flipped', { taskKey: prev.rail?.seq });
+    // Interaction telemetry — only on the opening/adding direction
+    if (e.type === 'user.whyToggle' && next.openWhy !== null && next.openWhy !== prev.openWhy)
+      telemetry.guidance('why_opened', { taskKey: prev.rail?.seq });
+    if (e.type === 'user.flip' && next.flipped.length > prev.flipped.length)
+      telemetry.guidance('card_flipped', { taskKey: prev.rail?.seq });
     // Dismiss with active step → abandoned
     if (e.type === 'rail.dismiss' && prev.rail && prev.rail.activeIndex !== null)
       telemetry.guidance('rail_abandoned', { taskKey: prev.rail.seq });
@@ -551,10 +553,11 @@ export default function App() {
             telemetry.guidance('check_auto_pass', { taskKey: prev.rail.seq });
           else if (nextCard.state === 'failed' && prevCard.state !== 'failed')
             telemetry.guidance('check_auto_fail', { taskKey: prev.rail.seq });
-        } else if (prevCard.verify === 'user' && next.rail?.activeIndex !== ci)
+        } else if (prevCard.verify === 'user' && e.type === 'user.checkConfirm' && next.rail?.activeIndex !== ci)
           telemetry.guidance('check_user_confirmed', { taskKey: prev.rail.seq });
       }
     }
+    railStateRef.current = next;
     setRailState(next);
   };
   const railDispatchRef = useRef(railDispatch);
@@ -1010,7 +1013,7 @@ export default function App() {
       const args = fc.args as any;
       const subject = typeof args.subject === 'string' ? args.subject : '';
       const hit = resolveEchoedTarget(entitiesRef.current, subject);
-      const mapped = respondCallToRail({ seq: 'answer', guideLine: ' ', cards: [
+      const mapped = respondCallToRail({ seq: 'answer', guideLine: 'answer', cards: [
         hit ? { t: 'answer', text: `That's the ${displayName(hit.entity)}.`, target: subject }
             : { t: 'answer', text: subject ? `I can't point at "${subject}" — not on this screen.` : `I'm not sure what that is.` },
       ] }, entitiesRef.current, mockDocRef.current, Date.now());

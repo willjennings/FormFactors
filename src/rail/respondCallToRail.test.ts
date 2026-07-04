@@ -71,4 +71,9 @@ describe('respondCallToRail — the honest mapper', () => {
     expect(r.rail.cards[0].entityId).toBe('word-2');
     expect(r.rail.activeIndex).toBe(0);
   });
+
+  it('a single ANSWER card with a one-word guideLine maps cleanly (the explain path)', () => {
+    const r = respondCallToRail({ seq: 'answer', guideLine: 'answer', cards: [{ t: 'answer', text: "That's the Save button.", target: 'Save button' }] }, entities, doc, 0);
+    expect('error' in r).toBe(false);
+  });
 });
