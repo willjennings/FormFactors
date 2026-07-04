@@ -202,14 +202,10 @@ export const TASK_LIBRARY: ScenarioTask[] = [
     title: 'Export as PDF',
     description: 'Ask it to export a copy. It shows the format and destination before producing the file.',
     hint: 'Say "Export this as a PDF"', image: ph('file-pdf') },
-  { key: 'pattern', action: 'file', programs: 'all',
-    title: 'It spots a pattern',
-    description: 'Point at a few things without asking for anything. Honest mode notices, offers to help — and never acts unless you say yes.',
-    hint: 'When it offers, say "Yes please"' },
   { key: 'share-person', action: 'share', programs: 'all',
     title: 'Share with a person',
     description: 'Ask it to send your work to someone. Outward actions show exactly who and what before anything goes out.',
-    hint: 'Say "Share this with Lia"', image: ph('share-person') },
+    hint: 'Say "Share this with my editor"', image: ph('share-person') },
   { key: 'email-copy', action: 'share', programs: 'all',
     title: 'Email a copy',
     description: 'Ask it to email the file. It witness-renders the recipient and attachment before sending.',
@@ -492,7 +488,7 @@ export function applyAction(doc: MockDoc, verb: string, args: { target?: string;
 // ActionCategory (which is about task UX) and ElementCategory (highlight hue).
 export type VerbClass = 'query' | 'command' | 'control' | 'transform' | 'mutate' | 'create' | 'destroy' | 'share';
 
-// Map every tool/verb NAME (action verbs + the tourism verbs) to its policy class.
+// Map every tool/verb NAME (action verbs) to its policy class.
 export const VERB_CLASS: Record<string, VerbClass> = {
   // document action verbs
   edit_content: 'mutate',
@@ -500,11 +496,7 @@ export const VERB_CLASS: Record<string, VerbClass> = {
   insert_object: 'create',
   photo_edit: 'transform',
   save_file: 'mutate',
-  // tourism / map verbs
-  update_map: 'control',
-  show_directions: 'control',
   explain: 'query',
-  synthesize: 'create',
   share: 'share',
 };
 

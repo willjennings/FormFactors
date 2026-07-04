@@ -53,7 +53,7 @@ import {
 } from './scenarios';
 import type { ProgramId, ElementCategory, MockDoc, Program, Autonomy } from './scenarios';
 import type { PerceivedCache } from './perception/perceiveTile';
-import { buildEntities, entityById, entityByTitle, displayName, MAP_ENTITY_ID, resolveEchoedTarget } from './entities/registry';
+import { buildEntities, entityById, entityByTitle, displayName, resolveEchoedTarget } from './entities/registry';
 import type { SceneEntity, EntityId } from './entities/registry';
 import { TeachingLayer } from './teaching/TeachingLayer';
 import { emitFeedbackAudio, FEEDBACK_OPTIONS } from './feedback';
@@ -122,7 +122,7 @@ const KEYWORD_MAP: Record<string, string> = {
 // the whole demo by editing scenarios.ts.
 
 // --- DIFF 1: pointing confidence (demo-grade proxy) ---
-// This is NOT a perception-confidence model. It's a synthesized signal — a geometric
+// This is NOT a perception-confidence model. It's a composite signal — a geometric
 // margin plus a seeded confusable-pairs table — sufficient to demonstrate the interaction
 // grammar (hint carries confidence → low confidence triggers an honest ask). See README.
 // The confusable map is passed in from the active program (e.g. Save ↔ Save As).
@@ -178,28 +178,13 @@ function computePointingConfidence(
 
 const VOICE_TOOLS: VoiceTool[] = [
   {
-    name: 'update_map',
-    description: 'Update the map to show a specific location or search for nearby places. ONLY call this tool if the user EXPLICITLY asks you to update the map or search for something verbally.',
-    parameters: { type: 'object', properties: { query: { type: 'string', description: 'The location name or search query.' } }, required: ['query'] },
-  },
-  {
-    name: 'show_directions',
-    description: 'Show directions between two locations on the map. ONLY call this tool if the user EXPLICITLY asks you for directions or how to get somewhere verbally.',
-    parameters: { type: 'object', properties: { origin: { type: 'string', description: 'The starting location.' }, destination: { type: 'string', description: 'The destination location.' } }, required: ['origin', 'destination'] },
-  },
-  {
     name: 'explain',
-    description: 'Verbally name or describe what the user is pointing at (e.g. "what is this?", "what am I looking at?"). LOW-COMMITMENT: it does NOT change the map. Call it when the user asks to identify something rather than navigate.',
-    parameters: { type: 'object', properties: { subject: { type: 'string', description: 'The landmark or thing being identified.' } }, required: ['subject'] },
-  },
-  {
-    name: 'synthesize',
-    description: 'Plan a multi-stop day itinerary from several landmarks (e.g. "plan a day from these"). Call WITHOUT confirm to PROPOSE the plan as a hypothesis first; call with confirm=true only after the user explicitly approves, to build the route.',
-    parameters: { type: 'object', properties: { places: { type: 'array', items: { type: 'string' }, description: 'Ordered list of stops for the day.' }, plan: { type: 'string', description: 'A short human-readable description of the proposed day (e.g. duration, order).' }, confirm: { type: 'boolean', description: 'Set true ONLY after the user has explicitly confirmed they want it built. Omit/false to first propose.' } }, required: ['places'] },
+    description: 'Verbally name or describe what the user is pointing at (e.g. "what is this?", "what am I looking at?"). LOW-COMMITMENT: it does NOT change any state. Call it when the user asks to identify something.',
+    parameters: { type: 'object', properties: { subject: { type: 'string', description: 'The on-screen element or thing being identified.' } }, required: ['subject'] },
   },
   {
     name: 'share',
-    description: 'Share something (e.g. an itinerary) with another person (e.g. "share this with Lia"). OUTWARD, high-commitment action. Call WITHOUT confirm to witness-render the recipient and payload first; call with confirm=true only after the user explicitly approves sending.',
+    description: 'Share the current document with another person. OUTWARD, high-commitment action. Call WITHOUT confirm to witness-render the recipient and payload first; call with confirm=true only after the user explicitly approves sending.',
     parameters: { type: 'object', properties: { recipient: { type: 'string', description: 'Who to send to.' }, payload: { type: 'string', description: 'A short description of what is being shared.' }, confirm: { type: 'boolean', description: 'Set true ONLY after the user has explicitly confirmed they want it sent. Omit/false to first witness-render.' } }, required: ['recipient'] },
   },
 ];
@@ -385,15 +370,6 @@ export default function App() {
     name: string;
     receivedAt: number;
   } | null>(null);
-  const [pendingMapUpdate, setPendingMapUpdate] = useState<{
-    type: 'search' | 'directions';
-    query?: string;
-    origin?: string;
-    destination?: string;
-    id: string;
-    name: string;
-    receivedAt: number;
-  } | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
   const [logs, setLogs] = useState<DebugLog[]>([]);
   const [currentCoords, setCurrentCoords] = useState({ x: 500, y: 500 });
@@ -482,20 +458,11 @@ export default function App() {
   const hasPendingEditRef = useRef(false);
   const lastProcessedTranscriptionRef = useRef<string>("");
   const spatialDescriptionRef = useRef<string | null>(null);
-  // PHASE F (S6): distinct landmarks pointed at this session, + a one-shot guard so the proactive
-  // trip-pattern offer fires at most once.
-  const identifiedLandmarksRef = useRef<Set<string>>(new Set());
-  const hasOfferedTripRef = useRef(false);
 
   const [sendFrequency, setSendFrequency] = useState(150); // Increased frequency for better AI responsiveness
   const [currentTaskIndex, setCurrentTaskIndex] = useState(0);
   const [slideDirection, setSlideDirection] = useState(0); // -1 for left, 1 for right
   const [completedTaskIds, setCompletedTaskIds] = useState<number[]>([]);
-  const [mapQuery, setMapQuery] = useState("London");
-  const [mapType, setMapType] = useState<'search' | 'directions'>('search');
-  const [directions, setDirections] = useState<{ origin: string; destination: string } | null>(null);
-  // PHASE E: a synthesized itinerary proposed as a hypothesis, awaiting the user's confirm.
-  const [proposedItinerary, setProposedItinerary] = useState<{ places: string[]; plan?: string } | null>(null);
   // PHASE G: an outward share request — witness recipient + payload before sending.
   const [shareRequest, setShareRequest] = useState<{ recipient: string; payload?: string; confirmed: boolean } | null>(null);
   // Action verbs (save/edit/format/insert/photo) mutate this mock document; a pending action
@@ -661,32 +628,30 @@ export default function App() {
       const mainRect = main.getBoundingClientRect();
       
       const photosEl = main.querySelector('.photos-box');
-      const mapEl = main.querySelector('.map-box');
-      
-      if (photosEl && mapEl) {
+
+      if (photosEl) {
         const pRect = photosEl.getBoundingClientRect();
-        const mRect = mapEl.getBoundingClientRect();
-        
+
         setMainSize({ width: mainRect.width, height: mainRect.height });
-        
+
         const toBBox = (r: DOMRect) => ({
           ymin: ((r.top - mainRect.top) / mainRect.height) * 1000,
           xmin: ((r.left - mainRect.left) / mainRect.width) * 1000,
           ymax: ((r.bottom - mainRect.top) / mainRect.height) * 1000,
           xmax: ((r.right - mainRect.left) / mainRect.width) * 1000,
         });
-        
+
         // Generic element contract: anything with data-element-id is a measurable scene
         // element (tiles today, surface controls after the surface migration).
         const photoItems = Array.from(photosEl.querySelectorAll<HTMLElement>('[data-element-id]')).map((el: HTMLElement) => {
           const id = Number(el.dataset.elementId);
           return Number.isFinite(id) ? { id, bbox: toBBox(el.getBoundingClientRect()) } : null;
         }).filter(Boolean) as { id: number; bbox: BBox }[];
-        
+
         const surfEl = main.querySelector('.program-surface');
         setLayoutBounds({
           photos: toBBox(pRect),
-          map: toBBox(mRect),
+          map: { ymin: 0, xmin: 0, ymax: 0, xmax: 0 },
           photoItems,
           surface: surfEl ? toBBox((surfEl as HTMLElement).getBoundingClientRect()) : undefined,
         });
@@ -694,7 +659,7 @@ export default function App() {
         // Update the scene entities for Gemini (single source of truth).
         const es = buildEntities(program, perceivedLabelsRef.current, {
           items: photoItems.map(it => ({ id: it.id, bbox: it.bbox })),
-          map: toBBox(mRect),
+          map: { ymin: 0, xmin: 0, ymax: 0, xmax: 0 },
         });
         setEntities(es);
         entitiesRef.current = es;
@@ -702,19 +667,17 @@ export default function App() {
         // Notify AI of the new layout if session is active (core context — both backends).
         if (providerRef.current) {
           const layoutInfo = es.map(e => `${displayName(e)}: [${e.bbox.map(Math.round).join(', ')}]`).join('\n');
-          providerRef.current.sendTextHint(`[SYSTEM UPDATE: The on-screen program elements and the Google Maps box are at these coordinates (ymin, xmin, ymax, xmax):\n${layoutInfo}\nUse these to identify what the user is pointing at when they say "this" or "here". DO NOT RESPOND TO THIS UPDATE. STAY SILENT UNTIL THE USER SPEAKS.]`);
+          providerRef.current.sendTextHint(`[SYSTEM UPDATE: The on-screen program elements are at these coordinates (ymin, xmin, ymax, xmax):\n${layoutInfo}\nUse these to identify what the user is pointing at when they say "this" or "here". DO NOT RESPOND TO THIS UPDATE. STAY SILENT UNTIL THE USER SPEAKS.]`);
         }
       }
     };
-    
+
     const observer = new ResizeObserver(updateLayout);
     if (mainContainerRef.current) observer.observe(mainContainerRef.current);
-    
-    // Also observe the photos and map boxes specifically in case they move independently
+
+    // Also observe the photos box specifically in case it moves independently
     const photosBox = document.querySelector('.photos-box');
-    const mapBox = document.querySelector('.map-box');
     if (photosBox) observer.observe(photosBox);
-    if (mapBox) observer.observe(mapBox);
 
     updateLayout();
     window.addEventListener('resize', updateLayout);
@@ -747,10 +710,6 @@ export default function App() {
     return () => window.removeEventListener('resize', checkDevice);
   }, [bypassDeviceGate]);
 
-
-  const mapUrl = mapType === 'search' 
-    ? `https://www.google.com/maps?q=${encodeURIComponent(mapQuery)}&output=embed`
-    : `https://www.google.com/maps?saddr=${encodeURIComponent(directions?.origin || '')}&daddr=${encodeURIComponent(directions?.destination || '')}&output=embed`;
 
   const allTasksCompleted = completedTaskIds.length === TASKS.length;
   const isCongratulationsPage = currentTaskIndex === TASKS.length;
@@ -1371,7 +1330,7 @@ CRITICAL CONSTRAINTS - ABSOLUTELY NO ZOOMING OR CROPPING:
     const actionTools = buildActionTools(program.id);
     const ACTIONS_SECTION = actionTools.length ? `
 
-${program.label.toUpperCase()} ACTIONS (in addition to the map tools above):
+${program.label.toUpperCase()} ACTIONS:
 ${actionTools.map(t => `- ${t.name}: ${t.description}`).join('\n')}
 - Every action verb takes (target, detail, confirm). These are HIGH-COMMITMENT — they change the document. ${honest
   ? 'WITNESS-RENDER your interpretation first: state WHAT you will do and WHERE (e.g. "Make the document body bold?") and WAIT for an explicit "yes". Only then call again with confirm=true. Never mutate the document on a low-confidence or unconfirmed guess.'
@@ -1384,23 +1343,19 @@ ${actionTools.map(t => `- ${t.name}: ${t.description}`).join('\n')}
     // The honest variant (Diffs 2 + 3). Honesty scales with the situation along two axes:
     // CONFIDENCE (how sure the hint is) and COMMITMENT (how consequential the verb is).
     const POINTING_TRUTH_HONEST = `- The hints now carry a CONFIDENCE, e.g. "(confidence: high)" or "(confidence: low — could also be King's Cross)". Treat confidence as a first-class signal, NOT as absolute truth.
-- HIGH CONFIDENCE + a low-stakes "locate" request ("show me this", "where is this", "hotels near here"): act EXACTLY as you would normally — call update_map immediately with one short confirmation ("Here's the London Eye"). Do NOT ask, do NOT hedge. Being sure means staying fluid; asking when you already know is annoying.
-- LOW CONFIDENCE, or a hint that lists multiple candidates: do NOT call any tool yet. Ask ONE short disambiguating question in your tour-guide voice — e.g. "I think that's St Pancras — or did you mean King's Cross next door?" — then act on the user's answer. Never silently pick one of two plausible candidates.
-- HONEST UNCERTAINTY is a valid, first-class answer. You MAY say "I'm not certain which photo you mean" or "I think this is X, but I'm not sure." If the hint says "Nothing (Empty Space)" or you genuinely cannot tell what is being pointed at, give a brief honest shrug — "I'm not sure what you're pointing at — could you point again?" — and do NOT invent a landmark.
+- HIGH CONFIDENCE + a low-stakes identify request ("what is this?", "what am I looking at?"): act EXACTLY as you would normally — answer immediately with one short confirmation. Do NOT ask, do NOT hedge. Being sure means staying fluid; asking when you already know is annoying.
+- LOW CONFIDENCE, or a hint that lists multiple candidates: do NOT call any tool yet. Ask ONE short disambiguating question — e.g. "I think that's St Pancras — or did you mean King's Cross next door?" — then act on the user's answer. Never silently pick one of two plausible candidates.
+- HONEST UNCERTAINTY is a valid, first-class answer. You MAY say "I'm not certain which element you mean" or "I think this is X, but I'm not sure." If the hint says "Nothing (Empty Space)" or you genuinely cannot tell what is being pointed at, give a brief honest shrug — "I'm not sure what you're pointing at — could you point again?" — and do NOT invent an answer.
 - GRICEAN QUALITY (do not assert what you are unsure of): when confidence is low, HEDGE — say "I think that's St Pancras" rather than the flat assertion "Here's St Pancras."
-- COMMITMENT scales the friction, not just confidence. "show_directions" is HIGH-COMMITMENT — it sends the user walking — so before you call it, WITNESS-RENDER your interpretation: state BOTH resolved endpoints and get a quick confirm ("From Westminster to Hyde Park?") even when you are reasonably confident. If either endpoint is low-confidence, fold the disambiguation into that same question. Low-commitment "locate" requests do NOT get this gate — gating them would be nagging.`;
+- COMMITMENT scales the friction, not just confidence. High-commitment actions send real effects — so WITNESS-RENDER your interpretation first: state WHAT you will do and WHERE and get a quick confirm before acting. Low-commitment identify requests do NOT get this gate — gating them would be nagging.`;
 
     // Deeper-inference + proactivity rules, per mode.
     const CONFIDENT_VERB_RULES = `DEEPER REQUESTS:
-- If the user sweeps across photos and asks to "plan a day" or "plan a trip from these", call synthesize(places, confirm=true) and build the itinerary right away.
 - If the user asks to "share this with <name>", call share(recipient, payload, confirm=true) and send it.`;
     const HONEST_VERB_RULES = `DEEPER REQUESTS (honest — inference scales the verification loop UPSTREAM):
-- "Plan a day from these": call synthesize(places) WITHOUT confirm to PROPOSE an ordered itinerary as a hypothesis. Speak it briefly — e.g. "Rough order: Westminster, then the London Eye, then Hyde Park — about 5 hours. Want me to build it?" — then STOP. The proposal IS the answer. Only after the user explicitly says yes, call synthesize(places, confirm=true) to build. A synthesized plan is unverifiable until built, so confirm the PLAN before spending the work, because the inference is the part most likely to be wrong.
-- NEVER build or commit a plan unprompted.
-- PROACTIVE OFFERS: you normally stay silent until spoken to. The ONE exception: if you receive a [SYSTEM: TRIP PATTERN ...] message, you MAY make a single transparent offer that states your reasoning — e.g. "Looks like you're planning a London trip — want me to pull these into an itinerary?" — then STOP and wait. Notice → hypothesize transparently → ASK. Never act on an inferred intention without an explicit yes. Make this offer at most once.
-- OUTWARD ACTIONS are the highest commitment of all — they act on another person and can't be taken back. For "share this with <name>", call share(recipient, payload) WITHOUT confirm first to witness-render exactly WHO and WHAT goes out — "Send the London day plan to Lia?" — and wait. Only after an explicit yes, call share(recipient, payload, confirm=true). Never send to a person without showing the recipient and payload first.`;
+- OUTWARD ACTIONS are the highest commitment of all — they act on another person and can't be taken back. For "share this with <name>", call share(recipient, payload) WITHOUT confirm first to witness-render exactly WHO and WHAT goes out — "Send the document to my editor?" — and wait. Only after an explicit yes, call share(recipient, payload, confirm=true). Never send to a person without showing the recipient and payload first.`;
 
-    return `You are a point-and-speak assistant. The user is working in ${program.label}; you help them operate it by pointing and speaking, and you can also pull up a London map when they ask. Act on what they point at and explicitly ask for.
+    return `You are a point-and-speak assistant. The user is working in ${program.label}; you help them operate it by pointing and speaking. Act on what they point at and explicitly ask for.
 CRITICAL: You MUST remain completely silent unless the user has explicitly spoken to you with a clear command or question. Do not initiate conversation, do not greet the user, and do not speak if there is only background noise or silence.
 Wait for the user to finish their instructions before responding. 
 CRITICAL: Do NOT repeat yourself or say the same sentence twice in a row. If you just said something, do not say it again immediately.
@@ -1419,23 +1374,21 @@ CRITICAL - RESPONSE STYLE:
 - Be concise. One short sentence is the maximum.
 
 CRITICAL - ACTION LOGIC:
-- NEVER perform any actions (like updating the map or showing directions) based on just pointing or hovering.
-- You MUST wait for an explicit verbal command (e.g., "show me this", "how do I get here", "what is this?", "search for hotels near here") before calling any tools.
-- If the user just says a landmark name (e.g., "London Eye") without a command, STAY SILENT. Do not confirm, do not update the map.
+- NEVER perform any actions based on just pointing or hovering.
+- You MUST wait for an explicit verbal command (e.g., "what is this?", "save this", "make this bold") before calling any tools.
 - Pointing is ONLY context for when the user speaks.
 - If the user is just moving their cursor without speaking, stay silent.
 - Once you understand the command, call the tool immediately.
-- NEVER proactively update the map or suggest locations. ONLY update the map when the user EXPLICITLY asks you to.
-- CRITICAL: Whenever you act, you MUST call the corresponding tool ('update_map'/'show_directions'/an action verb). Never just say you are doing something without the tool call — and per the CONFIRMATION POLICY, do not narrate the success at all; just call the tool.
+- CRITICAL: Whenever you act, you MUST call the corresponding tool (explain, share, or an action verb). Never just say you are doing something without the tool call — and per the CONFIRMATION POLICY, do not narrate the success at all; just call the tool.
 
-The user is looking at a gallery of ${program.label} screenshots on the left and a Google Map on the right.
+The user is looking at a ${program.label} interface on the left.
 
 MARKERS (Visual Anchors):
 - When the user circles an item, a marker labeled M1, M2, etc., is placed at that location.
 - These markers are visible in your video feed as gold circles with labels.
-- Use these markers to identify specific locations the user is referring to (e.g., "from M1 to M2").
-- Markers are persistent until the map is updated or the AI responds.
-- CRITICAL: When a new request starts, ignore all previous markers and landmarks. ALWAYS use the most recent visual information and pointing hints.
+- Use these markers to identify specific elements the user is referring to (e.g., "from M1 to M2").
+- Markers are persistent until the AI responds.
+- CRITICAL: When a new request starts, ignore all previous markers. ALWAYS use the most recent visual information and pointing hints.
 
 ON-SCREEN ELEMENTS (the user points at these — use these names exactly):
 ${entities.length
@@ -1443,26 +1396,19 @@ ${entities.length
   : program.images.map(img => `- ${img.title}`).join('\n')}
 
 USER CAPABILITIES:
-1. Point at a photo and ask "show me this on a map". You MUST identify which photo they are pointing at and call update_map(location_name).
-2. Point at two photos (e.g., "from here to there") and ask for directions. You MUST track the sequence of pointing and call show_directions(origin, destination).
-3. Point at a location (photo or map) and ask for nearby places (e.g., "hotels near here"). You MUST call update_map(query) with a query like "hotels near [Location Name]" or "hotels near [Current Map View]".
-4. Point at a photo and ask "what is this?" / "what am I looking at?". This is an IDENTIFICATION request — call explain(subject) and answer verbally by naming the landmark. Do NOT change the map for this.
-5. Sweep across several photos and ask to "plan a day" / "plan a trip from these". This is a SYNTHESIS request — call synthesize(places). See DEEPER REQUESTS below for how to handle it.
-6. Ask to "share this with <name>". This is an OUTWARD request — call share(recipient, payload). See DEEPER REQUESTS below for how to handle it.
+1. Point at an element and ask "what is this?" / "what am I looking at?". This is an IDENTIFICATION request — call explain(subject) and answer verbally.
+2. Ask to "share this with <name>". This is an OUTWARD request — call share(recipient, payload). See DEEPER REQUESTS below for how to handle it.
 
 CRITICAL - POINTING LOGIC:
-- You will receive hints in the format: [USER JUST SAID "THIS" WHILE POINTING AT: Landmark Name].
-- When the user says "this", "here", "that", or "there", they are ALWAYS referring to the landmark mentioned in the [USER JUST SAID ...] message that arrived MOST RECENTLY BEFORE or DURING that specific word.
-- If the user is pointing at the map, they are referring to the area currently shown on the map (e.g., "hotels near here" means hotels near the current map view).
+- You will receive hints in the format: [USER JUST SAID "THIS" WHILE POINTING AT: Element Name].
+- When the user says "this", "here", "that", or "there", they are ALWAYS referring to the element mentioned in the [USER JUST SAID ...] message that arrived MOST RECENTLY BEFORE or DURING that specific word.
 ${honest ? POINTING_TRUTH_HONEST : POINTING_TRUTH_CONFIDENT}
-- CRITICAL: For directions "from here to there", "here" is the landmark from the hint preceding "here", and "there" is the landmark from the hint preceding "there".
-- ALWAYS ignore landmarks from previous requests. Each time the user speaks a new command, start fresh with the pointing hints. Do NOT reuse locations from previous direction requests unless the user explicitly asks to "go back" or "use the same start".
-- If the hint says "Nothing (Empty Space)", ask the user to point at a photo.
-- Listen carefully to the user's full request and ensure you understand their complete intent before calling any tools. For example, if they are describing a trip, wait until they specify a location they want to see on the map.
+- ALWAYS ignore elements from previous requests. Each time the user speaks a new command, start fresh with the pointing hints.
+- If the hint says "Nothing (Empty Space)", ask the user to point at a program element.
+- Listen carefully to the user's full request and ensure you understand their complete intent before calling any tools.
 - Once the intent is clear, call the tools to act. Do not just talk about it — and per the CONFIRMATION POLICY, do not narrate it either; just call the tool and stay silent on success.
 - Always perform the action by CALLING THE TOOL; never merely say you are doing something without the tool call.
 - CRITICAL: After you receive a tool response (success: true), do NOT speak. The app has already confirmed it to the user.
-- If the user asks for directions, ensure you have both an origin and a destination.
 - DO NOT REPEAT YOURSELF.
 
 ${honest ? HONEST_VERB_RULES : CONFIDENT_VERB_RULES}
@@ -1486,87 +1432,12 @@ When the user points and speaks a command, call the appropriate tool — a map t
       providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true, deduped: true });
       return;
     }
-    if (fc.name === 'update_map') {
-      const args = fc.args as any;
-      let query = args.query;
-      // Append London to known locations for better search accuracy
-      const knownLocations = ["London Eye", "Hyde Park", "Westminster Abbey", "St Pancras Station"];
-      if (knownLocations.some(loc => query.toLowerCase().includes(loc.toLowerCase()))) {
-        if (!query.toLowerCase().includes("london")) {
-          query += ", London";
-        }
-      }
-
-      addLog('tool', `Tool Call: update_map(${query}) - Queued for silence`);
-
-      setPendingMapUpdate({
-        type: 'search',
-        query,
-        id: fc.id,
-        name: fc.name,
-        receivedAt: Date.now()
-      });
-    } else if (fc.name === 'show_directions') {
-      const args = fc.args as any;
-      let origin = args.origin;
-      let destination = args.destination;
-      const knownLocations = ["London Eye", "Hyde Park", "Westminster Abbey", "St Pancras Station"];
-
-      if (knownLocations.some(loc => origin.toLowerCase().includes(loc.toLowerCase())) && !origin.toLowerCase().includes("london")) {
-        origin += ", London";
-      }
-      if (knownLocations.some(loc => destination.toLowerCase().includes(loc.toLowerCase())) && !destination.toLowerCase().includes("london")) {
-        destination += ", London";
-      }
-
-      addLog('tool', `Tool Call: show_directions(${origin} to ${destination}) - Queued for silence`);
-
-      setPendingMapUpdate({
-        type: 'directions',
-        origin,
-        destination,
-        id: fc.id,
-        name: fc.name,
-        receivedAt: Date.now()
-      });
-    } else if (fc.name === 'explain') {
+    if (fc.name === 'explain') {
       // PHASE D: low-commitment, verbal-only. No map mutation. Ack immediately so the
       // model keeps speaking; the honest hedging lives in the prompt + the spoken answer.
       const args = fc.args as any;
       addLog('tool', `Tool Call: explain(${args.subject ?? ''}) - verbal only, no map change`);
       providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true });
-    } else if (fc.name === 'synthesize') {
-      // PHASE E: propose -> confirm -> build. Without confirm, render the itinerary as a
-      // hypothesis and DO NOT route. With confirm (after explicit user yes), build it.
-      const args = fc.args as any;
-      const places: string[] = Array.isArray(args.places) ? args.places.filter((p: any) => typeof p === 'string') : [];
-      const plan: string | undefined = typeof args.plan === 'string' ? args.plan : undefined;
-      const confirmed = args.confirm === true;
-
-      if (!confirmed) {
-        addLog('tool', `Tool Call: synthesize(propose) - ${places.join(' → ')}`);
-        setProposedItinerary({ places, plan });
-        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true, proposed: true });
-      } else {
-        addLog('tool', `Tool Call: synthesize(build) - ${places.join(' → ')}`);
-        const knownLocations = ["London Eye", "Hyde Park", "Westminster Abbey", "St Pancras Station"];
-        const withCity = (p: string) =>
-          knownLocations.some(loc => p.toLowerCase().includes(loc.toLowerCase())) && !p.toLowerCase().includes("london")
-            ? `${p}, London` : p;
-        if (places.length >= 2) {
-          // Classic maps daddr supports a "to:" waypoint chain for the middle stops.
-          const origin = withCity(places[0]);
-          const destination = places.slice(1).map(withCity).join(' to: ');
-          setMapType('directions');
-          setDirections({ origin, destination });
-        } else if (places.length === 1) {
-          setMapType('search');
-          setMapQuery(withCity(places[0]));
-        }
-        setProposedItinerary(null);
-        markersRef.current = [];
-        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true, built: true });
-      }
     } else if (fc.name === 'share') {
       // PHASE G: outward action. Witness recipient + payload before sending; commit only
       // on explicit confirm. (Sending itself is simulated — no real outward integration.)
@@ -1803,7 +1674,7 @@ When the user points and speaks a command, call the appropriate tool — a map t
       // 1. HISTORY PURPLE TEXT CHECK (Prioritize what was hovered DURING the speech window)
       const hoveredCounts: Record<string, number> = {};
       windowEntries.forEach(entry => {
-        if (entry.hovered && entry.hovered !== MAP_ENTITY_ID) {
+        if (entry.hovered) {
           hoveredCounts[entry.hovered] = (hoveredCounts[entry.hovered] || 0) + 1;
         }
       });
@@ -1826,7 +1697,7 @@ When the user points and speaks a command, call the appropriate tool — a map t
       }
 
       // 2. DIRECT PURPLE TEXT CHECK (Only for the very latest keyword if history is sparse)
-      if (!foundObject && index === totalKws - 1 && hoveredIdRef.current && hoveredIdRef.current !== MAP_ENTITY_ID) {
+      if (!foundObject && index === totalKws - 1 && hoveredIdRef.current) {
         foundObject = entityById(entitiesRef.current, hoveredIdRef.current) || null;
         if (foundObject) {
           addLog('info', `Using current "Purple Text" for latest keyword: ${displayName(foundObject)}`);
@@ -1928,24 +1799,7 @@ When the user points and speaks a command, call the appropriate tool — a map t
         // G4: remember this referent so later turns can resolve "make THAT bold" / "send IT".
         if (foundObject.category !== 'map') referents.note(displayName(foundObject), 'pointed', foundObject.id);
 
-        // PHASE F (S6): accumulate distinct real landmarks. In honest mode, once enough
-        // have been pointed at with no plan yet, authorize the model to make ONE
-        // transparent itinerary offer (notice → hypothesize → ask, never build).
-        if (foundObject.category !== 'map') {
-          identifiedLandmarksRef.current.add(displayName(foundObject));
-        }
-        if (
-          honestModeRef.current &&
-          !hasOfferedTripRef.current &&
-          !proposedItinerary &&
-          identifiedLandmarksRef.current.size >= 3 &&
-          providerRef.current
-        ) {
-          hasOfferedTripRef.current = true;
-          const tripPlaces = Array.from(identifiedLandmarksRef.current);
-          addLog('event', `Trip pattern noticed: ${tripPlaces.join(', ')} — offering once`);
-          providerRef.current?.sendTextHint(`[SYSTEM: TRIP PATTERN — the user has now pointed at ${tripPlaces.join(', ')} without asking for a plan. You MAY make ONE short, transparent offer that states your reasoning, e.g. "Looks like you're planning a London trip — want me to pull these into an itinerary?", then STOP and wait. Do NOT build anything yet.]`);
-        }
+        // Proactive pattern-offer seam retired with the tourism payload; re-aim at program behavior when a goal model exists.
 
         // SEND DEIXIS HINT to whichever backend is live.
         if (providerRef.current) {
@@ -1972,7 +1826,7 @@ When the user points and speaks a command, call the appropriate tool — a map t
       } else {
         // SEND "NOTHING" HINT TO PREVENT GUESSING
         if (providerRef.current) {
-          providerRef.current?.sendTextHint(`[USER JUST SAID "${kw.toUpperCase()}" WHILE POINTING AT: Nothing (Empty Space). Ask them to point at a photo or the map.]`);
+          providerRef.current?.sendTextHint(`[USER JUST SAID "${kw.toUpperCase()}" WHILE POINTING AT: Nothing (Empty Space). Ask them to point at a program element.]`);
         }
       }
 
@@ -2020,9 +1874,6 @@ When the user points and speaks a command, call the appropriate tool — a map t
   const startLiveSession = async () => {
     if (isLive) return; // Prevent multiple sessions
     lastTranscriptionTimeRef.current = 0;
-    // PHASE F: fresh session → reset the trip-pattern tracking.
-    identifiedLandmarksRef.current = new Set();
-    hasOfferedTripRef.current = false;
 
     const apiKey = process.env.GEMINI_API_KEY;
     if (voiceBackendRef.current === 'gemini' && !apiKey) {
@@ -2171,7 +2022,7 @@ When the user points and speaks a command, call the appropriate tool — a map t
 
   // Auto-execute logic: Wait for silence after a command is detected
   useEffect(() => {
-    if ((!pendingEdit && !pendingMapUpdate) || isProcessing) return;
+    if (!pendingEdit || isProcessing) return;
 
     const timer = setInterval(() => {
       const now = Date.now();
@@ -2188,45 +2039,10 @@ When the user points and speaks a command, call the appropriate tool — a map t
           setPendingEdit(null);
         }
       }
-
-      // Handle Map Updates
-      if (pendingMapUpdate) {
-        const timeSinceReceived = now - pendingMapUpdate.receivedAt;
-        // Snappier for maps: 600ms silence is enough to confirm command end
-        if (lastTranscriptionTimeRef.current > 0 && timeSinceTranscription > 600 && timeSinceReceived > 300) {
-          telemetry.map(pendingMapUpdate.query ?? `${pendingMapUpdate.origin}→${pendingMapUpdate.destination}`);
-          if (pendingMapUpdate.type === 'search') {
-            setMapType('search');
-            setMapQuery(pendingMapUpdate.query!);
-            emitFeedback({ outcome: 'committed', verbClass: 'control', label: `Showing ${pendingMapUpdate.query}` });
-          } else {
-            setMapType('directions');
-            setDirections({ origin: pendingMapUpdate.origin!, destination: pendingMapUpdate.destination! });
-            emitFeedback({ outcome: 'committed', verbClass: 'control', label: `Directions to ${pendingMapUpdate.destination}` });
-          }
-
-          // Clear markers and paint so the next "this" is fresh
-          markersRef.current = [];
-          lastMarkerTimeRef.current = {};
-          setPersistentPaths([]);
-
-          providerRef.current?.sendToolResponse(
-            pendingMapUpdate.id,
-            pendingMapUpdate.name,
-            {
-                success: true,
-                query: pendingMapUpdate.query,
-                origin: pendingMapUpdate.origin,
-                destination: pendingMapUpdate.destination
-              }
-          );
-          setPendingMapUpdate(null);
-        }
-      }
     }, 100);
 
     return () => clearInterval(timer);
-  }, [pendingEdit, pendingMapUpdate, isProcessing]);
+  }, [pendingEdit, isProcessing]);
 
   // Keyboard Fallback
   useEffect(() => {
@@ -2514,7 +2330,7 @@ When the user points and speaks a command, call the appropriate tool — a map t
     hoveredIdRef.current = hovered;
 
     // G3: which OCR word (if any) is under the cursor — finer-grained referent + feedforward.
-    const sub = hovered && hovered !== MAP_ENTITY_ID ? wordAt(hX, hY) : null;
+    const sub = hovered ? wordAt(hX, hY) : null;
     const wordName = sub?.word ?? null;
     if (wordName !== hoveredWordRef.current) {
       hoveredWordRef.current = wordName;
@@ -2529,7 +2345,7 @@ When the user points and speaks a command, call the appropriate tool — a map t
     if (
       providerRef.current &&
       voiceBackendRef.current !== 'gemini' &&
-      hovered && hovered !== MAP_ENTITY_ID &&
+      hovered &&
       hovered !== lastHoverHintRef.current &&
       now - lastHoverHintAtRef.current > HOVER_HINT_THROTTLE_MS
     ) {
@@ -2550,7 +2366,7 @@ When the user points and speaks a command, call the appropriate tool — a map t
 
     cursorHistoryRef.current.push({ x, y, t: now, hovered });
     
-    if (isPainting && hovered !== MAP_ENTITY_ID) {
+    if (isPainting && hovered) {
       setPointerPath(prev => [...prev, { x, y, timestamp: now }]);
     }
     
@@ -2562,10 +2378,8 @@ When the user points and speaks a command, call the appropriate tool — a map t
   
   const handlePointerDown = (e: React.PointerEvent) => {
     if (!isLive) return;
-    
-    // Re-verify what is being clicked to handle overlaps correctly
+
     const rect = mainContainerRef.current?.getBoundingClientRect();
-    let isActuallyOnMap = hoveredIdRef.current === MAP_ENTITY_ID;
 
     if (rect) {
       const x = ((e.clientX - rect.left) / rect.width) * 1000;
@@ -2574,7 +2388,6 @@ When the user points and speaks a command, call the appropriate tool — a map t
         const [ymin, xmin, ymax, xmax] = e.bbox;
         return x >= xmin && x <= xmax && y >= ymin && y <= ymax;
       });
-      isActuallyOnMap = found?.category === 'map';
 
       // TOUCH DEIXIS: touch has no hover — a tap is the point. Register the target at the
       // down position (cursor + hovered + history) so saying "this" right after a tap resolves,
@@ -2586,12 +2399,6 @@ When the user points and speaks a command, call the appropriate tool — a map t
       cursorHistoryRef.current.push({ x, y, t: Date.now(), hovered });
     }
 
-    if (isActuallyOnMap) {
-      if (providerRef.current) {
-        providerRef.current.sendTextHint("[SYSTEM: The user tried to interact with the map directly. Tell them: 'That's the map, try pointing at the camera roll instead'.]");
-      }
-      return;
-    }
     setIsPainting(true);
     if (rect) {
       setTrailMousePos({
@@ -2768,17 +2575,6 @@ When the user points and speaks a command, call the appropriate tool — a map t
         });
       }
 
-      // Draw Map Box
-      const m = layoutBounds.map;
-      ctx.fillStyle = '#e2e8f0';
-      ctx.fillRect((m.xmin/1000)*VISION_SIZE, (m.ymin/1000)*VISION_SIZE, ((m.xmax-m.xmin)/1000)*VISION_SIZE, ((m.ymax-m.ymin)/1000)*VISION_SIZE);
-      ctx.strokeRect((m.xmin/1000)*VISION_SIZE, (m.ymin/1000)*VISION_SIZE, ((m.xmax-m.xmin)/1000)*VISION_SIZE, ((m.ymax-m.ymin)/1000)*VISION_SIZE);
-      
-      ctx.fillStyle = '#475569';
-      ctx.font = 'bold 12px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText('GOOGLE MAPS', ((m.xmin+m.xmax)/2000)*VISION_SIZE, ((m.ymin+m.ymax)/2000)*VISION_SIZE);
-
       // AI Crosshairs (mapped from 0-1000 back to vision canvas pixels)
       const last = cursorRef.current;
       const px = (last.x / 1000) * VISION_SIZE;
@@ -2950,8 +2746,6 @@ When the user points and speaks a command, call the appropriate tool — a map t
     entitiesRef.current = [];
     setCurrentTaskIndex(0);
     setCompletedTaskIds([]);
-    identifiedLandmarksRef.current = new Set();
-    hasOfferedTripRef.current = false;
     setPendingAction(null);
     const fresh = initialMockDoc(id);
     setMockDoc(fresh);
@@ -2987,10 +2781,6 @@ When the user points and speaks a command, call the appropriate tool — a map t
     const baseEntities = buildEntities(program, perceivedLabelsRef.current, null);
     setEntities(baseEntities);
     entitiesRef.current = baseEntities;
-    setMapQuery("London");
-    setMapType('search');
-    setDirections(null);
-    setProposedItinerary(null);
     setShareRequest(null);
     setPendingAction(null);
     const freshDoc = initialMockDoc(activeProgram);
@@ -3077,9 +2867,9 @@ When the user points and speaks a command, call the appropriate tool — a map t
               sees the interpretation forming BEFORE they speak (closes the gulf of execution). */}
           {isLive && (
             <div className="absolute top-3 left-1/2 -translate-x-1/2 z-50 pointer-events-none flex items-center gap-2 px-3 py-1.5 rounded-full border border-[var(--card-border)] bg-[var(--card-bg)]/90 backdrop-blur shadow-sm">
-              <span className={`w-2 h-2 rounded-full ${hoveredId && hoveredId !== MAP_ENTITY_ID ? 'bg-[var(--accent-color)] animate-pulse' : 'bg-[var(--text-secondary)] opacity-40'}`} />
+              <span className={`w-2 h-2 rounded-full ${hoveredId ? 'bg-[var(--accent-color)] animate-pulse' : 'bg-[var(--text-secondary)] opacity-40'}`} />
               <span className="text-[11px] font-mono text-[var(--text-primary)]">
-                {hoveredId && hoveredId !== MAP_ENTITY_ID
+                {hoveredId
                   ? `Pointing at: ${hoveredWord ? `"${hoveredWord}" in ${displayName(entityById(entitiesRef.current, hoveredId))}` : displayName(entityById(entitiesRef.current, hoveredId))}`
                   : 'Point at an element…'}
               </span>
@@ -3152,24 +2942,7 @@ When the user points and speaks a command, call the appropriate tool — a map t
             </button>
           </div>
 
-          <div className="map-box relative lg:-ml-[110px] flex-1 min-w-0 lg:max-w-[700px] aspect-[2/2.43]">
-            <div 
-              className={`relative bg-[var(--card-bg)] border border-[var(--card-border)] rounded-xl overflow-hidden w-full h-full transition-all duration-300 ${hoveredId === MAP_ENTITY_ID ? 'ring-4 ring-[var(--accent-color)]/10 dark:ring-[var(--accent-color)]/20' : ''}`}
-            >
-              <div className="absolute inset-0 w-full h-full">
-                <iframe
-                  key={mapUrl}
-                  width="100%"
-                  height="100%"
-                  frameBorder="0"
-                  style={{ border: 0, pointerEvents: isLive ? 'none' : 'auto' }}
-                  src={mapUrl}
-                  allowFullScreen
-                ></iframe>
-              </div>
-              <canvas ref={persistentCanvasRef} className="hidden" />
-            </div>
-          </div>
+          <canvas ref={persistentCanvasRef} className="hidden" />
         </main>
 
         {/* Responsive Sidebar */}
@@ -3525,20 +3298,20 @@ When the user points and speaks a command, call the appropriate tool — a map t
 
           {/* Listening Box - Separate Section */}
           <section className="shrink-0 bg-[var(--card-bg)] border border-[var(--card-border)] rounded-2xl p-6 animate-in fade-in slide-in-from-top-2 duration-300">
-            <div className={`${(pendingEdit || pendingMapUpdate || isProcessing || liveTranscription || isLive) ? 'bg-[var(--inner-box-bg)] border-[var(--accent-color)]' : 'bg-[var(--inner-box-bg)] border-[var(--card-border)]'} border p-5 rounded-2xl flex flex-col gap-4 shadow-sm transition-colors duration-300`}>
+            <div className={`${(pendingEdit || isProcessing || liveTranscription || isLive) ? 'bg-[var(--inner-box-bg)] border-[var(--accent-color)]' : 'bg-[var(--inner-box-bg)] border-[var(--card-border)]'} border p-5 rounded-2xl flex flex-col gap-4 shadow-sm transition-colors duration-300`}>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <div className={`w-2 h-2 rounded-full ${(pendingEdit || pendingMapUpdate || isProcessing || liveTranscription || isLive) ? 'bg-[var(--accent-color)]' : 'bg-[var(--text-secondary)] opacity-30'} ${isProcessing ? 'animate-spin' : (isLive || pendingEdit || pendingMapUpdate || liveTranscription) ? 'animate-pulse-strong' : ''}`} />
-                  <span className={`text-[11px] font-mono font-normal tracking-tight ${(pendingEdit || pendingMapUpdate || isProcessing || liveTranscription || isLive) ? 'text-[var(--accent-color)] uppercase' : 'text-[var(--text-secondary)] uppercase'}`}>
-                    {isProcessing ? 'Evolving...' : (liveTranscription || pendingEdit || pendingMapUpdate ? 'Listening...' : (isLive ? 'Listening...' : 'System Idle'))}
+                  <div className={`w-2 h-2 rounded-full ${(pendingEdit || isProcessing || liveTranscription || isLive) ? 'bg-[var(--accent-color)]' : 'bg-[var(--text-secondary)] opacity-30'} ${isProcessing ? 'animate-spin' : (isLive || pendingEdit || liveTranscription) ? 'animate-pulse-strong' : ''}`} />
+                  <span className={`text-[11px] font-mono font-normal tracking-tight ${(pendingEdit || isProcessing || liveTranscription || isLive) ? 'text-[var(--accent-color)] uppercase' : 'text-[var(--text-secondary)] uppercase'}`}>
+                    {isProcessing ? 'Evolving...' : (liveTranscription || pendingEdit ? 'Listening...' : (isLive ? 'Listening...' : 'System Idle'))}
                   </span>
                 </div>
-                <span className={`text-[8px] font-mono uppercase opacity-50 ${(pendingEdit || pendingMapUpdate || isProcessing || liveTranscription || isLive) ? 'text-[var(--text-primary)]' : 'text-[var(--text-secondary)]'}`}>
-                  {isProcessing ? 'GPU ACTIVE' : (liveTranscription || pendingEdit || pendingMapUpdate ? 'VOICE' : (isLive ? 'LISTENING' : 'OFFLINE'))}
+                <span className={`text-[8px] font-mono uppercase opacity-50 ${(pendingEdit || isProcessing || liveTranscription || isLive) ? 'text-[var(--text-primary)]' : 'text-[var(--text-secondary)]'}`}>
+                  {isProcessing ? 'GPU ACTIVE' : (liveTranscription || pendingEdit ? 'VOICE' : (isLive ? 'LISTENING' : 'OFFLINE'))}
                 </span>
               </div>
-              
-              <p className={`text-[11px] font-mono leading-relaxed ${(pendingEdit || pendingMapUpdate || isProcessing || liveTranscription || lastError) ? 'text-[var(--text-primary)] font-normal italic' : 'text-[var(--text-secondary)] font-normal'}`}>
+
+              <p className={`text-[11px] font-mono leading-relaxed ${(pendingEdit || isProcessing || liveTranscription || lastError) ? 'text-[var(--text-primary)] font-normal italic' : 'text-[var(--text-secondary)] font-normal'}`}>
                 {lastError ? (
                   <span className="text-red-500">Error: {lastError}</span>
                 ) : (
@@ -3566,29 +3339,6 @@ When the user points and speaks a command, call the appropriate tool — a map t
               </form>
             </div>
           </section>
-
-          {/* PHASE E: Proposed itinerary — a hypothesis rendered as a visible artifact, awaiting
-              an explicit verbal confirm ("build it"). The output is the question, not the answer. */}
-          {proposedItinerary && (
-            <section className="shrink-0 bg-[var(--card-bg)] border border-amber-500/40 rounded-2xl p-6 animate-in fade-in slide-in-from-top-2 duration-300">
-              <div className="flex items-center gap-2 mb-3">
-                <Shield size={16} className="text-amber-500" />
-                <span className="text-[11px] font-mono font-bold uppercase tracking-widest text-amber-500">Proposed plan — not built yet</span>
-              </div>
-              <ol className="flex flex-col gap-2 mb-3">
-                {proposedItinerary.places.map((place, i) => (
-                  <li key={`${place}-${i}`} className="flex items-center gap-3 text-[var(--text-primary)]">
-                    <span className="w-5 h-5 shrink-0 rounded-full bg-amber-500/15 text-amber-500 text-[10px] font-mono font-bold flex items-center justify-center">{i + 1}</span>
-                    <span className="text-sm">{place}</span>
-                  </li>
-                ))}
-              </ol>
-              {proposedItinerary.plan && (
-                <p className="text-[11px] font-mono text-[var(--text-secondary)] mb-3 italic">{proposedItinerary.plan}</p>
-              )}
-              <p className="text-[11px] font-mono text-[var(--text-secondary)]">Say <span className="text-amber-500 font-bold">"build it"</span> to confirm, or keep talking to change it.</p>
-            </section>
-          )}
 
           {/* PHASE G: Outward share — witness recipient + payload before sending (or a sent receipt). */}
           {shareRequest && (
