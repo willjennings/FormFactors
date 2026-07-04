@@ -67,6 +67,9 @@ import { ocrImage, terminateOcr, clearOcrCache } from './ocr';
 import type { OcrWord } from './ocr';
 import { buildSpreadsheetSnapshot, formatSnapshotForModel } from './widgets/spreadsheetData';
 import { ProgramSurface } from './widgets/ProgramSurface';
+import { ProgramWindow } from './shell/ProgramWindow';
+import { clampWindow, loadWindowRect, saveWindowRect, type WindowRect } from './shell/windowState';
+import { docStatusLabel } from './widgets/surfaceModels';
 import type { TeachingEvent } from './teaching/types';
 import { snapshotNode, makeThrottle } from './vision/snapshotNode';
 import { parseTypedSubmit } from './input/typedInput';
@@ -514,10 +517,16 @@ export default function App() {
     toastTimerRef.current = setTimeout(() => setFeedbackToast(null), 2600);
   };
   const [layoutBounds, setLayoutBounds] = useState<{
-    photos: BBox;
+    window: BBox;
     photoItems: { id: number; bbox: BBox }[];
     surface?: BBox;
   } | null>(null);
+  const defaultWindowRect = (): WindowRect => clampWindow({ x: 48, y: 48, w: 680, h: 620 },
+    { width: mainContainerRef.current?.clientWidth ?? 1200, height: mainContainerRef.current?.clientHeight ?? 800 });
+  const [windowRect, setWindowRect] = useState<WindowRect>(() => loadWindowRect(DEFAULT_PROGRAM) ?? { x: 48, y: 48, w: 680, h: 620 });
+  const [windowOpen, setWindowOpen] = useState(true);
+  useEffect(() => { setWindowRect(loadWindowRect(activeProgram) ?? defaultWindowRect()); setWindowOpen(true); }, [activeProgram]);
+  useEffect(() => { saveWindowRect(activeProgram, windowRect); }, [activeProgram, windowRect]);
   const surfaceRef = useRef<HTMLDivElement>(null);
   const surfaceSnapshotRef = useRef<HTMLCanvasElement | null>(null);
   const teachingDispatchRef = useRef<((e: TeachingEvent) => void) | null>(null);
@@ -564,10 +573,10 @@ export default function App() {
       if (!main) return;
       const mainRect = main.getBoundingClientRect();
       
-      const photosEl = main.querySelector('.photos-box');
+      const winEl = main.querySelector('.program-window');
 
-      if (photosEl) {
-        const pRect = photosEl.getBoundingClientRect();
+      if (winEl) {
+        const pRect = winEl.getBoundingClientRect();
 
         setMainSize({ width: mainRect.width, height: mainRect.height });
 
@@ -580,14 +589,14 @@ export default function App() {
 
         // Generic element contract: anything with data-element-id is a measurable scene
         // element (tiles today, surface controls after the surface migration).
-        const photoItems = Array.from(photosEl.querySelectorAll<HTMLElement>('[data-element-id]')).map((el: HTMLElement) => {
+        const photoItems = Array.from(winEl.querySelectorAll<HTMLElement>('[data-element-id]')).map((el: HTMLElement) => {
           const id = Number(el.dataset.elementId);
           return Number.isFinite(id) ? { id, bbox: toBBox(el.getBoundingClientRect()) } : null;
         }).filter(Boolean) as { id: number; bbox: BBox }[];
 
         const surfEl = main.querySelector('.program-surface');
         setLayoutBounds({
-          photos: toBBox(pRect),
+          window: toBBox(pRect),
           photoItems,
           surface: surfEl ? toBBox((surfEl as HTMLElement).getBoundingClientRect()) : undefined,
         });
@@ -610,9 +619,9 @@ export default function App() {
     const observer = new ResizeObserver(updateLayout);
     if (mainContainerRef.current) observer.observe(mainContainerRef.current);
 
-    // Also observe the photos box specifically in case it moves independently
-    const photosBox = document.querySelector('.photos-box');
-    if (photosBox) observer.observe(photosBox);
+    // Also observe the program window specifically in case it moves independently
+    const winBox = document.querySelector('.program-window');
+    if (winBox) observer.observe(winBox);
 
     updateLayout();
     window.addEventListener('resize', updateLayout);
@@ -2013,8 +2022,8 @@ export default function App() {
       ctx.fillStyle = '#f8f9fc';
       ctx.fillRect(0, 0, VISION_SIZE, VISION_SIZE + DOC_STRIP);
 
-      // Draw Photos Box
-      const p = layoutBounds.photos;
+      // Draw Program Window
+      const p = layoutBounds.window;
       ctx.fillStyle = '#ffffff';
       ctx.strokeStyle = '#e5e5e5';
       ctx.lineWidth = 1;
@@ -2025,7 +2034,7 @@ export default function App() {
       // boxes per element (honest fallback: labels only, never stale imagery).
       const sCanvas = surfaceSnapshotRef.current;
       if (sCanvas) {
-        const b = layoutBounds.surface ?? layoutBounds.photos;
+        const b = layoutBounds.surface ?? layoutBounds.window;
         const dx = (b.xmin / 1000) * VISION_SIZE, dy = (b.ymin / 1000) * VISION_SIZE;
         const dw = ((b.xmax - b.xmin) / 1000) * VISION_SIZE, dh = ((b.ymax - b.ymin) / 1000) * VISION_SIZE;
         try { ctx.drawImage(sCanvas, dx, dy, dw, dh); } catch { /* keep canvas clean */ }
@@ -2257,8 +2266,9 @@ export default function App() {
           onPointerUp={handlePointerUp}
           onPointerLeave={handlePointerUp}
           style={{ touchAction: isLive ? 'none' : 'auto' }}
-          className="flex-1 flex flex-row items-center lg:justify-start justify-center p-2 sm:p-4 lg:p-8 lg:pl-24 relative gap-2 lg:gap-0 min-h-[60vh] lg:min-h-0"
+          className="flex-1 relative min-h-[60vh] lg:min-h-0 bg-[var(--bg-color)]"
         >
+          <div aria-hidden className="absolute inset-0 pointer-events-none opacity-[0.04] bg-[radial-gradient(circle_at_1px_1px,currentColor_1px,transparent_0)] [background-size:24px_24px]" />
           <CursorResources mode={isPainting ? 'painting' : 'off'} color="#3b82f6" />
           <CursorTrail isActive={isPainting} mousePos={trailMousePos} color="#3b82f6" />
           <PaintLayer paths={persistentPaths} activePath={pointerPath} containerSize={mainSize} />
@@ -2318,26 +2328,19 @@ export default function App() {
             </div>
           )}
 
-          {/* Photos Box */}
-          <div className="photos-box flex flex-col flex-1 min-w-0 lg:max-w-[700px] aspect-[2/3] relative z-10">
-            <div className="flex flex-col bg-[var(--card-bg)] border border-[var(--card-border)] rounded-xl p-2 sm:p-4 overflow-hidden w-full h-full">
-              <div className="flex items-center justify-between mb-4 sm:mb-8">
-                <div className="flex flex-col">
-                  <h3 className="text-xs sm:text-sm font-semibold text-[var(--text-primary)]">{program.label}</h3>
-                </div>
-                <div className="flex items-center gap-3 text-[var(--text-secondary)]">
-                  <Plus size={20} className="opacity-50" />
-                  <MoreVertical size={20} className="opacity-50" />
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-3 sm:gap-4 overflow-y-auto pr-2 custom-scrollbar flex-1">
-                <div className="col-span-2 h-full">
-                  <ProgramSurface ref={surfaceRef} program={program} doc={mockDoc} live={isLive} focusTitle={focusTitle}
-                    onAction={handleSurfaceAction} onElementClick={handleSurfaceElementClick} />
-                </div>
-              </div>
-            </div>
-          </div>
+          {windowOpen && (
+            <ProgramWindow
+              title={program.label}
+              statusLabel={docStatusLabel(mockDoc)}
+              rect={windowRect}
+              onRectChange={setWindowRect}
+              onClose={() => setWindowOpen(false)}
+              planeRef={mainContainerRef}
+            >
+              <ProgramSurface ref={surfaceRef} program={program} doc={mockDoc} live={isLive} focusTitle={focusTitle}
+                onAction={handleSurfaceAction} onElementClick={handleSurfaceElementClick} />
+            </ProgramWindow>
+          )}
           {/* Theme Toggle Button */}
           <div className="absolute top-3 left-4 lg:top-6 sm:left-8 z-50">
             <button 

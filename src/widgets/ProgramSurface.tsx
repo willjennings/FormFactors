@@ -1,5 +1,5 @@
 import React, { forwardRef, useState } from 'react';
-import { Save, SaveAll, FileText, Sigma, Divide, Table, Presentation, Plus, Copy, Image as ImageIcon, Crop as CropIcon, Maximize2 } from 'lucide-react';
+import { Save, SaveAll, Sigma, Divide, Table, Presentation, Plus, Copy, Image as ImageIcon, Crop as CropIcon, Maximize2 } from 'lucide-react';
 import type { MockDoc, Program, ProgramImage } from '../scenarios';
 import { CATEGORY_COLORS } from '../scenarios';
 import { buildWordModel, buildPptModel, buildPhotoModel } from './surfaceModels';
@@ -60,20 +60,6 @@ export function RibbonButton({ icon, label, onClick }: { icon: React.ReactNode; 
   );
 }
 
-export function TitleBar({ icon, filename, statusLabel }: { icon: React.ReactNode; filename: string; statusLabel: string }) {
-  return (
-    <div className="flex items-center justify-between px-1 pb-2">
-      <div className="flex items-center gap-2 text-[var(--text-primary)]">
-        {icon}
-        <span className="text-xs font-semibold">{filename}</span>
-      </div>
-      <span className={`text-[10px] font-mono font-bold ${statusLabel === 'Edited' ? 'text-[var(--text-secondary)] opacity-60' : 'text-green-500'}`}>
-        {statusLabel}
-      </span>
-    </div>
-  );
-}
-
 const imgOf = (program: Program, id: number): ProgramImage =>
   program.images.find((i) => i.id === id) ?? program.images[0];
 
@@ -83,7 +69,6 @@ function WordSurface({ program, doc, live, focusTitle, onAction, onElementClick 
   const m = buildWordModel(doc);
   return (
     <div className="flex flex-col h-full gap-2">
-      <TitleBar icon={<FileText size={15} />} filename={m.filename} statusLabel={m.statusLabel} />
       <SurfaceElement img={imgOf(program, 1)} live={live} focusTitle={focusTitle} onElementClick={onElementClick}
         className="flex items-center gap-1 rounded-lg border border-[var(--card-border)] bg-[var(--bg-color)] p-1.5">
         <span className="px-2 text-[10px] font-mono uppercase tracking-wide text-[var(--text-secondary)]">Home</span>
@@ -120,7 +105,6 @@ function ExcelSurface({ program, doc, live, focusTitle, onAction, onElementClick
   if (doc.kind !== 'excel') return null;
   return (
     <div className="flex flex-col h-full gap-2">
-      <TitleBar icon={<Table size={15} />} filename="Q2 numbers.xlsx" statusLabel={doc.saved ? 'Saved' : 'Edited'} />
       <SurfaceElement img={imgOf(program, 1)} live={live} focusTitle={focusTitle} onElementClick={onElementClick}
         className="flex items-center gap-1 rounded-lg border border-[var(--card-border)] bg-[var(--bg-color)] p-1.5">
         <span className="px-2 text-[10px] font-mono uppercase tracking-wide text-[var(--text-secondary)]">Formulas</span>
@@ -147,7 +131,6 @@ function PptSurface({ program, doc, live, focusTitle, onAction, onElementClick }
   const m = buildPptModel(doc);
   return (
     <div className="flex flex-col h-full gap-2">
-      <TitleBar icon={<Presentation size={15} />} filename="Pitch deck.pptx" statusLabel={m.statusLabel} />
       <SurfaceElement img={imgOf(program, 1)} live={live} focusTitle={focusTitle} onElementClick={onElementClick}
         className="flex items-center gap-1 rounded-lg border border-[var(--card-border)] bg-[var(--bg-color)] p-1.5">
         <span className="px-2 text-[10px] font-mono uppercase tracking-wide text-[var(--text-secondary)]">Insert</span>
@@ -197,7 +180,6 @@ function PhotoSurface({ program, doc, live, focusTitle, onAction, onElementClick
   const m = buildPhotoModel(doc);
   return (
     <div className="flex flex-col h-full gap-2">
-      <TitleBar icon={<ImageIcon size={15} />} filename="IMG_2041.jpg" statusLabel={m.statusLabel} />
       <SurfaceElement img={imgOf(program, 1)} live={live} focusTitle={focusTitle} onElementClick={onElementClick}
         className="flex items-center gap-1 rounded-lg border border-[var(--card-border)] bg-[var(--bg-color)] p-1.5">
         <span className="px-2 text-[10px] font-mono uppercase tracking-wide text-[var(--text-secondary)]">Tools</span>

@@ -21,3 +21,8 @@ export function buildPhotoModel(doc: Extract<MockDoc, { kind: 'photo' }>) {
     statusLabel: status(doc.saved),
   };
 }
+
+/** Window-chrome status for any doc kind (the surfaces' internal TitleBar retired into window chrome). */
+export function docStatusLabel(doc: MockDoc): string {
+  return doc.kind === 'word' ? status(doc.saved, doc.savedAs) : status(doc.saved);
+}

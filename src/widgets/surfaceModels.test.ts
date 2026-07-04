@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildWordModel, buildPptModel, buildPhotoModel } from './surfaceModels';
+import { buildWordModel, buildPptModel, buildPhotoModel, docStatusLabel } from './surfaceModels';
 import { initialMockDoc, applyAction, WORD_FILENAME } from '../scenarios';
 
 const word = () => { const d = initialMockDoc('word'); return d.kind === 'word' ? d : (() => { throw new Error('kind'); })(); };
@@ -26,5 +26,12 @@ describe('surface view models', () => {
     expect(buildPhotoModel(photo()).filterCss).toBe('brightness(100%)');
     expect(buildPhotoModel({ ...photo(), brightness: 2 }).filterCss).toBe('brightness(136%)');
     expect(buildPhotoModel({ ...photo(), resized: true }).resized).toBe(true);
+  });
+
+  it('docStatusLabel covers every doc kind', () => {
+    expect(docStatusLabel(initialMockDoc('word'))).toBe('Edited');
+    expect(docStatusLabel({ ...word(), saved: true })).toBe('Saved');
+    expect(docStatusLabel({ ...word(), saved: true, savedAs: 'X.docx' })).toBe('Saved as X.docx');
+    expect(docStatusLabel(initialMockDoc('photo'))).toBe('Edited');
   });
 });
