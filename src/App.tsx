@@ -368,6 +368,10 @@ export default function App() {
   const [lastError, setLastError] = useState<string | null>(null);
   // Draft text restored to the omnibox when a cold-start connect fails (R1 path).
   const [restoredDraft, setRestoredDraft] = useState<{ text: string; at: number } | null>(null);
+  // Grounding chips: elements the user selected, mirrored 1:1 in the omnibox and sent
+  // with the next query. Cleared on submit and on program swap (ids go stale).
+  const [grounding, setGrounding] = useState<{ id: EntityId; title: string; color: string }[]>([]);
+  useEffect(() => { setGrounding([]); }, [activeProgram]);
   const [logs, setLogs] = useState<DebugLog[]>([]);
   const [mousePos, setMousePos] = useState({ x: -100, y: -100 });
   const [isPainting, setIsPainting] = useState(false);
@@ -1168,6 +1172,13 @@ export default function App() {
     const entity = entitiesRef.current.find(e => e.id === `${program.id}-${elementId}`);
     if (entity) teachingDispatchRef.current?.({ type: 'user.stepAction', entityId: entity.id });
     if (entity) railDispatch({ type: 'user.elementAction', entityId: entity.id });
+    // GROUNDING 1:1: a selected element appears as a chip in the omnibox — what you see
+    // in the box is exactly what the model is told at submit. Cap 2 (marker parity).
+    if (entity) {
+      setGrounding(g => g.some(c => c.id === entity.id)
+        ? g
+        : [...g.slice(-1), { id: entity.id, title: displayName(entity), color: CATEGORY_COLORS[entity.category] }]);
+    }
     const idx = program.images.findIndex(im => im.id === elementId);
     if (isLive && idx >= 0) selectTargetByNumber(idx + 1);
   };
@@ -2463,7 +2474,23 @@ export default function App() {
             error={lastError} transcript={liveTranscription || null}
             suggestions={suggestions} firstRunHint={firstRunHint}
             restoredDraft={restoredDraft}
-            onSubmit={(text) => { setFirstRunHint(false); setFocusTitle(undefined); sendTypedInput(text); }}
+            grounding={grounding}
+            onRemoveGrounding={(id) => setGrounding(g => g.filter(c => c.id !== id))}
+            onSubmit={(text) => {
+              setFirstRunHint(false); setFocusTitle(undefined);
+              // Grounding travels with the query: silent hints when live; appended visibly
+              // when the session must auto-start (hints would be lost pre-connect).
+              if (grounding.length && providerRef.current) {
+                grounding.forEach(c => providerRef.current?.sendTextHint(
+                  `[USER SELECTED: ${c.title}. Their next message is grounded on it — "this", "here", or "it" refers to ${c.title}. DO NOT respond to this note.]`));
+                sendTypedInput(text);
+              } else if (grounding.length) {
+                sendTypedInput(`${text} (pointing at: ${grounding.map(c => c.title).join(' and ')})`);
+              } else {
+                sendTypedInput(text);
+              }
+              setGrounding([]);
+            }}
             onMicToggle={() => { setFirstRunHint(false); isLive ? providerRef.current?.close() : startLiveSession(); }}
             onChipTap={(s) => setFocusTitle(TASKS.find(t => t.key === s.key)?.targetElement)}
           />

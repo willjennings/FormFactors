@@ -1,12 +1,16 @@
 import React, { useState } from 'react';
-import { Mic, MicOff, CornerDownLeft } from 'lucide-react';
+import { Mic, MicOff, CornerDownLeft, X } from 'lucide-react';
 
 export type Suggestion = { key: string; label: string; phrase: string; color: string };
+export type GroundingChip = { id: string; title: string; color: string };
 
-export function Omnibox({ isLive, isConnecting, error, transcript, suggestions, firstRunHint, restoredDraft, onSubmit, onMicToggle, onChipTap }: {
+export function Omnibox({ isLive, isConnecting, error, transcript, suggestions, firstRunHint, restoredDraft, grounding = [], onRemoveGrounding, onSubmit, onMicToggle, onChipTap }: {
   isLive: boolean; isConnecting: boolean; error: string | null; transcript: string | null;
   suggestions: Suggestion[]; firstRunHint: boolean;
   restoredDraft?: { text: string; at: number } | null;
+  /** Elements the user selected on screen — mirrored 1:1 as chips; sent with the query. */
+  grounding?: GroundingChip[];
+  onRemoveGrounding?: (id: string) => void;
   onSubmit: (text: string) => void; onMicToggle: () => void; onChipTap: (s: Suggestion) => void;
 }) {
   const [draft, setDraft] = useState('');
@@ -45,10 +49,27 @@ export function Omnibox({ isLive, isConnecting, error, transcript, suggestions, 
           className={`p-2 rounded-xl transition-all active:scale-90 ${isLive ? 'bg-green-500/15 text-green-500' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-color)]'} disabled:opacity-40`}>
           {isLive ? <Mic size={16} /> : <MicOff size={16} />}
         </button>
+        {grounding.length > 0 && (
+          <div className="flex items-center gap-1 shrink-0 max-w-[45%] overflow-hidden">
+            {grounding.map(c => (
+              <span key={c.id}
+                className="flex items-center gap-0.5 pl-2 pr-1 py-0.5 rounded-full text-[10px] font-mono border border-[var(--card-border)] bg-[var(--bg-color)] text-[var(--text-primary)] whitespace-nowrap"
+                style={{ boxShadow: `inset 2px 0 0 rgb(${c.color})` }}
+                title={`Grounded on ${c.title} — sent with your query`}
+              >
+                {c.title}
+                <button type="button" onClick={() => onRemoveGrounding?.(c.id)}
+                  className="p-0.5 rounded-full text-[var(--text-secondary)] hover:text-[var(--text-primary)]" title="Remove">
+                  <X size={9} />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
         <input
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          placeholder="Ask or tell me anything — point while you type"
+          placeholder={grounding.length ? 'Ask about your selection…' : 'Ask or tell me anything — point while you type'}
           disabled={isConnecting}
           className="flex-1 bg-transparent text-[13px] text-[var(--text-primary)] placeholder:text-[var(--text-secondary)] placeholder:opacity-50 focus:outline-none disabled:opacity-40"
         />
