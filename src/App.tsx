@@ -2005,6 +2005,13 @@ export default function App() {
   const handlePointerDown = (e: React.PointerEvent) => {
     // Pointer visuals work with or without a session (gap 8): painting, hover, and markers
     // are local. Everything that costs tokens stays behind providerRef (null offline).
+
+    // TYPE-AND-POINT: pointing must never steal focus. A pointer-down on the plane (paint,
+    // click-select, circle) keeps the omnibox/current field focused so Enter still submits;
+    // only clicking into an actual text field moves focus. Buttons fire without focus.
+    const editableTarget = (e.target as HTMLElement).closest?.('input, textarea, [contenteditable="true"]');
+    if (!editableTarget) e.preventDefault();
+
     const rect = mainContainerRef.current?.getBoundingClientRect();
 
     if (rect) {
