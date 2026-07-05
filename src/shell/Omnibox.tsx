@@ -4,10 +4,12 @@ import { Mic, MicOff, CornerDownLeft, X } from 'lucide-react';
 export type Suggestion = { key: string; label: string; phrase: string; color: string };
 export type GroundingChip = { id: string; title: string; color: string };
 
-export function Omnibox({ isLive, isConnecting, error, transcript, suggestions, firstRunHint, restoredDraft, grounding = [], onRemoveGrounding, onSubmit, onMicToggle, onChipTap }: {
+export function Omnibox({ isLive, isConnecting, error, transcript, suggestions, firstRunHint, restoredDraft, modelCaption, grounding = [], onRemoveGrounding, onSubmit, onMicToggle, onChipTap }: {
   isLive: boolean; isConnecting: boolean; error: string | null; transcript: string | null;
   suggestions: Suggestion[]; firstRunHint: boolean;
   restoredDraft?: { text: string; at: number } | null;
+  /** The model's speech as text — the response window for muted speakers. Persists post-query. */
+  modelCaption?: { text: string; final: boolean } | null;
   /** Elements the user selected on screen — mirrored 1:1 as chips; sent with the query. */
   grounding?: GroundingChip[];
   onRemoveGrounding?: (id: string) => void;
@@ -20,6 +22,15 @@ export function Omnibox({ isLive, isConnecting, error, transcript, suggestions, 
     <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-30 w-[min(640px,90vw)] flex flex-col items-stretch gap-2" onPointerDown={(e) => e.stopPropagation()}>
       {firstRunHint && !isLive && (
         <p className="text-center text-[11px] font-mono text-[var(--text-secondary)]">Point at things and ask — or type.</p>
+      )}
+      {modelCaption?.text && (
+        <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)]/90 backdrop-blur shadow-lg px-3 py-2">
+          <span className="text-[9px] font-mono uppercase tracking-widest text-[var(--text-secondary)]">assistant</span>
+          <p className="text-[12px] text-[var(--text-primary)] leading-snug">
+            {modelCaption.text}
+            {!modelCaption.final && <span className="inline-block w-1.5 h-3 ml-0.5 bg-[var(--accent-color)] animate-pulse align-middle" />}
+          </p>
+        </div>
       )}
       {suggestions.length > 0 && (
         <div className="flex gap-1.5 overflow-x-auto custom-scrollbar pb-0.5">

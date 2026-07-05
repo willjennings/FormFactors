@@ -21,6 +21,9 @@ export interface VoiceCallbacks {
   onError: (message: string) => void;
   /** A chunk of the user's speech transcription. isFinal=true when the turn's transcript is complete. */
   onInputTranscript: (text: string, isFinal: boolean) => void;
+  /** A chunk of the MODEL's speech as text (captions — muted speakers must never miss dialogue).
+   *  Non-final chunks APPEND; a final call with non-empty text REPLACES the accumulated turn. */
+  onModelTranscript?: (text: string, isFinal: boolean) => void;
   /** The model called one of the declared tools. args is already parsed to an object. */
   onToolCall: (call: { id: string; name: string; args: any }) => void;
   /** The model started a response turn (used to clear pending UI). */

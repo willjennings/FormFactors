@@ -165,6 +165,15 @@ export function createAzureRealtimeProvider(
             case 'response.created':
               cb.onResponseStart?.();
               break;
+            // Model speech as text — captions (classic + GA event names).
+            case 'response.audio_transcript.delta':
+            case 'response.output_audio_transcript.delta':
+              cb.onModelTranscript?.(ev.delta ?? '', false);
+              break;
+            case 'response.audio_transcript.done':
+            case 'response.output_audio_transcript.done':
+              cb.onModelTranscript?.(ev.transcript ?? '', true);
+              break;
             case 'input_audio_buffer.speech_started':
               cb.onInterrupted?.();
               break;

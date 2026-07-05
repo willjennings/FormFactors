@@ -77,6 +77,11 @@ export function createGeminiProvider(apiKey: string, onSessionReady?: (session: 
               if (audioData) cb.onModelAudio?.(audioData);
             }
             if (msg.serverContent?.interrupted) cb.onInterrupted?.();
+            // Model speech as text — captions (outputAudioTranscription is already enabled below).
+            if (msg.serverContent?.outputTranscription?.text) {
+              cb.onModelTranscript?.(msg.serverContent.outputTranscription.text, false);
+            }
+            if (msg.serverContent?.turnComplete) cb.onModelTranscript?.('', true);
             if (msg.serverContent?.inputTranscription) {
               cb.onInputTranscript(msg.serverContent.inputTranscription.text, !!msg.serverContent?.turnComplete);
             }

@@ -372,6 +372,10 @@ export default function App() {
   // with the next query. Cleared on submit and on program swap (ids go stale).
   const [grounding, setGrounding] = useState<{ id: EntityId; title: string; color: string }[]>([]);
   useEffect(() => { setGrounding([]); }, [activeProgram]);
+  // Model captions: the response window for muted speakers. Persists until replaced.
+  const [modelCaption, setModelCaption] = useState<{ text: string; final: boolean } | null>(null);
+  const modelCaptionRef = useRef('');
+  const modelCaptionFinalRef = useRef(false);
   const [logs, setLogs] = useState<DebugLog[]>([]);
   const [mousePos, setMousePos] = useState({ x: -100, y: -100 });
   const [isPainting, setIsPainting] = useState(false);
@@ -1653,6 +1657,20 @@ export default function App() {
             setLiveTranscription("");
             lastProcessedTranscriptionRef.current = "";
           },
+          // Captions: the model's speech as text, always visible post-query (muted speakers
+          // must never hide a question, hedge, or error). Non-final chunks append; a final
+          // with text replaces the accumulated turn; a stale final resets on the next chunk.
+          onModelTranscript: (text: string, isFinal: boolean) => {
+            if (isFinal) {
+              if (text) modelCaptionRef.current = text;
+              if (modelCaptionRef.current) setModelCaption({ text: modelCaptionRef.current, final: true });
+            } else {
+              if (modelCaptionFinalRef.current) modelCaptionRef.current = '';
+              modelCaptionRef.current += text;
+              setModelCaption({ text: modelCaptionRef.current, final: false });
+            }
+            modelCaptionFinalRef.current = isFinal;
+          },
           onModelAudio: (b64: string) => { handleLiveAudio(b64); },
           onInterrupted: () => {
             activeSourcesRef.current.forEach(s => { try { s.stop(); } catch (e) {} });
@@ -2474,6 +2492,7 @@ export default function App() {
             error={lastError} transcript={liveTranscription || null}
             suggestions={suggestions} firstRunHint={firstRunHint}
             restoredDraft={restoredDraft}
+            modelCaption={modelCaption}
             grounding={grounding}
             onRemoveGrounding={(id) => setGrounding(g => g.filter(c => c.id !== id))}
             onSubmit={(text) => {

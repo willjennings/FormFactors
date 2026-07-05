@@ -145,6 +145,16 @@ export function createOpenAIRealtimeProvider(): VoiceProvider {
               cb.onResponseStart?.();
               break;
 
+            // Model speech as text — captions (classic + GA event names).
+            case 'response.audio_transcript.delta':
+            case 'response.output_audio_transcript.delta':
+              cb.onModelTranscript?.(ev.delta ?? '', false);
+              break;
+            case 'response.audio_transcript.done':
+            case 'response.output_audio_transcript.done':
+              cb.onModelTranscript?.(ev.transcript ?? '', true);
+              break;
+
             // Barge-in: the user interrupted the model's audio.
             case 'input_audio_buffer.speech_started':
               cb.onInterrupted?.();
