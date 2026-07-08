@@ -56,6 +56,7 @@ import { ProgramSurface } from './widgets/ProgramSurface';
 import { ProgramWindow } from './shell/ProgramWindow';
 import { Omnibox } from './shell/Omnibox';
 import { DebugDrawer } from './shell/DebugDrawer';
+import { Sheet } from './ui/Sheet';
 import { clampWindow, loadWindowRect, saveWindowRect, type WindowRect } from './shell/windowState';
 import { docStatusLabel } from './widgets/surfaceModels';
 import type { TeachingEvent, TeachingState } from './teaching/types';
@@ -2616,28 +2617,30 @@ export default function App() {
 
         </main>
 
-        <DebugDrawer
-          open={drawerOpen}
-          onClose={() => setDrawerOpen(false)}
-          honestMode={honestMode}
-          onHonestMode={setHonestMode}
-          voiceBackend={voiceBackend}
-          onVoiceBackend={setVoiceBackend}
-          autonomy={autonomy}
-          onAutonomy={setAutonomy}
-          feedbackMode={feedbackMode}
-          onFeedbackMode={setFeedbackMode}
-          sendFrequency={sendFrequency}
-          onSendFrequency={setSendFrequency}
-          worldState={serializeMockDoc(mockDoc)}
-          undoCount={undoStack.length}
-          onUndo={handleUndo}
-          onEndSession={() => providerRef.current?.close()}
-          onReset={handleReset}
-          isLive={isLive}
-          logs={logs}
-          isEmbedded={isEmbedded}
-        />
+        <Sheet open={drawerOpen} onOpenChange={setDrawerOpen} title="Control Center">
+          <DebugDrawer
+            honestMode={honestMode}
+            onHonestMode={setHonestMode}
+            voiceBackend={voiceBackend}
+            onVoiceBackend={setVoiceBackend}
+            autonomy={autonomy}
+            onAutonomy={setAutonomy}
+            feedbackMode={feedbackMode}
+            onFeedbackMode={setFeedbackMode}
+            sendFrequency={sendFrequency}
+            onSendFrequency={setSendFrequency}
+            showMarkings={showMarkings}
+            onShowMarkings={setShowMarkings}
+            worldState={serializeMockDoc(mockDoc)}
+            undoCount={undoStack.length}
+            onUndo={handleUndo}
+            onEndSession={() => providerRef.current?.close()}
+            onReset={handleReset}
+            isLive={isLive}
+            logs={logs}
+            isEmbedded={isEmbedded}
+          />
+        </Sheet>
 
       </div>
 
