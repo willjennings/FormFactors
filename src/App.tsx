@@ -68,6 +68,8 @@ import { snapshotNode, makeThrottle } from './vision/snapshotNode';
 import { parseTypedSubmit } from './input/typedInput';
 import type { InputModality } from './telemetry';
 import { buildInstructions } from './prompt/instructions';
+import { withTrafficCount } from './shell/traffic';
+import type { Traffic } from './shell/traffic';
 
 // --- Types ---
 interface Marker {
@@ -354,6 +356,7 @@ export default function App() {
   const [voiceVolume, setVoiceVolume] = useState(1.0);
   const [audioStatus, setAudioStatus] = useState<'suspended' | 'running' | 'closed'>('suspended');
   const [isLive, setIsLive] = useState(false);
+  const [traffic, setTraffic] = useState<Traffic | null>(null);
   // Detect running inside an embedded preview iframe — such frames usually don't delegate
   // microphone access, so we surface an "open in a new tab" escape hatch.
   const [isEmbedded, setIsEmbedded] = useState(false);
@@ -1598,7 +1601,7 @@ export default function App() {
       // UI stay in this component via the callbacks below. onSessionReady mirrors the raw
       // session into sessionRef so the Gemini-only auxiliary features keep working.
       const backend = voiceBackendRef.current;
-      providerRef.current =
+      providerRef.current = withTrafficCount(
         backend === 'azure'
           ? createAzureRealtimeProvider(
               process.env.AZURE_OPENAI_ENDPOINT || '',
@@ -1608,8 +1611,11 @@ export default function App() {
             )
           : backend === 'openai'
             ? createOpenAIRealtimeProvider()
-            : createGeminiProvider(apiKey!, (s) => { sessionRef.current = s; });
+            : createGeminiProvider(apiKey!, (s) => { sessionRef.current = s; }),
+        setTraffic,
+      );
       const voice = backend === 'gemini' ? 'Zephyr' : backend === 'azure' ? 'alloy' : 'marin';
+      setTraffic({ frames: 0, hints: 0 });
       await providerRef.current.connect(
         { instructions: buildInstructions(honest, program, entitiesRef.current), tools: voiceTools, voice },
         {
@@ -2407,7 +2413,7 @@ export default function App() {
           className="h-full w-full relative bg-[var(--bg-color)]"
         >
           <div aria-hidden className="absolute inset-0 pointer-events-none opacity-[0.04] bg-[radial-gradient(circle_at_1px_1px,currentColor_1px,transparent_0)] [background-size:24px_24px]" />
-          <MenuBar isLive={isLive} isConnecting={isConnecting} isDarkMode={isDarkMode} onToggleTheme={() => setIsDarkMode(!isDarkMode)} onToggleDrawer={() => setDrawerOpen(o => !o)} />
+          <MenuBar isLive={isLive} isConnecting={isConnecting} isDarkMode={isDarkMode} traffic={traffic} onToggleTheme={() => setIsDarkMode(!isDarkMode)} onToggleDrawer={() => setDrawerOpen(o => !o)} />
           <Dock active={activeProgram} onSelect={handleProgramChange} onReopen={() => setWindowOpen(true)} />
           <CursorResources mode={isPainting ? 'painting' : 'off'} color="#3b82f6" />
           <CursorTrail isActive={isPainting} mousePos={trailMousePos} color="#3b82f6" />
