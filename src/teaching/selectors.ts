@@ -1,5 +1,5 @@
 import type { TeachingState, TeachStep, FadeLevel } from './types';
-import type { EntityId } from '../entities/registry';
+import type { EntityId, SceneEntity } from '../entities/registry';
 
 export function fadeLevel(state: TeachingState, taskKey: string): FadeLevel {
   return Math.min(2, state.competence[taskKey] ?? 0) as FadeLevel;
@@ -26,4 +26,13 @@ export function blockedEntityIds(state: TeachingState, allTileIds: EntityId[]): 
   if (!seq || seq.activeIndex === null || seq.paused || !visibleScaffold(state).block) return [];
   const target = seq.steps[seq.activeIndex].entityId;
   return allTileIds.filter((t) => t !== target);
+}
+
+/** The scrimmed leaf elements as numeric image ids — lets surfaces set `inert` so keyboard
+ *  (Tab+Enter) cannot bypass the pointer-only scrim. Chrome ('program') is never blocked. */
+export function blockedElementNumbers(state: TeachingState, entities: SceneEntity[]): number[] {
+  const leafIds = entities.filter(e => e.category !== 'program').map(e => e.id);
+  return blockedEntityIds(state, leafIds)
+    .map(id => Number(String(id).split('-').pop()))
+    .filter(n => Number.isFinite(n));
 }

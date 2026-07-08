@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { fadeLevel, activeStep, visibleScaffold, blockedEntityIds } from './selectors';
+import { fadeLevel, activeStep, visibleScaffold, blockedEntityIds, blockedElementNumbers } from './selectors';
 import { initialTeachingState, reduce } from './teachingStore';
 import type { EntityId } from '../entities/registry';
+import { buildEntities } from '../entities/registry';
+import { getProgram } from '../scenarios';
 
 const id = (s: string) => s as EntityId;
 const seq = (competence: Record<string, number> = {}) =>
@@ -33,5 +35,13 @@ describe('selectors', () => {
     expect(blockedEntityIds(seq(), [id('a'), id('b'), id('c')])).toEqual(['b', 'c']);
     expect(blockedEntityIds(seq({ k: 1 }), [id('a'), id('b')])).toEqual([]);
     expect(blockedEntityIds(initialTeachingState(), [id('a')])).toEqual([]);
+  });
+  it('blockedElementNumbers: scrimmed leaves as numeric ids; program chrome and the target excluded', () => {
+    const program = getProgram('word');
+    const entities = buildEntities(program, {}, { items: program.images.map((img, i) => ({ id: img.id, bbox: { ymin: i, xmin: 0, ymax: i + 1, xmax: 1 } })) });
+    let st = reduce(initialTeachingState(), { type: 'teach.sequence', title: 't', taskKey: 'k', posture: 'guide',
+      steps: [{ entityId: 'word-2' as any, subgoal: 's', instruction: 'i' }] }, 0);
+    expect(blockedElementNumbers(st, entities).sort()).toEqual([3, 4]); // ui leaf 3 + content 4; chrome 1 excluded; target 2 excluded
+    expect(blockedElementNumbers(initialTeachingState(), entities)).toEqual([]);
   });
 });

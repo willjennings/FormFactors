@@ -14,14 +14,15 @@ export type SurfaceProps = {
   doc: MockDoc;
   live: boolean;
   focusTitle?: string;
+  blockedElements?: number[];
   onAction: (verb: string, args: { target?: string; detail?: string }) => void;
   onElementClick: (elementId: number) => void;
 };
 
 /** Wrapper making one named element measurable + clickable. stopPropagation keeps a click
  *  on a nested element (Save inside the Ribbon) from firing the container's deixis too. */
-export function SurfaceElement({ img, live, focusTitle, onElementClick, className, children }: {
-  img: ProgramImage; live: boolean; focusTitle?: string;
+export function SurfaceElement({ img, live, focusTitle, blocked, onElementClick, className, children }: {
+  img: ProgramImage; live: boolean; focusTitle?: string; blocked?: boolean;
   onElementClick: (id: number) => void; className?: string; children: React.ReactNode;
 }) {
   const isFocus = !!focusTitle && img.title === focusTitle;
@@ -32,6 +33,7 @@ export function SurfaceElement({ img, live, focusTitle, onElementClick, classNam
       onClick={(e) => { e.stopPropagation(); onElementClick(img.id); }}
       className={`relative ${className ?? ''}`}
       style={isFocus ? { boxShadow: `0 0 0 3px rgb(${tone}), 0 0 16px 2px rgba(${tone}, 0.45)` } : undefined}
+      inert={blocked || undefined}
     >
       {children}
       {live && (
@@ -63,25 +65,25 @@ export function RibbonButton({ icon, label, onClick }: { icon: React.ReactNode; 
 const imgOf = (program: Program, id: number): ProgramImage =>
   program.images.find((i) => i.id === id) ?? program.images[0];
 
-function WordSurface({ program, doc, live, focusTitle, onAction, onElementClick }: SurfaceProps) {
+function WordSurface({ program, doc, live, focusTitle, blockedElements, onAction, onElementClick }: SurfaceProps) {
   const [draft, setDraft] = useState<string | null>(null);
   if (doc.kind !== 'word') return null;
   const m = buildWordModel(doc);
   return (
     <div className="flex flex-col h-full gap-2">
-      <SurfaceElement img={imgOf(program, 1)} live={live} focusTitle={focusTitle} onElementClick={onElementClick}
+      <SurfaceElement img={imgOf(program, 1)} live={live} focusTitle={focusTitle} blocked={blockedElements?.includes(1)} onElementClick={onElementClick}
         className="flex items-center gap-1 rounded-lg border border-[var(--card-border)] bg-[var(--bg-color)] p-1.5">
         <span className="px-2 text-[10px] font-mono uppercase tracking-wide text-[var(--text-secondary)]">Home</span>
-        <SurfaceElement img={imgOf(program, 2)} live={live} focusTitle={focusTitle} onElementClick={onElementClick}>
+        <SurfaceElement img={imgOf(program, 2)} live={live} focusTitle={focusTitle} blocked={blockedElements?.includes(2)} onElementClick={onElementClick}>
           <RibbonButton icon={<Save size={16} />} label="Save"
             onClick={() => onAction('save_file', { target: 'Save button' })} />
         </SurfaceElement>
-        <SurfaceElement img={imgOf(program, 3)} live={live} focusTitle={focusTitle} onElementClick={onElementClick}>
+        <SurfaceElement img={imgOf(program, 3)} live={live} focusTitle={focusTitle} blocked={blockedElements?.includes(3)} onElementClick={onElementClick}>
           <RibbonButton icon={<SaveAll size={16} />} label="Save As"
             onClick={() => onAction('save_file', { target: 'Save As button', detail: 'Save As' })} />
         </SurfaceElement>
       </SurfaceElement>
-      <SurfaceElement img={imgOf(program, 4)} live={live} focusTitle={focusTitle} onElementClick={onElementClick}
+      <SurfaceElement img={imgOf(program, 4)} live={live} focusTitle={focusTitle} blocked={blockedElements?.includes(4)} onElementClick={onElementClick}
         className="flex-1 rounded-lg border border-[var(--card-border)] bg-white dark:bg-[#0f1623] overflow-hidden">
         <div className="p-4 h-full flex flex-col">
           {m.heading && <h5 className="text-sm font-bold text-slate-900 dark:text-slate-100 mb-1.5">{m.heading}</h5>}
@@ -101,18 +103,18 @@ function WordSurface({ program, doc, live, focusTitle, onAction, onElementClick 
   );
 }
 
-function ExcelSurface({ program, doc, live, focusTitle, onAction, onElementClick }: SurfaceProps) {
+function ExcelSurface({ program, doc, live, focusTitle, blockedElements, onAction, onElementClick }: SurfaceProps) {
   if (doc.kind !== 'excel') return null;
   return (
     <div className="flex flex-col h-full gap-2">
-      <SurfaceElement img={imgOf(program, 1)} live={live} focusTitle={focusTitle} onElementClick={onElementClick}
+      <SurfaceElement img={imgOf(program, 1)} live={live} focusTitle={focusTitle} blocked={blockedElements?.includes(1)} onElementClick={onElementClick}
         className="flex items-center gap-1 rounded-lg border border-[var(--card-border)] bg-[var(--bg-color)] p-1.5">
         <span className="px-2 text-[10px] font-mono uppercase tracking-wide text-[var(--text-secondary)]">Formulas</span>
-        <SurfaceElement img={imgOf(program, 2)} live={live} focusTitle={focusTitle} onElementClick={onElementClick}>
+        <SurfaceElement img={imgOf(program, 2)} live={live} focusTitle={focusTitle} blocked={blockedElements?.includes(2)} onElementClick={onElementClick}>
           <RibbonButton icon={<Sigma size={16} />} label="SUM"
             onClick={() => onAction('insert_object', { target: 'SUM function', detail: 'SUM' })} />
         </SurfaceElement>
-        <SurfaceElement img={imgOf(program, 3)} live={live} focusTitle={focusTitle} onElementClick={onElementClick}>
+        <SurfaceElement img={imgOf(program, 3)} live={live} focusTitle={focusTitle} blocked={blockedElements?.includes(3)} onElementClick={onElementClick}>
           <RibbonButton icon={<Divide size={16} />} label="AVERAGE"
             onClick={() => onAction('insert_object', { target: 'AVERAGE function', detail: 'AVERAGE' })} />
         </SurfaceElement>
@@ -125,20 +127,20 @@ function ExcelSurface({ program, doc, live, focusTitle, onAction, onElementClick
   );
 }
 
-function PptSurface({ program, doc, live, focusTitle, onAction, onElementClick }: SurfaceProps) {
+function PptSurface({ program, doc, live, focusTitle, blockedElements, onAction, onElementClick }: SurfaceProps) {
   const [draft, setDraft] = useState<string | null>(null);
   if (doc.kind !== 'powerpoint') return null;
   const m = buildPptModel(doc);
   return (
     <div className="flex flex-col h-full gap-2">
-      <SurfaceElement img={imgOf(program, 1)} live={live} focusTitle={focusTitle} onElementClick={onElementClick}
+      <SurfaceElement img={imgOf(program, 1)} live={live} focusTitle={focusTitle} blocked={blockedElements?.includes(1)} onElementClick={onElementClick}
         className="flex items-center gap-1 rounded-lg border border-[var(--card-border)] bg-[var(--bg-color)] p-1.5">
         <span className="px-2 text-[10px] font-mono uppercase tracking-wide text-[var(--text-secondary)]">Insert</span>
-        <SurfaceElement img={imgOf(program, 2)} live={live} focusTitle={focusTitle} onElementClick={onElementClick}>
+        <SurfaceElement img={imgOf(program, 2)} live={live} focusTitle={focusTitle} blocked={blockedElements?.includes(2)} onElementClick={onElementClick}>
           <RibbonButton icon={<Plus size={16} />} label="New Slide"
             onClick={() => onAction('insert_object', { target: 'New Slide button' })} />
         </SurfaceElement>
-        <SurfaceElement img={imgOf(program, 3)} live={live} focusTitle={focusTitle} onElementClick={onElementClick}>
+        <SurfaceElement img={imgOf(program, 3)} live={live} focusTitle={focusTitle} blocked={blockedElements?.includes(3)} onElementClick={onElementClick}>
           <RibbonButton icon={<Copy size={16} />} label="Duplicate"
             onClick={() => onAction('insert_object', { target: 'Duplicate Slide button', detail: 'duplicate' })} />
         </SurfaceElement>
@@ -152,7 +154,7 @@ function PptSurface({ program, doc, live, focusTitle, onAction, onElementClick }
             </div>
           ))}
         </div>
-        <SurfaceElement img={imgOf(program, 4)} live={live} focusTitle={focusTitle} onElementClick={onElementClick}
+        <SurfaceElement img={imgOf(program, 4)} live={live} focusTitle={focusTitle} blocked={blockedElements?.includes(4)} onElementClick={onElementClick}
           className="flex-1 rounded-lg border border-[var(--card-border)] bg-white dark:bg-[#0f1623] flex items-center justify-center">
           <input
             value={draft ?? m.currentTitle}
@@ -175,24 +177,24 @@ function PptSurface({ program, doc, live, focusTitle, onAction, onElementClick }
 
 const PHOTO_CANVAS_URL = 'https://picsum.photos/seed/photo-canvas/800/600'; // the CONTENT being edited (honest: it is an image)
 
-function PhotoSurface({ program, doc, live, focusTitle, onAction, onElementClick }: SurfaceProps) {
+function PhotoSurface({ program, doc, live, focusTitle, blockedElements, onAction, onElementClick }: SurfaceProps) {
   if (doc.kind !== 'photo') return null;
   const m = buildPhotoModel(doc);
   return (
     <div className="flex flex-col h-full gap-2">
-      <SurfaceElement img={imgOf(program, 1)} live={live} focusTitle={focusTitle} onElementClick={onElementClick}
+      <SurfaceElement img={imgOf(program, 1)} live={live} focusTitle={focusTitle} blocked={blockedElements?.includes(1)} onElementClick={onElementClick}
         className="flex items-center gap-1 rounded-lg border border-[var(--card-border)] bg-[var(--bg-color)] p-1.5">
         <span className="px-2 text-[10px] font-mono uppercase tracking-wide text-[var(--text-secondary)]">Tools</span>
-        <SurfaceElement img={imgOf(program, 2)} live={live} focusTitle={focusTitle} onElementClick={onElementClick}>
+        <SurfaceElement img={imgOf(program, 2)} live={live} focusTitle={focusTitle} blocked={blockedElements?.includes(2)} onElementClick={onElementClick}>
           <RibbonButton icon={<CropIcon size={16} />} label="Crop"
             onClick={() => onAction('photo_edit', { target: 'Crop tool', detail: 'crop' })} />
         </SurfaceElement>
-        <SurfaceElement img={imgOf(program, 3)} live={live} focusTitle={focusTitle} onElementClick={onElementClick}>
+        <SurfaceElement img={imgOf(program, 3)} live={live} focusTitle={focusTitle} blocked={blockedElements?.includes(3)} onElementClick={onElementClick}>
           <RibbonButton icon={<Maximize2 size={16} />} label="Resize"
             onClick={() => onAction('photo_edit', { target: 'Resize tool', detail: 'resize' })} />
         </SurfaceElement>
       </SurfaceElement>
-      <SurfaceElement img={imgOf(program, 4)} live={live} focusTitle={focusTitle} onElementClick={onElementClick}
+      <SurfaceElement img={imgOf(program, 4)} live={live} focusTitle={focusTitle} blocked={blockedElements?.includes(4)} onElementClick={onElementClick}
         className="flex-1 rounded-lg border border-[var(--card-border)] overflow-hidden flex items-center justify-center"
       >
         <div className="w-full h-full flex items-center justify-center"

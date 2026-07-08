@@ -42,6 +42,7 @@ import type { PerceivedCache } from './perception/perceiveTile';
 import { buildEntities, entityById, entityByTitle, displayName, resolveEchoedTarget } from './entities/registry';
 import type { SceneEntity, EntityId } from './entities/registry';
 import { TeachingLayer } from './teaching/TeachingLayer';
+import { blockedElementNumbers } from './teaching/selectors';
 import { emitFeedbackAudio, FEEDBACK_OPTIONS } from './feedback';
 import type { FeedbackMode, FeedbackEvent } from './feedback';
 import { primeEarcons } from './feedback/earcons';
@@ -555,6 +556,9 @@ export default function App() {
   const surfaceSnapshotRef = useRef<HTMLCanvasElement | null>(null);
   const teachingDispatchRef = useRef<((e: TeachingEvent) => void) | null>(null);
   const [teachingSnapshot, setTeachingSnapshot] = useState<TeachingState | null>(null);
+  const blockedElements = useMemo(
+    () => (teachingSnapshot ? blockedElementNumbers(teachingSnapshot, entities) : []),
+    [teachingSnapshot, entities]);
 
   const [railState, setRailState] = useState<RailState>(initialRailState());
   const railStateRef = useRef(railState);
@@ -2512,6 +2516,7 @@ export default function App() {
               planeRef={mainContainerRef}
             >
               <ProgramSurface ref={surfaceRef} program={program} doc={mockDoc} live={isLive} focusTitle={focusTitle}
+                blockedElements={blockedElements}
                 onAction={handleSurfaceAction} onElementClick={handleSurfaceElementClick} />
             </ProgramWindow>
           )}
