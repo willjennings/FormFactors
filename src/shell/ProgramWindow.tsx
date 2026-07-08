@@ -54,7 +54,7 @@ export function ProgramWindow({ title, statusLabel, rect, onRectChange, onClose,
           <span className="text-xs font-semibold text-[var(--text-primary)] truncate">{title}</span>
           <span className={`text-[10px] font-mono font-bold ${statusLabel === 'Edited' ? 'text-[var(--text-secondary)] opacity-60' : 'text-green-500'}`}>{statusLabel}</span>
         </div>
-        <Tip label="Close window"><Button size="icon44" aria-label="Close window" onClick={onClose}><X size={14} /></Button></Tip>
+        <Tip label="Close window"><Button size="icon44" aria-label="Close window" onClick={onClose} onPointerDown={(e) => e.stopPropagation()}><X size={14} /></Button></Tip>
       </div>
       <div className="flex-1 min-h-0 p-2">{children}</div>
       <div
