@@ -16,6 +16,7 @@ import { Switch } from '../ui/Switch';
 import { Select } from '../ui/Select';
 import { Slider } from '../ui/Slider';
 import { Button } from '../ui/Button';
+import { Tip } from '../ui/Tooltip';
 
 const VOICE_BACKEND_OPTIONS = [
   { value: 'gemini', label: 'Gemini' },
@@ -100,14 +101,11 @@ export function DebugDrawer(props: DrawerProps) {
         <span className="text-[11px] font-mono uppercase tracking-wide text-[var(--text-secondary)]">Audition earcons</span>
         <div className="mt-2 flex flex-wrap gap-1.5">
           {EARCON_KINDS.map(kind => (
-            <Button
-              key={kind}
-              size="sm"
-              onClick={() => playEarcon(kind)}
-              title={`Play "${kind}" earcon`}
-            >
-              {kind.replace('commit-', '')}
-            </Button>
+            <Tip key={kind} label={`Play "${kind}" earcon`}>
+              <Button size="sm" onClick={() => playEarcon(kind)}>
+                {kind.replace('commit-', '')}
+              </Button>
+            </Tip>
           ))}
         </div>
       </div>

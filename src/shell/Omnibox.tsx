@@ -37,16 +37,17 @@ export function Omnibox({ isLive, isConnecting, error, transcript, suggestions, 
       {suggestions.length > 0 && (
         <div className="flex gap-1.5 overflow-x-auto custom-scrollbar pb-0.5">
           {suggestions.map(s => (
-            <Button key={s.key}
-              size="chip"
-              variant="outline"
-              onClick={() => { setDraft(s.phrase); onChipTap(s); }}
-              className="shrink-0 font-mono bg-[var(--card-bg)]/85 backdrop-blur text-[var(--text-primary)] hover:border-[var(--accent-color)]"
-              style={{ boxShadow: `inset 2px 0 0 rgb(${s.color})` }}
-              title={s.label}
-            >
-              {s.phrase}
-            </Button>
+            <Tip key={s.key} label={s.label}>
+              <Button
+                size="chip"
+                variant="outline"
+                onClick={() => { setDraft(s.phrase); onChipTap(s); }}
+                className="shrink-0 font-mono bg-[var(--card-bg)]/85 backdrop-blur text-[var(--text-primary)] hover:border-[var(--accent-color)]"
+                style={{ boxShadow: `inset 2px 0 0 rgb(${s.color})` }}
+              >
+                {s.phrase}
+              </Button>
+            </Tip>
           ))}
         </div>
       )}
