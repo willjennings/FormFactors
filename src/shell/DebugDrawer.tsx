@@ -203,18 +203,16 @@ export function DebugDrawer(props: DrawerProps) {
       {/* 11. World state + Undo button */}
       <section className="shrink-0 bg-[var(--card-bg)] border border-[var(--card-border)] rounded-2xl p-6">
         <div className="flex items-center justify-end mb-2 -mt-2">
-          <button
+          <Button
+            variant="outline"
+            size="sm"
             onClick={props.onUndo}
             disabled={props.undoCount === 0}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono border transition-colors ${
-              props.undoCount === 0
-                ? 'opacity-40 cursor-not-allowed border-[var(--card-border)] text-[var(--text-secondary)]'
-                : 'border-[var(--card-border)] text-[var(--text-primary)] hover:border-[#0077F0] hover:text-[#0077F0] dark:hover:text-white active:scale-95'
-            }`}
-            title="Undo the last document change"
+            className="flex items-center gap-1.5 font-mono"
+            aria-label="Undo the last document change"
           >
             <RotateCcw size={13} /> Undo{props.undoCount ? ` (${props.undoCount})` : ''}
-          </button>
+          </Button>
         </div>
         <div className="text-[10px] font-mono uppercase tracking-wide text-[var(--text-secondary)] mb-1.5">World state (as the model reads it)</div>
         <div className="text-[11px] font-mono text-[var(--text-primary)] break-words leading-relaxed">{props.worldState}</div>
