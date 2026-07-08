@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { Mic, MicOff, CornerDownLeft, X } from 'lucide-react';
+import { Button } from '../ui/Button';
+import { Tip } from '../ui/Tooltip';
 
 export type Suggestion = { key: string; label: string; phrase: string; color: string };
 export type GroundingChip = { id: string; title: string; color: string };
@@ -35,14 +37,16 @@ export function Omnibox({ isLive, isConnecting, error, transcript, suggestions, 
       {suggestions.length > 0 && (
         <div className="flex gap-1.5 overflow-x-auto custom-scrollbar pb-0.5">
           {suggestions.map(s => (
-            <button key={s.key}
+            <Button key={s.key}
+              size="chip"
+              variant="outline"
               onClick={() => { setDraft(s.phrase); onChipTap(s); }}
-              className="shrink-0 px-2.5 py-1 rounded-full text-[10px] font-mono border bg-[var(--card-bg)]/85 backdrop-blur border-[var(--card-border)] text-[var(--text-primary)] hover:border-[var(--accent-color)] transition-colors"
+              className="shrink-0 font-mono bg-[var(--card-bg)]/85 backdrop-blur text-[var(--text-primary)] hover:border-[var(--accent-color)]"
               style={{ boxShadow: `inset 2px 0 0 rgb(${s.color})` }}
               title={s.label}
             >
               {s.phrase}
-            </button>
+            </Button>
           ))}
         </div>
       )}
@@ -55,24 +59,41 @@ export function Omnibox({ isLive, isConnecting, error, transcript, suggestions, 
         className="flex items-center gap-2 px-3 py-2 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)]/90 backdrop-blur shadow-lg"
         onSubmit={(e) => { e.preventDefault(); if (draft.trim()) { onSubmit(draft); setDraft(''); } }}
       >
-        <button type="button" onClick={onMicToggle} disabled={isConnecting}
-          title={isLive ? 'End voice session' : 'Start voice session'}
-          className={`p-2 rounded-xl transition-all active:scale-90 ${isLive ? 'bg-green-500/15 text-green-500' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-color)]'} disabled:opacity-40`}>
-          {isLive ? <Mic size={16} /> : <MicOff size={16} />}
-        </button>
+        <Tip label={isLive ? 'End voice session' : 'Start voice session'}>
+          <Button
+            size="icon48"
+            variant="ghost"
+            onClick={onMicToggle}
+            disabled={isConnecting}
+            className={isLive ? 'bg-green-500/15 text-green-500 hover:bg-green-500/20' : ''}
+          >
+            {isLive ? <Mic size={16} /> : <MicOff size={16} />}
+          </Button>
+        </Tip>
         {grounding.length > 0 && (
           <div className="flex items-center gap-1 shrink-0 max-w-[45%] overflow-hidden">
             {grounding.map(c => (
               <span key={c.id}
-                className="flex items-center gap-0.5 pl-2 pr-1 py-0.5 rounded-full text-[10px] font-mono border border-[var(--card-border)] bg-[var(--bg-color)] text-[var(--text-primary)] whitespace-nowrap"
+                className="flex items-center gap-1.5 pl-2 pr-1 py-0.5 rounded-full text-xs font-mono border border-[var(--card-border)] bg-[var(--bg-color)] text-[var(--text-primary)] whitespace-nowrap"
                 style={{ boxShadow: `inset 2px 0 0 rgb(${c.color})` }}
                 title={`Grounded on ${c.title} — sent with your query`}
               >
                 {c.title}
-                <button type="button" onClick={() => onRemoveGrounding?.(c.id)}
-                  className="p-0.5 rounded-full text-[var(--text-secondary)] hover:text-[var(--text-primary)]" title="Remove">
+                {/* ✕ uses hit-24 (not hit-44): chips sit in a tight row, so the standard
+                    44px invisible hit area would overlap the adjacent chip. Per WCAG 2.2
+                    §2.5.8 spacing exception, ≥24px hit + ≥24px gap to next target satisfies
+                    the target-size requirement. gap-1.5 (6px) is the visual gap; the chip
+                    pr-1 + next chip's pl-2 together give ≥24px clearance between tap targets. */}
+                <Button
+                  type="button"
+                  size="icon44"
+                  variant="ghost"
+                  onClick={() => onRemoveGrounding?.(c.id)}
+                  className="w-6 h-6 hit-24 p-0 rounded-full text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                  title="Remove"
+                >
                   <X size={9} />
-                </button>
+                </Button>
               </span>
             ))}
           </div>
@@ -84,10 +105,17 @@ export function Omnibox({ isLive, isConnecting, error, transcript, suggestions, 
           disabled={isConnecting}
           className="flex-1 bg-transparent text-[13px] text-[var(--text-primary)] placeholder:text-[var(--text-secondary)] placeholder:opacity-50 focus:outline-none disabled:opacity-40"
         />
-        <button type="submit" disabled={isConnecting || !draft.trim()}
-          className="p-2 rounded-xl text-[var(--accent-color)] hover:bg-[var(--accent-color)]/10 disabled:opacity-30 transition-colors">
-          <CornerDownLeft size={15} />
-        </button>
+        <Tip label="Submit">
+          <Button
+            type="submit"
+            size="icon44"
+            variant="ghost"
+            disabled={isConnecting || !draft.trim()}
+            className="text-[var(--accent-color)] hover:bg-[var(--accent-color)]/10"
+          >
+            <CornerDownLeft size={15} />
+          </Button>
+        </Tip>
       </form>
     </div>
   );
