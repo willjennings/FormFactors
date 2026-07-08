@@ -84,16 +84,17 @@ export function Omnibox({ isLive, isConnecting, error, transcript, suggestions, 
                     §2.5.8 spacing exception, ≥24px hit + ≥24px gap to next target satisfies
                     the target-size requirement. gap-1.5 (6px) is the visual gap; the chip
                     pr-1 + next chip's pl-2 together give ≥24px clearance between tap targets. */}
-                <Button
-                  type="button"
-                  size="icon44"
-                  variant="ghost"
-                  onClick={() => onRemoveGrounding?.(c.id)}
-                  className="w-6 h-6 hit-24 p-0 rounded-full text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-                  title="Remove"
-                >
-                  <X size={9} />
-                </Button>
+                <Tip label="Remove">
+                  <Button
+                    type="button"
+                    size="icon44"
+                    variant="ghost"
+                    onClick={() => onRemoveGrounding?.(c.id)}
+                    className="w-6 h-6 hit-24 p-0 rounded-full text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                  >
+                    <X size={9} />
+                  </Button>
+                </Tip>
               </span>
             ))}
           </div>
