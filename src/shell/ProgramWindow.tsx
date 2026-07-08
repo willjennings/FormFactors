@@ -1,6 +1,8 @@
 import React, { useRef } from 'react';
 import { X } from 'lucide-react';
 import { clampWindow, type WindowRect } from './windowState';
+import { Button } from '../ui/Button';
+import { Tip } from '../ui/Tooltip';
 
 type Props = {
   title: string;
@@ -45,22 +47,19 @@ export function ProgramWindow({ title, statusLabel, rect, onRectChange, onClose,
       style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }}
     >
       <div
-        className="flex items-center justify-between px-3 py-2 border-b border-[var(--card-border)] bg-[var(--bg-color)] cursor-grab active:cursor-grabbing select-none touch-none"
+        className="flex items-center justify-between px-3 min-h-[44px] border-b border-[var(--card-border)] bg-[var(--bg-color)] cursor-grab active:cursor-grabbing select-none touch-none"
         onPointerDown={begin('move')} onPointerMove={move} onPointerUp={end} onPointerCancel={end}
       >
         <div className="flex items-center gap-2 min-w-0">
           <span className="text-xs font-semibold text-[var(--text-primary)] truncate">{title}</span>
           <span className={`text-[10px] font-mono font-bold ${statusLabel === 'Edited' ? 'text-[var(--text-secondary)] opacity-60' : 'text-green-500'}`}>{statusLabel}</span>
         </div>
-        <button onClick={onClose} title="Close window" className="p-1 rounded hover:bg-[var(--card-border)] text-[var(--text-secondary)]">
-          <X size={13} />
-        </button>
+        <Tip label="Close window"><Button size="icon44" aria-label="Close window" onClick={onClose}><X size={14} /></Button></Tip>
       </div>
       <div className="flex-1 min-h-0 p-2">{children}</div>
       <div
-        className="absolute bottom-0 right-0 w-4 h-4 cursor-nwse-resize touch-none"
+        className="absolute bottom-0 right-0 w-6 h-6 hit-24 cursor-nwse-resize touch-none"
         onPointerDown={begin('resize')} onPointerMove={move} onPointerUp={end} onPointerCancel={end}
-        title="Resize"
       />
     </div>
   );

@@ -529,9 +529,13 @@ export default function App() {
   } | null>(null);
   const defaultWindowRect = (): WindowRect => clampWindow({ x: 48, y: 48, w: 680, h: 620 },
     { width: mainContainerRef.current?.clientWidth ?? 1200, height: mainContainerRef.current?.clientHeight ?? 800 });
-  const [windowRect, setWindowRect] = useState<WindowRect>(() => loadWindowRect(DEFAULT_PROGRAM) ?? { x: 48, y: 48, w: 680, h: 620 });
+  const [windowRect, setWindowRect] = useState<WindowRect>(() => clampWindow(loadWindowRect(DEFAULT_PROGRAM) ?? { x: 48, y: 48, w: 680, h: 620 }, { width: window.innerWidth, height: window.innerHeight }));
   const [windowOpen, setWindowOpen] = useState(true);
-  useEffect(() => { setWindowRect(loadWindowRect(activeProgram) ?? defaultWindowRect()); setWindowOpen(true); }, [activeProgram]);
+  useEffect(() => {
+    const plane = { width: mainContainerRef.current?.clientWidth ?? 1200, height: mainContainerRef.current?.clientHeight ?? 800 };
+    setWindowRect(clampWindow(loadWindowRect(activeProgram) ?? defaultWindowRect(), plane));
+    setWindowOpen(true);
+  }, [activeProgram]);
   useEffect(() => { saveWindowRect(activeProgram, windowRect); }, [activeProgram, windowRect]);
   const surfaceRef = useRef<HTMLDivElement>(null);
   const surfaceSnapshotRef = useRef<HTMLCanvasElement | null>(null);
