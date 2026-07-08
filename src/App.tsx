@@ -57,6 +57,7 @@ import { ProgramWindow } from './shell/ProgramWindow';
 import { Omnibox } from './shell/Omnibox';
 import { DebugDrawer } from './shell/DebugDrawer';
 import { Sheet } from './ui/Sheet';
+import { Button } from './ui/Button';
 import { clampWindow, loadWindowRect, saveWindowRect, type WindowRect } from './shell/windowState';
 import { docStatusLabel } from './widgets/surfaceModels';
 import type { TeachingEvent, TeachingState } from './teaching/types';
@@ -461,6 +462,9 @@ export default function App() {
   const [sendFrequency, setSendFrequency] = useState(150); // Increased frequency for better AI responsiveness
   // PHASE G: an outward share request — witness recipient + payload before sending.
   const [shareRequest, setShareRequest] = useState<{ recipient: string; payload?: string; confirmed: boolean } | null>(null);
+  // Mirror in a ref so the keyboard handler (stale closure) can read the live value.
+  const shareRequestRef = useRef<typeof shareRequest>(null);
+  useEffect(() => { shareRequestRef.current = shareRequest; }, [shareRequest]);
   // Action verbs (save/edit/format/insert/photo) mutate this mock document; a pending action
   // is witness-rendered before it commits — the same grammar as `share`.
   const [mockDoc, setMockDoc] = useState<MockDoc>(() => initialMockDoc(DEFAULT_PROGRAM));
@@ -501,6 +505,15 @@ export default function App() {
   // Mirror in a ref so voice callbacks (stale closures) can read the live value.
   const pendingActionRef = useRef<typeof pendingAction>(null);
   useEffect(() => { pendingActionRef.current = pendingAction; }, [pendingAction]);
+
+  // Witness semantics (spec §2): focus moves to Confirm on open; Esc cancels. Non-modal —
+  // no trap, the desktop stays pointable while confirming.
+  const confirmBtnRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if ((pendingAction && !pendingAction.confirmed) || (shareRequest && !shareRequest.confirmed)) {
+      confirmBtnRef.current?.focus();
+    }
+  }, [pendingAction, shareRequest]);
 
   // --- The two control dials ---
   // DIAL A (autonomy/friction): how readily verbs commit vs. witness-render first.
@@ -1711,6 +1724,11 @@ export default function App() {
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
+      // Esc cancels any unconfirmed witness card — even while an editable is focused.
+      if (e.key === 'Escape') {
+        if (pendingActionRef.current && !pendingActionRef.current.confirmed) { cancelPendingAction(); return; }
+        if (shareRequestRef.current && !shareRequestRef.current.confirmed) { cancelShare(); return; }
+      }
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) { e.preventDefault(); handleUndo(); return; }
       if (!isLive) return;
@@ -2556,14 +2574,8 @@ export default function App() {
                 </div>
                 {!shareRequest.confirmed && (
                   <div className="flex items-center gap-2">
-                    <button onClick={confirmShare}
-                      className="px-4 py-1.5 rounded-full text-[12px] font-bold bg-amber-500 text-white hover:bg-amber-600 active:scale-95 transition-all">
-                      Confirm
-                    </button>
-                    <button onClick={cancelShare}
-                      className="px-4 py-1.5 rounded-full text-[12px] font-mono border border-[var(--card-border)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] active:scale-95 transition-all">
-                      Cancel
-                    </button>
+                    <Button variant="primary" size="sm" ref={!pendingAction ? confirmBtnRef : undefined} onClick={confirmShare}>Confirm</Button>
+                    <Button variant="outline" size="sm" onClick={cancelShare}>Cancel</Button>
                     <span className="text-[10px] font-mono text-[var(--text-secondary)] ml-1">or say "yes"</span>
                   </div>
                 )}
@@ -2600,14 +2612,8 @@ export default function App() {
                 )}
                 {!pendingAction.confirmed && (
                   <div className="flex items-center gap-2">
-                    <button onClick={confirmPendingAction}
-                      className="px-4 py-1.5 rounded-full text-[12px] font-bold bg-amber-500 text-white hover:bg-amber-600 active:scale-95 transition-all">
-                      Confirm
-                    </button>
-                    <button onClick={cancelPendingAction}
-                      className="px-4 py-1.5 rounded-full text-[12px] font-mono border border-[var(--card-border)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] active:scale-95 transition-all">
-                      Cancel
-                    </button>
+                    <Button variant="primary" size="sm" ref={confirmBtnRef} onClick={confirmPendingAction}>Confirm</Button>
+                    <Button variant="outline" size="sm" onClick={cancelPendingAction}>Cancel</Button>
                     <span className="text-[10px] font-mono text-[var(--text-secondary)] ml-1">or say "yes"</span>
                   </div>
                 )}
