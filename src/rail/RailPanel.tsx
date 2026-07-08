@@ -1,8 +1,10 @@
 import React, { useRef, useState } from 'react';
-import { X, MessageSquare } from 'lucide-react';
+import { X, MessageSquare, GripHorizontal } from 'lucide-react';
 import type { Rail } from './types';
 import { visibleCards, type RailState, type RailEvent } from './railStore';
 import { CardView } from './CardView';
+import { Button } from '../ui/Button';
+import { Tip } from '../ui/Tooltip';
 
 /** The floating response rail (shell spec §4): right side, draggable, collapsible to a
  *  pill. Renders the respond rail when present, else the projected teaching rail.
@@ -26,10 +28,12 @@ export function RailPanel({ state, teachingRail, onEvent, onShowMe }: {
 
   if (collapsed) {
     return (
-      <button onPointerDown={(e) => e.stopPropagation()} onClick={() => setCollapsed(false)}
-        className="absolute top-14 right-4 z-30 p-2 rounded-full border border-[var(--card-border)] bg-[var(--card-bg)]/90 backdrop-blur shadow-lg text-[var(--accent-color)]" title="Open responses">
-        <MessageSquare size={16} />
-      </button>
+      <Tip label="Open responses">
+        <Button size="icon48" onPointerDown={(e) => e.stopPropagation()} onClick={() => setCollapsed(false)}
+          className="absolute top-14 right-4 z-30 border border-[var(--card-border)] bg-[var(--card-bg)]/90 backdrop-blur shadow-lg text-[var(--accent-color)]">
+          <MessageSquare size={16} />
+        </Button>
+      </Tip>
     );
   }
   return (
@@ -39,15 +43,24 @@ export function RailPanel({ state, teachingRail, onEvent, onShowMe }: {
       style={{ right: -pos.x, top: pos.y }}
     >
       <div
-        className="flex items-center justify-between px-1 cursor-grab active:cursor-grabbing select-none touch-none"
+        className="flex items-center justify-between px-1 min-h-8 cursor-grab active:cursor-grabbing select-none touch-none"
         onPointerDown={(e) => { e.stopPropagation(); (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); drag.current = { sx: e.clientX, sy: e.clientY, start: pos }; }}
         onPointerMove={(e) => { if (drag.current) setPos({ x: drag.current.start.x + (e.clientX - drag.current.sx), y: drag.current.start.y + (e.clientY - drag.current.sy) }); }}
         onPointerUp={() => { drag.current = null; }}
       >
-        <span className="text-[9px] font-mono uppercase tracking-widest text-[var(--text-secondary)]">{projected.rail.seq}</span>
+        <div className="flex items-center gap-1.5">
+          <GripHorizontal size={14} className="text-[var(--text-secondary)] opacity-50 shrink-0" />
+          <span className="text-[9px] font-mono uppercase tracking-widest text-[var(--text-secondary)]">{projected.rail.seq}</span>
+        </div>
         <div className="flex items-center gap-1">
-          <button onClick={() => setCollapsed(true)} className="text-[10px] font-mono text-[var(--text-secondary)] px-1" title="Collapse">—</button>
-          {!isProjection && <button onClick={() => onEvent({ type: 'rail.dismiss' })} className="text-[var(--text-secondary)]" title="Dismiss"><X size={12} /></button>}
+          <Tip label="Collapse">
+            <Button size="icon44" className="w-8 h-8 hit-44 text-[var(--text-secondary)]" onClick={() => setCollapsed(true)}>—</Button>
+          </Tip>
+          {!isProjection && (
+            <Tip label="Dismiss">
+              <Button size="icon44" className="w-8 h-8 hit-44 text-[var(--text-secondary)]" onClick={() => onEvent({ type: 'rail.dismiss' })}><X size={12} /></Button>
+            </Tip>
+          )}
         </div>
       </div>
       {cards.map(({ card, index, mode }) => (

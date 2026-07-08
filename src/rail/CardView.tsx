@@ -1,6 +1,7 @@
 import React from 'react';
 import { Check, X as XIcon, MousePointer2 } from 'lucide-react';
 import type { RailCard } from './types';
+import { Button } from '../ui/Button';
 
 const KICKER: Record<RailCard['t'], string> = { do: 'DO', answer: 'ANSWER', orient: 'ORIENT', check: 'CHECK', caution: 'CAUTION', concept: 'CONCEPT', try: 'TRY', recap: 'RECAP' };
 
@@ -62,14 +63,14 @@ export function CardView({ card, index, mode, whyOpen, flipped, onWhy, onFlip, o
             <p className="text-[11px] text-red-500 mt-0.5 flex items-center gap-1"><XIcon size={11} /> not yet — {card.text}</p>
           )}
           {card.t === 'check' && card.verify === 'user' && card.state === 'active' && (
-            <button onClick={onCheckConfirm} className="mt-1 px-2 py-0.5 rounded-full text-[10px] font-mono border border-[var(--card-border)] text-[var(--text-primary)] hover:border-[var(--accent-color)]">confirm for me ✓</button>
+            <Button variant="ghost" size="chip" onClick={onCheckConfirm} className="mt-1">confirm for me ✓</Button>
           )}
         </>
       )}
       {(card.why || (card.entityId && card.band === 'solid')) && (
         <div className="flex items-center gap-3 justify-end mt-1">
-          {card.why && <button onClick={onWhy} className="text-[10px] font-mono text-[var(--text-secondary)] hover:text-[var(--text-primary)]">why?</button>}
-          {card.entityId && card.band === 'solid' && <button onClick={onShowMe} className="text-[10px] font-mono text-[var(--accent-color)]">show me</button>}
+          {card.why && <Button variant="ghost" size="chip" onClick={onWhy}>why?</Button>}
+          {card.entityId && card.band === 'solid' && <Button variant="ghost" size="chip" onClick={onShowMe} className="text-[var(--accent-color)]">show me</Button>}
         </div>
       )}
       {whyOpen && card.why && <p className="text-[11px] text-[var(--text-secondary)] mt-1 border-t border-[var(--card-border)] pt-1">{card.why}</p>}
