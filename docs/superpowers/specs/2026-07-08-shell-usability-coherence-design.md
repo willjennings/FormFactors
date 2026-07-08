@@ -75,9 +75,10 @@ targets: 15–25% (Fitts's-law estimate, to be validated by the same audit scrip
 - Debug drawer → `Sheet` (focus trap, Esc, overlay dismiss); its controls → `Select`
   (backend/autonomy/feedback), `Switch` (honest mode), `Slider` (refresh rate — 44px thumb,
   full-height hit area), `Button` (earcons, export, End/Reset).
-- Witness cards → `Dialog` semantics on the existing card visuals (focus moves to Confirm,
-  Esc = Cancel, voice confirm unaffected). Non-modal positioning stays (they float above the
-  omnibox; the desktop stays interactive — Radix `Dialog` with `modal={false}`).
+- Witness cards → dialog SEMANTICS on the existing card visuals (focus moves to Confirm,
+  Esc = Cancel, voice confirm unaffected), implemented hand-rolled rather than via Radix
+  Dialog: the §2 non-modal/no-trap requirement makes a plain focus effect + Esc branch
+  simpler and safer than overriding Radix's modal defaults. Buttons adopt the shared `Button`.
 - Menu bar + dock buttons → `Button` variants (`icon-lg`), Tooltips.
 - Omnibox: mic/submit → `Button` 44px; suggestion + grounding chips → `Badge`-styled buttons
   with 44px hit areas (visual height may stay 28px); chip ✕ gets a 24px+ expanded hit area.
