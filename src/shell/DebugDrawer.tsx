@@ -39,7 +39,7 @@ type DrawerProps = {
 export function DebugDrawer(props: DrawerProps) {
   const [tick, setTick] = useState(0);
 
-  // The Sheet renders this component only when open=true; keep the tick running while mounted.
+  // Runs only while the drawer is mounted: Radix Dialog unmounts Portal content on close, so the interval's cleanup fires then (no open-guard needed).
   useEffect(() => {
     const id = setInterval(() => setTick(t => t + 1), 1000);
     return () => clearInterval(id);
@@ -183,18 +183,20 @@ export function DebugDrawer(props: DrawerProps) {
       {/* 10. End Session / Reset buttons (isLive only) */}
       {props.isLive && (
         <div className="flex gap-2">
-          <button
+          <Button
+            variant="primary"
+            className="flex-1 h-11 rounded-full font-bold"
             onClick={props.onEndSession}
-            className="flex-1 h-[60px] rounded-full font-dm font-bold text-[15px] tracking-[-0.025em] leading-[28px] transition-all shadow-lg bg-[var(--inverse-bg)] text-[var(--inverse-text)] hover:opacity-90 hover:scale-[1.02] active:scale-98 flex items-center justify-center gap-3"
           >
             End Session
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="outline"
+            className="flex-1 h-11 rounded-full font-bold"
             onClick={props.onReset}
-            className="flex-1 h-[60px] rounded-full font-dm font-bold text-[15px] tracking-[-0.025em] leading-[28px] transition-all flex items-center justify-center active:scale-95 border bg-[var(--card-bg)] border-[var(--card-border)] dark:border-[#495564] text-[var(--text-primary)] hover:bg-[#E7F0FF] hover:border-[#0077F0] hover:text-[#0077F0] dark:hover:bg-[#344256] dark:hover:border-[#0076F0] dark:hover:text-white"
           >
             <RotateCcw size={18} className="mr-2" /> Reset
-          </button>
+          </Button>
         </div>
       )}
 
