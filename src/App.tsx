@@ -73,6 +73,7 @@ import type { InputModality } from './telemetry';
 import { buildInstructions } from './prompt/instructions';
 import { withTrafficCount } from './shell/traffic';
 import type { Traffic } from './shell/traffic';
+import { idleExceeded } from './shell/idle';
 
 // --- Types ---
 interface Marker {
@@ -371,6 +372,7 @@ export default function App() {
   const [isConnecting, setIsConnecting] = useState(false);
   const pendingTypedRef = useRef<string | null>(null);
   const lastInputModalityRef = useRef<InputModality>('voice');
+  const lastActivityRef = useRef(Date.now());
   const [lastError, setLastError] = useState<string | null>(null);
   // Draft text restored to the omnibox when a cold-start connect fails (R1 path).
   const [restoredDraft, setRestoredDraft] = useState<{ text: string; at: number } | null>(null);
@@ -1672,7 +1674,7 @@ export default function App() {
             telemetry.error(errMsg);
             emitFeedback({ outcome: 'error', label: errMsg });
           },
-          onInputTranscript: (text: string) => { lastInputModalityRef.current = 'voice'; processInputTranscript(text); },
+          onInputTranscript: (text: string) => { lastActivityRef.current = Date.now(); lastInputModalityRef.current = 'voice'; processInputTranscript(text); },
           onToolCall: (call) => {
             if (showRotateOverlayRef.current || showMobileOverlayRef.current) return;
             if (lastTranscriptionTimeRef.current === 0) { addLog('info', 'Ignoring tool call before first transcription'); return; }
@@ -1990,6 +1992,20 @@ export default function App() {
     return () => cancelAnimationFrame(frame);
   }, [showMarkings, isLive]); // Re-run when markings or live state changes
 
+  // Idle watchdog: if no pointer, typing, or speech for 5 minutes during a live session,
+  // close the provider and surface a reason so the user knows why it stopped.
+  useEffect(() => {
+    if (!isLive) return;
+    lastActivityRef.current = Date.now();
+    const t = setInterval(() => {
+      if (idleExceeded(Date.now(), lastActivityRef.current)) {
+        providerRef.current?.close();
+        setLastError('Session ended after 5 idle minutes (token guard) — tap the mic to reconnect.');
+      }
+    }, 30_000);
+    return () => clearInterval(t);
+  }, [isLive]);
+
   const handlePointerMove = React.useCallback((e: React.PointerEvent | PointerEvent) => {
     const rect = mainContainerRef.current?.getBoundingClientRect();
     if (!rect) return;
@@ -2065,6 +2081,7 @@ export default function App() {
   }, [isPainting, mainSize]);
   
   const handlePointerDown = (e: React.PointerEvent) => {
+    lastActivityRef.current = Date.now();
     // Pointer visuals work with or without a session (gap 8): painting, hover, and markers
     // are local. Everything that costs tokens stays behind providerRef (null offline).
 
@@ -2530,6 +2547,7 @@ export default function App() {
             grounding={grounding}
             onRemoveGrounding={(id) => setGrounding(g => g.filter(c => c.id !== id))}
             onSubmit={(text) => {
+              lastActivityRef.current = Date.now();
               setFirstRunHint(false); setFocusTitle(undefined);
               // Grounding travels with the query: silent hints when live; appended visibly
               // when the session must auto-start (hints would be lost pre-connect).
