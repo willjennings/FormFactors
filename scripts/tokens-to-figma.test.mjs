@@ -9,6 +9,7 @@ const CSS = `
 :root {
   --accent-color: #1A74E8;
   --dot-color: rgba(26, 26, 26, 0.15);
+  --spacing-md: 8px;
 }
 .dark {
   --accent-color: #0076F0;
@@ -33,5 +34,9 @@ describe('cssToTokens', () => {
   });
   it('does not classify a font as a color', () => {
     expect(t.color['font-dm']).toBeUndefined();
+  });
+  it('skips non-color :root vars (portability hardening)', () => {
+    expect(t.color['spacing-md']).toBeUndefined();
+    expect(t.fontFamily['spacing-md']).toBeUndefined();
   });
 });

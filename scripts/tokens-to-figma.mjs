@@ -41,7 +41,11 @@ export function cssToTokens(css) {
   // Themed tokens: per-mode values from :root / .dark.
   for (const [name, lv] of light) {
     const dv = dark.get(name) ?? lv;
-    doc.color[name] = { $type: 'color', Light: lv, Dark: dv };
+    if (name.startsWith('font-')) {
+      doc.fontFamily[name] = { $type: 'fontFamily', Light: normFont(lv), Dark: normFont(dv) };
+    } else if (isColor(lv)) {
+      doc.color[name] = { $type: 'color', Light: lv, Dark: dv };
+    }
   }
   // @theme tokens: single value → mirrored into both modes; classify color vs font.
   for (const [name, v] of theme) {
