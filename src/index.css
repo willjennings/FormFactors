@@ -123,3 +123,12 @@ body {
     background: rgba(255, 255, 255, 0.2);
   }
 }
+
+/* Tap-target + focus standard (usability spec §2) */
+@layer utilities {
+  .hit-44 { position: relative; }
+  .hit-44::after { content: ""; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: max(100%, 44px); height: max(100%, 44px); }
+  .hit-24 { position: relative; }
+  .hit-24::after { content: ""; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: max(100%, 24px); height: max(100%, 24px); }
+}
+:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 2px; border-radius: 4px; }
