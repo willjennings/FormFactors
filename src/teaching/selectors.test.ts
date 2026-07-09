@@ -3,7 +3,7 @@ import { fadeLevel, activeStep, visibleScaffold, blockedEntityIds, blockedElemen
 import { initialTeachingState, reduce } from './teachingStore';
 import type { EntityId } from '../entities/registry';
 import { buildEntities } from '../entities/registry';
-import { getProgram } from '../scenarios';
+import { getProgram, initialMockDoc } from '../scenarios';
 
 const id = (s: string) => s as EntityId;
 const seq = (competence: Record<string, number> = {}) =>
@@ -38,7 +38,7 @@ describe('selectors', () => {
   });
   it('blockedElementNumbers: scrimmed leaves as numeric ids; program chrome and the target excluded', () => {
     const program = getProgram('word');
-    const entities = buildEntities(program, {}, { items: program.images.map((img, i) => ({ id: img.id, bbox: { ymin: i, xmin: 0, ymax: i + 1, xmax: 1 } })) });
+    const entities = buildEntities(program, initialMockDoc('word'), {}, { items: program.images.map((img, i) => ({ id: `word-${img.id}`, bbox: { ymin: i, xmin: 0, ymax: i + 1, xmax: 1 } })) });
     let st = reduce(initialTeachingState(), { type: 'teach.sequence', title: 't', taskKey: 'k', posture: 'guide',
       steps: [{ entityId: 'word-2' as any, subgoal: 's', instruction: 'i' }] }, 0);
     expect(blockedElementNumbers(st, entities).sort()).toEqual([3, 4]); // ui leaf 3 + content 4; chrome 1 excluded; target 2 excluded

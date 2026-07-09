@@ -2,16 +2,16 @@ import { describe, it, expect } from 'vitest';
 import { buildDemoScript } from './demoScript';
 import { initialTeachingState, reduce } from './teachingStore';
 import { buildEntities } from '../entities/registry';
-import { getProgram } from '../scenarios';
+import { getProgram, initialMockDoc } from '../scenarios';
 
 const layoutFor = (programId: 'word' | 'excel') => ({
-  items: getProgram(programId).images.map((img, i) => ({ id: img.id, bbox: { ymin: i * 100, xmin: 0, ymax: i * 100 + 90, xmax: 200 } })),
+  items: getProgram(programId).images.map((img, i) => ({ id: `${programId}-${img.id}`, bbox: { ymin: i * 100, xmin: 0, ymax: i * 100 + 90, xmax: 200 } })),
 });
 
 describe('demo script', () => {
   it('word: teaches the save task over ribbon → body → Save, then relates the look-alikes', () => {
     const program = getProgram('word');
-    const entities = buildEntities(program, {}, layoutFor('word'));
+    const entities = buildEntities(program, initialMockDoc('word'), {}, layoutFor('word'));
     const script = buildDemoScript(program, entities);
     let st = initialTeachingState();
     for (const { at, event } of script) st = reduce(st, event, at);
@@ -26,7 +26,7 @@ describe('demo script', () => {
 
   it('excel: teaches totaling the column', () => {
     const program = getProgram('excel');
-    const entities = buildEntities(program, {}, layoutFor('excel'));
+    const entities = buildEntities(program, initialMockDoc('excel'), {}, layoutFor('excel'));
     const script = buildDemoScript(program, entities);
     let st = initialTeachingState();
     for (const { at, event } of script) st = reduce(st, event, at);

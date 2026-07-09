@@ -6,7 +6,7 @@ import { initialRailState, reduceRail, railComplete } from './railStore';
 
 describe('rail demo', () => {
   const program = getProgram('word');
-  const entities = buildEntities(program, {}, { items: program.images.map((img, i) => ({ id: img.id, bbox: { ymin: i * 100, xmin: 0, ymax: i * 100 + 90, xmax: 200 } })) });
+  const entities = buildEntities(program, initialMockDoc('word'), {}, { items: program.images.map((img, i) => ({ id: `word-${img.id}`, bbox: { ymin: i * 100, xmin: 0, ymax: i * 100 + 90, xmax: 200 } })) });
   it('drives the real mapper+store to completion via element click and doc change', () => {
     const doc = initialMockDoc('word');
     const rail = buildRailDemo(program, entities, doc, 0)!;
@@ -21,7 +21,7 @@ describe('rail demo', () => {
   it('returns a rail for every program (never null on the shipped programs)', () => {
     for (const id of ['word', 'excel', 'powerpoint', 'photo'] as const) {
       const p = getProgram(id);
-      const es = buildEntities(p, {}, { items: p.images.map((img, i) => ({ id: img.id, bbox: { ymin: i * 100, xmin: 0, ymax: i * 100 + 90, xmax: 200 } })) });
+      const es = buildEntities(p, initialMockDoc(id), {}, { items: p.images.map((img, i) => ({ id: `${id}-${img.id}`, bbox: { ymin: i * 100, xmin: 0, ymax: i * 100 + 90, xmax: 200 } })) });
       expect(buildRailDemo(p, es, initialMockDoc(id), 0)).not.toBeNull();
     }
   });

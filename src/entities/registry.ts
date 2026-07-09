@@ -1,8 +1,9 @@
 // Stable identity for everything pointable in the scene (R2).
 // Decisions run on EntityIds and aliases; titles/perceived labels are presentation data.
 
-import type { Program, ElementCategory } from '../scenarios';
+import type { Program, ElementCategory, MockDoc } from '../scenarios';
 import type { PerceivedCache } from '../perception/perceiveTile';
+import { SUB_ENTITY_DERIVERS } from './subEntities';
 
 /** Branded so tsc flags any raw title string flowing into an id slot during the rekey. */
 export type EntityId = string & { __brand: 'EntityId' };
@@ -23,29 +24,28 @@ const normText = (s: string): string =>
   s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
 
 type LayoutBox = { ymin: number; xmin: number; ymax: number; xmax: number };
-type Layout = { items: { id: number; bbox: LayoutBox }[] } | null;
+type Layout = { items: { id: string; bbox: LayoutBox }[] } | null;
 
 const toTuple = (b: LayoutBox | undefined): [number, number, number, number] =>
   b ? [b.ymin, b.xmin, b.ymax, b.xmax] : [0, 0, 0, 0];
 
 /** Single source for the scene: one entity per program element. Pure & derived. */
-export function buildEntities(program: Program, perceived: PerceivedCache, layout: Layout): SceneEntity[] {
-  const tiles: SceneEntity[] = program.images.map((img) => {
+export function buildEntities(program: Program, doc: MockDoc, perceived: PerceivedCache, layout: Layout): SceneEntity[] {
+  const bboxOf = (id: string) => toTuple(layout?.items.find((it) => it.id === id)?.bbox);
+  const top: SceneEntity[] = program.images.map((img) => {
+    const id = `${program.id}-${img.id}`;
     const p = perceived[img.url];
     const perceivedLabel = p && p.status === 'done' && p.label ? p.label : undefined;
     const aliases = [normText(img.title)];
     if (perceivedLabel) aliases.push(normText(perceivedLabel));
-    return {
-      id: asId(`${program.id}-${img.id}`),
-      title: img.title,
-      url: img.url,
-      category: img.category,
-      perceivedLabel,
-      aliases,
-      bbox: toTuple(layout?.items.find((it) => it.id === img.id)?.bbox),
-    };
+    return { id: asId(id), title: img.title, url: img.url, category: img.category, perceivedLabel, aliases, bbox: bboxOf(id), sub: false };
   });
-  return tiles;
+  const subs: SceneEntity[] = (SUB_ENTITY_DERIVERS[program.id]?.(doc) ?? []).map((s) => {
+    const id = `${program.id}-${s.idSuffix}`;
+    const aliases = Array.from(new Set([normText(s.title), ...s.aliases.map(normText)]));
+    return { id: asId(id), title: s.title, url: '', category: s.category, aliases, bbox: bboxOf(id), sub: true };
+  });
+  return [...top, ...subs];
 }
 
 export function entityById(entities: SceneEntity[], id: EntityId | null | undefined): SceneEntity | undefined {

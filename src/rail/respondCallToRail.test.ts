@@ -4,7 +4,7 @@ import { buildEntities } from '../entities/registry';
 import { getProgram, initialMockDoc } from '../scenarios';
 
 const program = getProgram('word');
-const entities = buildEntities(program, {}, { items: program.images.map((img, i) => ({ id: img.id, bbox: { ymin: i * 100, xmin: 0, ymax: i * 100 + 90, xmax: 200 } })) });
+const entities = buildEntities(program, initialMockDoc('word'), {}, { items: program.images.map((img, i) => ({ id: `word-${img.id}`, bbox: { ymin: i * 100, xmin: 0, ymax: i * 100 + 90, xmax: 200 } })) });
 const doc = initialMockDoc('word');
 const call = (cards: unknown[], guideLine = 'One click and your work is safe.') =>
   respondCallToRail({ seq: 'word.save', cards, guideLine }, entities, doc, 1000);

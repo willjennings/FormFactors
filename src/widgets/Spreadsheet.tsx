@@ -5,13 +5,13 @@ import { buildGridModel } from './spreadsheetGrid';
 type Props = {
   doc: MockDoc;
   selection?: string | null;
-  /** Optional scene-element stamping: cell ref → data-element-id (e.g. { A1: 4 }). */
-  elementIds?: Record<string, number>;
+  /** Full entity id for a cell ref, e.g. (ref) => `excel-cell-${ref}`. Stamps data-entity-id. */
+  entityIdFor?: (ref: string) => string;
   onCellClick?: (ref: string) => void;
 };
 
 /** A real DOM spreadsheet grid bound to MockDoc.excel — the node the vision pipeline snapshots. */
-export const Spreadsheet = forwardRef<HTMLDivElement, Props>(({ doc, selection = null, elementIds, onCellClick }, ref) => {
+export const Spreadsheet = forwardRef<HTMLDivElement, Props>(({ doc, selection = null, entityIdFor, onCellClick }, ref) => {
   const model = buildGridModel(doc, selection);
   return (
     <div
@@ -38,7 +38,7 @@ export const Spreadsheet = forwardRef<HTMLDivElement, Props>(({ doc, selection =
                 <td
                   key={cell.ref}
                   data-cell={cell.ref}
-                  data-element-id={elementIds?.[cell.ref]}
+                  data-entity-id={entityIdFor?.(cell.ref)}
                   onClick={onCellClick ? (e) => { e.stopPropagation(); onCellClick(cell.ref); } : undefined}
                   className={`border border-slate-300 px-3 py-1 text-right ${
                     cell.selected ? 'bg-blue-100 outline outline-2 outline-blue-500' : ''

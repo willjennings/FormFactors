@@ -541,7 +541,7 @@ export default function App() {
   };
   const [layoutBounds, setLayoutBounds] = useState<{
     window: BBox;
-    photoItems: { id: number; bbox: BBox }[];
+    photoItems: { id: string; bbox: BBox }[];
     surface?: BBox;
   } | null>(null);
   const defaultWindowRect = (): WindowRect => clampWindow({ x: 48, y: 48, w: 680, h: 620 },
@@ -680,7 +680,7 @@ export default function App() {
       setMainSize({ width: mainRect.width, height: mainRect.height });
       const zeroWindow = { ymin: 0, xmin: 0, ymax: 0, xmax: 0 };
       setLayoutBounds({ window: zeroWindow, photoItems: [], surface: undefined });
-      const es = buildEntities(program, perceivedLabelsRef.current, { items: [] });
+      const es = buildEntities(program, mockDocRef.current, perceivedLabelsRef.current, { items: [] });
       setEntities(es);
       entitiesRef.current = es;
       return;
@@ -689,12 +689,12 @@ export default function App() {
     const pRect = winEl.getBoundingClientRect();
     setMainSize({ width: mainRect.width, height: mainRect.height });
 
-    // Generic element contract: anything with data-element-id is a measurable scene
-    // element (tiles today, surface controls after the surface migration).
-    const photoItems = Array.from(winEl.querySelectorAll<HTMLElement>('[data-element-id]')).map((el: HTMLElement) => {
-      const id = Number(el.dataset.elementId);
-      return Number.isFinite(id) ? { id, bbox: toBBox(el.getBoundingClientRect()) } : null;
-    }).filter(Boolean) as { id: number; bbox: BBox }[];
+    // Generic element contract: anything with data-entity-id is a measurable scene
+    // element (string-keyed: top-level `${programId}-${imgId}`, sub-entity `${programId}-cell-A3` etc.).
+    const photoItems = Array.from(winEl.querySelectorAll<HTMLElement>('[data-entity-id]')).map((el: HTMLElement) => {
+      const id = el.dataset.entityId;
+      return id ? { id, bbox: toBBox(el.getBoundingClientRect()) } : null;
+    }).filter(Boolean) as { id: string; bbox: BBox }[];
 
     const surfEl = main.querySelector('.program-surface');
     setLayoutBounds({
@@ -704,7 +704,7 @@ export default function App() {
     });
 
     // Update the scene entities for Gemini (single source of truth).
-    const es = buildEntities(program, perceivedLabelsRef.current, {
+    const es = buildEntities(program, mockDocRef.current, perceivedLabelsRef.current, {
       items: photoItems.map(it => ({ id: it.id, bbox: it.bbox })),
     });
     setEntities(es);
@@ -2243,7 +2243,7 @@ export default function App() {
           ctx.fillStyle = '#64748b';
           ctx.font = 'bold 8px sans-serif';
           ctx.textAlign = 'center';
-          const title = program.images.find(im => im.id === item.id)?.title ?? '';
+          const title = displayName(entityById(entitiesRef.current, item.id as EntityId));
           ctx.fillText(title, dx + dw / 2, dy + dh / 2);
         });
       }
@@ -2411,7 +2411,7 @@ export default function App() {
   const handleReset = () => {
     setPersistentPaths([]);
     setPointerPath([]);
-    const baseEntities = buildEntities(program, perceivedLabelsRef.current, null);
+    const baseEntities = buildEntities(program, mockDocRef.current, perceivedLabelsRef.current, null);
     setEntities(baseEntities);
     entitiesRef.current = baseEntities;
     setShareRequest(null);

@@ -16,7 +16,7 @@ type Props = {
 
 /** The single program window: real chrome over a ProgramSurface. Drag by title bar,
  *  resize from the corner. Geometry is clamped to the desktop plane; measurement
- *  (data-element-id) re-runs automatically via the existing ResizeObserver. */
+ *  (data-entity-id) re-runs automatically via the existing ResizeObserver. */
 export function ProgramWindow({ title, statusLabel, rect, onRectChange, onClose, planeRef, children }: Props) {
   const drag = useRef<{ mode: 'move' | 'resize'; startX: number; startY: number; start: WindowRect } | null>(null);
 

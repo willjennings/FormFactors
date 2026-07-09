@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { buildInstructions } from './instructions';
-import { getProgram, buildActionTools } from '../scenarios';
+import { getProgram, buildActionTools, initialMockDoc } from '../scenarios';
 import { buildEntities } from '../entities/registry';
 
 const program = getProgram('word');
-const entities = buildEntities(program, {}, { items: program.images.map((img, i) => ({ id: img.id, bbox: { ymin: i * 100, xmin: 0, ymax: i * 100 + 90, xmax: 200 } })) });
+const entities = buildEntities(program, initialMockDoc('word'), {}, { items: program.images.map((img, i) => ({ id: `word-${img.id}`, bbox: { ymin: i * 100, xmin: 0, ymax: i * 100 + 90, xmax: 200 } })) });
 
 describe('buildInstructions — honest desktop assistant', () => {
   const honest = buildInstructions(true, program, entities);
