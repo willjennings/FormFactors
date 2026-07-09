@@ -84,6 +84,12 @@ describe('resolveEchoedTarget — dense alias sets (C1)', () => {
     const slides = [2,12].map(n => ent(`powerpoint-slide-${n}`, [`slide ${n}`]));
     expect(resolveEchoedTarget(slides, 'slide 2')!.entity.id).toBe('powerpoint-slide-2');
   });
+  it('honest floor: an intra-token substring near-miss does NOT resolve (the bug the rewrite fixes)', () => {
+    // Old bare-substring resolver: 'a13'.includes('a1') === true → wrongly resolved 'a1' to the A13 cell.
+    // Word-boundary matching: 'a1' is a distinct token from 'a13' → no match → null (honesty floor).
+    const only13 = [ent('excel-cell-A13', ['a13', 'cell a13'])];
+    expect(resolveEchoedTarget(only13, 'a1')).toBeNull();
+  });
   it('below-threshold gibberish still returns null (honesty floor)', () => {
     expect(resolveEchoedTarget(cells, 'xyzzy')).toBeNull();
   });

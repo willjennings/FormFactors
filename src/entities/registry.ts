@@ -78,6 +78,9 @@ export function resolveEchoedTarget(
   if (!t) return null;
   const tTokens = t.split(' ');
   const tSet = new Set(tTokens);
+  // Token-subset matching is order-agnostic and assumes aliases are pre-normalized (buildEntities
+  // normText()s them): "average function" and "function average" both match. Deliberate — model
+  // echoes are paraphrases; no alias set in this domain relies on word order for disambiguation.
   // A word-boundary "contains": every token of `needle` appears as a token of `hay`, in order-agnostic set terms.
   const tokenSubset = (needleTokens: string[], hayTokens: string[]) => {
     const haySet = new Set(hayTokens);
