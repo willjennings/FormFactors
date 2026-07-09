@@ -11,6 +11,8 @@ export interface SubEntitySpec {
 }
 export type SubEntityDeriver = (doc: MockDoc) => SubEntitySpec[];
 
+const ORDINALS = ['', 'first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth', 'tenth'];
+
 /** Every grid cell in the model's range is a pointable content entity. */
 export const deriveSpreadsheetSubEntities: SubEntityDeriver = (doc) => {
   const model = buildGridModel(doc, null);
@@ -28,7 +30,9 @@ export const derivePptSubEntities: SubEntityDeriver = (doc) => {
   if (doc.kind !== 'powerpoint') return [];
   return doc.slides.map((_, i) => {
     const n = i + 1;
-    return { idSuffix: `slide-${n}`, title: `Slide ${n}`, aliases: [`slide ${n}`, ...(n === 2 ? ['second slide'] : n === 1 ? ['first slide'] : [])], category: 'content' as ElementCategory };
+    const aliases = [`slide ${n}`];
+    if (ORDINALS[n]) aliases.push(`${ORDINALS[n]} slide`);
+    return { idSuffix: `slide-${n}`, title: `Slide ${n}`, aliases, category: 'content' };
   });
 };
 

@@ -20,6 +20,7 @@ describe('sub-entity derivers', () => {
     expect(specs).toHaveLength(2);
     expect(specs[1]).toMatchObject({ idSuffix: 'slide-2', title: 'Slide 2', category: 'content' });
     expect(specs[1].aliases).toContain('slide 2');
+    expect(specs[1].aliases).toContain('second slide');
   });
   it('word and photo derive nothing (deferred / no sub-elements)', () => {
     expect(SUB_ENTITY_DERIVERS.word?.(initialMockDoc('word')) ?? []).toEqual([]);
