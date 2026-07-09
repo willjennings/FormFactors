@@ -145,17 +145,19 @@ function computePointingConfidence(
     };
   }
 
-  // 2. Geometric: cursor sits inside more than one photo region → ambiguous overlap.
+  // 2. Geometric: cursor sits inside more than one region — but nesting is NOT ambiguity.
+  // innermost (smallest-area) containing entity is the target; its containers are not competitors.
   const containing = entities.filter(o => {
     const [ymin, xmin, ymax, xmax] = o.bbox;
     return hX >= xmin && hX <= xmax && hY >= ymin && hY <= ymax;
   });
-  if (containing.length > 1) {
-    return {
-      level: 'low',
-      candidates: containing.map(o => o.id),
-      reason: `cursor inside ${containing.length} overlapping regions`,
-    };
+  const areaOf = (o: SceneEntity) => (o.bbox[2]-o.bbox[0]) * (o.bbox[3]-o.bbox[1]);
+  const inner = containing.reduce((a, b) => (areaOf(b) < areaOf(a) ? b : a), found);
+  const strictlyContains = (outer: SceneEntity, x: SceneEntity) =>
+    outer.bbox[0] <= x.bbox[0] && outer.bbox[1] <= x.bbox[1] && outer.bbox[2] >= x.bbox[2] && outer.bbox[3] >= x.bbox[3] && outer.id !== x.id;
+  const competitors = containing.filter(o => o.id !== inner.id && !strictlyContains(o, inner));
+  if (competitors.length > 0) {
+    return { level: 'low', candidates: [inner.id, ...competitors.map(o => o.id)], reason: `cursor inside ${competitors.length + 1} overlapping regions` };
   }
 
   // 3. Geometric: cursor near the edge of its region → shaky hit.
@@ -2025,10 +2027,12 @@ export default function App() {
     // Update hovered object for visual feedback
     const hX = Math.round(x);
     const hY = Math.round(y);
-    const found = entitiesRef.current.find(e => {
+    const containing = entitiesRef.current.filter(e => {
       const [ymin, xmin, ymax, xmax] = e.bbox;
-      return hX >= xmin && hX <= xmax && hY >= ymin && hY <= ymax;
+      return (ymax - ymin) > 0 && x >= xmin && x <= xmax && y >= ymin && y <= ymax;
     });
+    const area = (e: SceneEntity) => (e.bbox[2] - e.bbox[0]) * (e.bbox[3] - e.bbox[1]);
+    const found = containing.length ? containing.reduce((a, b) => (area(b) < area(a) ? b : a)) : undefined;
     const hovered = found ? found.id : null;
     setHoveredId(hovered);
     hoveredIdRef.current = hovered;
