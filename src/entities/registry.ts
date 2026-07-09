@@ -68,7 +68,8 @@ const MIN_OVERLAP_TOKENS = 2;
  * Resolve the model's echoed target against every alias of every entity.
  * matchElement's containment tiers, generalized — plus an honesty floor:
  * bare token overlap needs ≥2 tokens, else null ("below my resolution").
- * Regression anchor: "Cell A3" must NOT resolve to the "Cell A1" tile.
+ * Regression anchor: "Cell A3" resolves to the A3 cell, never the A1 cell/grid — word-boundary
+ * tokens keep dense near-identical alias sets (A1…D6) from cross-resolving.
  */
 export function resolveEchoedTarget(
   entities: SceneEntity[], text?: string,
