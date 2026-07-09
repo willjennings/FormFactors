@@ -1,98 +1,122 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# FormFactors
 
-# Run and deploy your AI Studio app
+An **honest virtual desktop**: talk or type to an agent while pointing at real program UI. The
+agent operates the app, teaches you how, and answers in typed cards — and it never claims to see,
+point at, or act on something it can't. "Honest" is the whole thesis: where a normal assistant
+guesses and sounds confident, this one surfaces its uncertainty, asks when it isn't sure, and
+witnesses consequential actions before committing them.
 
-This contains everything you need to run your app locally.
+It is a front-end research prototype for exploring **interaction form factors** — how voice,
+typing, pointing, teaching overlays, and a structured response surface combine into a desktop that
+feels alive and trustworthy.
 
-View your app in AI Studio: https://ai.studio/apps/06c24b00-f5b9-4a6f-a54a-0033e2330f47
+> **Branch note:** active development lives on **`honest-mode`**, not `main`. `main` is a
+> disconnected stub with unrelated history; `honest-mode` is the real trunk. Clone and check out
+> `honest-mode`.
 
-## Run Locally
+## Quick start
 
-**Prerequisites:**  Node.js
-
-
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
-
----
-
-## Honest mode — the honest AI-pointer
-
-This fork adds a **Honest mode** toggle (top of the Session Controls panel) that demonstrates the same
-point-and-speak interaction two ways:
-
-- **OFF (Google baseline):** the pointing hint is treated as the *absolute source of truth*. The guide
-  acts immediately and confidently — and when a photo is genuinely ambiguous, it can route you to the
-  **wrong place, silently**.
-- **ON (honest):** the hint carries a **confidence**, and the response *scales with the situation* along
-  three axes — **confidence** (sure → ambiguous → can't tell), **commitment** (showing a map → routing you
-  → sending to a person), and **inference depth** (locate → synthesize → infer intention). It stays fluid
-  when it's sure, and asks / hedges / proposes only when a wrong guess would be both likely and costly.
-
-The headline contrast is **St Pancras vs King's Cross** — adjacent, near-identical Gothic façades. Point
-at the St Pancras photo and ask *"directions here from the London Eye"*: the baseline routes silently; the
-honest version shows a dashed amber **"?"** marker and asks *"I think that's St Pancras — or did you mean
-King's Cross next door?"* before routing.
-
-### Demo arc (run the toggle both ways)
-1. **S1 — clear landmark** (London Eye, "show me this"): honest mode acts immediately, *no* friction —
-   proves honesty isn't nagging.
-2. **S2 — St Pancras vs King's Cross**: the money shot — honest mode asks before routing.
-3. **S3 — point at nothing** ("what's that?"): an honest shrug, no fabricated marker.
-4. **S4 — "from here to there"**: directions witness-render both endpoints before sending (commitment
-   scales the friction, not just confidence).
-5. **S5 — "plan a day from these"**: the plan is *proposed as a hypothesis* and confirmed before it's built.
-6. **S6 — unprompted trip pattern**: after a few points, the guide *offers* an itinerary, states its
-   reasoning, and **never builds it unasked**.
-
-Open the **debug panel** to see the confidence drill-down (level, reason, candidates) per point.
-
-### Honest framing of this prototype's own limits
-The confidence here is a **demo-grade proxy** — a geometric margin plus a small seeded confusable-pairs
-table (`St Pancras Station ↔ King's Cross`) — **not** a research-grade perception-confidence model. That's
-on-thesis: the artifact demonstrates the *interaction grammar* (a hint carries confidence → low confidence
-triggers an honest ask), not a novel confidence estimator. Being upfront that the confidence is synthesized
-is the honesty thesis applied to the prototype itself. The `share` verb is likewise simulated (no real
-outward integration) — it exists to demonstrate the outward-commitment witness-render.
-
----
-
-## Voice backend — Gemini vs RTV2 (OpenAI Realtime)
-
-A **Voice backend** dropdown (in the Session Controls panel, under the Honest-mode toggle) runs the *same*
-point-and-speak interaction — identical hints, tools, confidence logic, and honest-mode behavior — on
-either of two live voice models, so you can A/B the experience:
-
-- **Gemini** (default) — Google's Gemini Live API.
-- **RTV2 (OpenAI Realtime)** — OpenAI's Realtime API over WebRTC.
-
-Both backends speak. Switching the dropdown while live reconnects on the new backend automatically.
-
-### Setup for RTV2
-Add your OpenAI key (with Realtime access) to `.env.local`:
-
-```
-OPENAI_API_KEY="sk-..."
+```bash
+npm install
+cp .env.example .env      # then fill in at least GEMINI_API_KEY (see "Voice backends")
+npm run dev               # Express + Vite dev server → http://localhost:3000
 ```
 
-The key stays **server-side**: `server.ts` exposes `POST /api/realtime/session`, which mints a short-lived
-**ephemeral token** the browser uses to open the WebRTC connection. The real key never reaches the client.
+The app runs fully **without any API key** for everything that doesn't need a live model — direct
+manipulation of the program surfaces, the scripted demos, the debug drawer, undo. A key is only
+needed for a live voice/typed session with the model.
 
-### Architecture
-Both backends sit behind a small `VoiceProvider` interface (`src/voice/types.ts`); the honest-mode logic
-in `App.tsx` is provider-agnostic. Adapters: `src/voice/gemini.ts`, `src/voice/openai.ts`.
+### Run modes (URL params)
 
-### Known caveats
-- **Hint timing.** Gemini streams partial transcripts mid-speech; OpenAI's transcription tends to arrive
-  at end-of-turn, so the cursor↔hint correlation can differ — the two backends may not feel identical.
-- **Vision.** Gemini receives the annotated marker frame as continuous video; OpenAI takes discrete
-  `input_image` snapshots (a sparse heartbeat + a frame coupled to each deixis hint).
-- **Secondary cues.** A few Gemini-specific context injections (image-evolve, painting/layout hints) flow
-  only to Gemini; the core deixis/honest-mode loop works on both.
-- The OpenAI path is implemented against the current GA Realtime API and verified against the docs, but
-  should be confirmed with a live key.
+| URL | What it shows |
+|---|---|
+| `http://localhost:3000/` | The desktop shell — program window, dock, talk-or-type omnibox, response rail |
+| `…/?teach=1` | Scripted teaching demo — on-element overlays, numbered steps, soft-block, fade (no key needed) |
+| `…/?rail=1` | Scripted response-rail demo — the typed card grammar, driven through the real mapper (no key needed) |
+| `…/?ramble` | The ramble-fill monitor (a separate alternate demo app) |
+
+### Scripts
+
+- `npm run dev` — dev server (tsx + Express + Vite) on port 3000
+- `npm run build` — production build (`vite build`)
+- `npm test` — the Vitest suite (~151 tests)
+- `npm run lint` — `tsc --noEmit` (type check)
+
+## Voice backends
+
+Three realtime voice providers sit behind one `VoiceProvider` interface (`src/voice/`), selectable
+in the debug drawer:
+
+- **Gemini Live** (`GEMINI_API_KEY`) — the default; continuous video + streaming transcripts.
+- **OpenAI Realtime** (`OPENAI_API_KEY`) — WebRTC. The key stays server-side: `server.ts` mints a
+  short-lived ephemeral token via `POST /api/realtime/session`; the real key never reaches the browser.
+- **Azure AI Foundry Realtime / "RTV2"** (`AZURE_OPENAI_ENDPOINT`, `AZURE_REALTIME_DEPLOYMENT`,
+  `AZURE_OPENAI_API_KEY`, optional `AZURE_TRANSCRIBE_DEPLOYMENT`) — WebSocket. Use the bare
+  resource endpoint (`https://<res>.openai.azure.com`); the provider normalizes it.
+
+Keys live in `.env` (gitignored). A live session streams continuously until ended — the menu-bar
+**traffic meter** shows exactly what's been sent (`off — nothing sent` / `live · Nf · Nh`), and an
+**idle watchdog** ends an abandoned session after 5 minutes.
+
+## Architecture
+
+The interaction grammar is a MAPE-K control loop, kept clean across every surface:
+
+**Intent** (a tool call or typed command) → **Command** → **Policy** (`decideCommit` — confirm vs
+witness) → **Effect** (`applyAction`, a pure reducer) → **Feedback** (earcon + visual toast; the
+model is contractually silent on success). Policy is kept out of Effect; undo falls out of the
+reducer + mementos for free.
+
+### Source map
+
+| Path | Responsibility |
+|---|---|
+| `src/App.tsx` | The shell orchestrator (session, deixis timing, grounding, vision frame, mounts) |
+| `src/ui/` | Vendored Radix/shadcn primitives — the design-system layer (Button, Select, Sheet, Switch, Slider, Tooltip) |
+| `src/shell/` | Desktop chrome — window, dock, menu bar, omnibox, debug drawer, traffic/idle |
+| `src/widgets/` | The four program surfaces (Word/Excel/PowerPoint/Photo) — real MockDoc-bound mini-apps |
+| `src/rail/` | The response grammar — typed cards, the honest `respondCallToRail` mapper, the rail store/renderer |
+| `src/teaching/` | Teaching overlays — the guide→teach→fade reducer, on-element scaffolding, soft-block |
+| `src/entities/` | Stable identity — `SceneEntity` ids + `resolveEchoedTarget` (the honest pointer's resolver) |
+| `src/voice/` | The pluggable realtime providers (Gemini / OpenAI / Azure) |
+| `src/prompt/` | The system prompt (`buildInstructions`) — the honest-desktop grounding grammar |
+| `src/scenarios.ts` | Single source of truth for content + `MockDoc` model + `applyAction` reducer + policy |
+| `src/telemetry.ts` | Instrumentation — deixis accuracy, grounding agreement, guidance rubric |
+| `src/ramble/` | The ramble-fill monitor (`?ramble`) — a separate demo app |
+
+## Honest about the prototype's own limits
+
+The honesty thesis is applied to the artifact itself. The pointing **confidence** is a demo-grade
+proxy (a geometric margin plus a threshold-based name resolver over hand-authored element ids), not
+a research-grade perception model — it exists to demonstrate the *interaction grammar* (a signal
+carries confidence → low confidence triggers an honest ask), not a novel estimator. The `share`
+verb is simulated (no real outward integration) — it demonstrates the outward-commitment
+witness-render. Where the model "sees," it sees a reconstructed vision frame plus the live
+DOM/structured state, not raw pixels of the whole OS. These limits are documented rather than
+hidden — being upfront about them is the thesis.
+
+## Documentation
+
+The design record is the project's memory — every substantial change went through a written
+spec → plan → subagent-reviewed implementation. Start here to understand *why* the code is shaped
+the way it is:
+
+- **`docs/superpowers/specs/`** — one design spec per feature, dated. The architecture review
+  (`2026-07-01-virtual-desktop-architecture-review.md`) is the best single overview of the whole
+  thesis and its trajectory.
+- **`docs/superpowers/plans/`** — the implementation plans those specs became.
+- **`docs/AGENTUILEARNINGS.md`** — transferable learnings on multimodal/voice-agent UI (feedback,
+  autonomy, grounding). The rubric the project is measured against.
+- **`docs/superpowers/research/2026-07-02-learning-teaching-deep-dive.md`** — the evidence base
+  for the teaching form factor.
+- **`docs/figma-workflow.md`** — the code↔design bridge: how to mirror the design tokens
+  (`src/index.css`) and the `src/ui/` component library into Figma via Code Connect, and how to
+  hand that off to another team. Code is canonical; Figma mirrors it.
+
+## Tech stack
+
+React 19 · Vite 6 · Tailwind v4 · TypeScript · Vitest · Express (dev server) · Radix UI primitives.
+
+## License
+
+Apache-2.0 (see SPDX headers in source files).
