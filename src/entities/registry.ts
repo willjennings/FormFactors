@@ -16,6 +16,7 @@ export interface SceneEntity {
   perceivedLabel?: string;
   aliases: string[];                          // normalized names the model may use
   bbox: [number, number, number, number];     // ymin,xmin,ymax,xmax (0-1000)
+  sub?: boolean;                              // true for sub-elements (cells, slides, etc.)
 }
 
 const normText = (s: string): string =>
@@ -75,17 +76,24 @@ export function resolveEchoedTarget(
   if (!text) return null;
   const t = normText(text);
   if (!t) return null;
-  const tokens = new Set(t.split(' '));
+  const tTokens = t.split(' ');
+  const tSet = new Set(tTokens);
+  // A word-boundary "contains": every token of `needle` appears as a token of `hay`, in order-agnostic set terms.
+  const tokenSubset = (needleTokens: string[], hayTokens: string[]) => {
+    const haySet = new Set(hayTokens);
+    return needleTokens.every(w => haySet.has(w));
+  };
   let best: { entity: SceneEntity; score: number } | null = null;
   for (const entity of entities) {
     for (const alias of entity.aliases) {
+      const aTokens = alias.split(' ');
       let score = 0;
-      if (t === alias) score = 1000;
-      else if (t.includes(alias)) score = 500 + alias.length;
-      else if (alias.includes(t)) score = 100 + Math.round((t.length / alias.length) * 100);
+      if (t === alias) score = 1000;                                  // exact wins outright
+      else if (tokenSubset(aTokens, tTokens)) score = 500 + alias.length; // echo contains the alias (word-boundary)
+      else if (tokenSubset(tTokens, aTokens)) score = 100 + Math.round((t.length / alias.length) * 100); // alias contains the echo
       else {
-        const overlap = alias.split(' ').filter((w) => tokens.has(w)).length;
-        score = overlap >= MIN_OVERLAP_TOKENS ? overlap : 0;
+        const overlap = aTokens.filter((w) => tSet.has(w)).length;
+        score = overlap >= MIN_OVERLAP_TOKENS ? overlap : 0;          // honesty floor: ≥2 tokens
       }
       if (score > 0 && (!best || score > best.score)) best = { entity, score };
     }

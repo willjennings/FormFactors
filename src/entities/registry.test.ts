@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildEntities, entityById, entityByTitle, displayName, resolveEchoedTarget,
+  type SceneEntity,
 } from './registry';
 import { getProgram } from '../scenarios';
 import type { PerceivedCache } from '../perception/perceiveTile';
@@ -60,5 +61,30 @@ describe('resolveEchoedTarget', () => {
   it('returns null for empty/unknown', () => {
     expect(resolveEchoedTarget(es, '')).toBeNull();
     expect(resolveEchoedTarget(es, 'the weather in Paris')).toBeNull();
+  });
+});
+
+const ent = (id: string, aliases: string[]): SceneEntity =>
+  ({ id: id as any, title: id, url: '', category: 'content', aliases, bbox: [0,0,10,10], sub: true });
+
+describe('resolveEchoedTarget — dense alias sets (C1)', () => {
+  const cells = ['a1','a3','a13','b2'].map(r => ent(`excel-cell-${r.toUpperCase()}`, [r, `cell ${r}`]));
+  it('exact echo resolves to the right cell', () => {
+    expect(resolveEchoedTarget(cells, 'cell a3')!.entity.id).toBe('excel-cell-A3');
+    expect(resolveEchoedTarget(cells, 'A3')!.entity.id).toBe('excel-cell-A3');
+  });
+  it('near neighbor does NOT cross-resolve (a3 must not match a13, nor a1)', () => {
+    const r = resolveEchoedTarget(cells, 'a3');
+    expect(r!.entity.id).toBe('excel-cell-A3');           // not A13, not A1
+  });
+  it('a13 resolves to A13, not A1 or A3', () => {
+    expect(resolveEchoedTarget(cells, 'cell a13')!.entity.id).toBe('excel-cell-A13');
+  });
+  it('slides: "slide 2" does not resolve to "slide 12"', () => {
+    const slides = [2,12].map(n => ent(`powerpoint-slide-${n}`, [`slide ${n}`]));
+    expect(resolveEchoedTarget(slides, 'slide 2')!.entity.id).toBe('powerpoint-slide-2');
+  });
+  it('below-threshold gibberish still returns null (honesty floor)', () => {
+    expect(resolveEchoedTarget(cells, 'xyzzy')).toBeNull();
   });
 });
