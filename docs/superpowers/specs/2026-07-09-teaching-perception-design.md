@@ -66,9 +66,15 @@ A transparent, plane-spanning wrapper node — `instructionLayerRef` — that to
 The model's teaching pixels **are** the user's teaching pixels, or they are absent — never a
 reconstruction that could drift.
 
-- **`snapshotNodeTransparent(node)`** in `src/vision/snapshotNode.ts` — same `toCanvas` call as
-  `snapshotNode` with `backgroundColor: undefined` so only the marks rasterize (alpha preserved).
-  Returns `null` on ANY failure (taint, detached node, library error), exactly like `snapshotNode`.
+- **Reuse `snapshotNode(node)`** — no new snapshot function. `toCanvas` (html-to-image 1.11.x)
+  fills a background **only** when `options.backgroundColor` is set, and `snapshotNode` never sets
+  it, so its output is already transparent where the node is transparent. The instruction layer is
+  transparent except where marks are drawn, so `snapshotNode` yields exactly the alpha canvas we
+  want — only the marks composite, the surface underneath shows through. (A separate
+  `*Transparent` variant would be a byte-identical duplicate.) A one-line comment at the
+  instruction-snapshot call site records that the transparency relies on `snapshotNode` omitting
+  `backgroundColor`, so a future opaque change to `snapshotNode` must not silently occlude the
+  surface. Returns `null` on ANY failure, exactly as today.
 - **`instructionSnapshotRef`** (a `useRef<HTMLCanvasElement | null>`), refreshed by a throttled
   effect that mirrors the existing surface-snapshot effect: `makeThrottle(500)` gate on a 250 ms
   interval, cleared to `null` immediately on program swap / window close, cancelled on unmount.
@@ -114,12 +120,15 @@ export function serializeTeachingState(
     fall back to the raw `entityId` string so the hint is never blank. In practice entities are
     always present for an active sequence; the fallback exists only so a stale id can never produce
     an empty, meaningless line.
-- **Wiring in App:** an effect gated on `isLive && teachingSnapshot`, computing
-  `serializeTeachingState(teachingSnapshot, entities)` and calling
-  `providerRef.current?.sendTextHint(hint)` **only when the string differs from the last sent
-  value** (a `lastTeachingHintRef` holds the previous string; `null` clears it so the next active
-  sequence re-sends). This directly honors the R2 follow-up warning about re-sending hints every
-  frame.
+- **Dedupe helper `makeChangeGate()`** (in the same file, mirroring `makeThrottle`'s closure
+  pattern): returns a `(value: string | null) => boolean` that returns `true` only when `value` is
+  non-null AND differs from the last value it returned `true` for; a `null` value resets the gate
+  (so the next active sequence re-sends) and is itself never sent. Pure and unit-testable.
+- **Wiring in App:** an effect gated on `isLive`, computing
+  `serializeTeachingState(teachingSnapshot, entities)` (or `null` when there's no snapshot) and
+  calling `providerRef.current?.sendTextHint(hint)` only when a `teachingHintGateRef` (holding one
+  `makeChangeGate()` for the component's lifetime) returns `true` for it. This directly honors the
+  R2 follow-up warning about re-sending hints every frame.
 
 ## 5. Honesty & fail-soft
 
@@ -139,10 +148,10 @@ export function serializeTeachingState(
 
 | File | Change |
 |---|---|
-| `src/vision/snapshotNode.ts` | Add `snapshotNodeTransparent(node)` — alpha-preserving variant, fail-soft to `null`. |
-| `src/teaching/teachingState.ts` *(new)* | `serializeTeachingState(state, entities)` — pure serializer, returns `string \| null`. |
-| `src/teaching/teachingState.test.ts` *(new)* | Serializer unit tests. |
-| `src/App.tsx` | `instructionLayerRef` wrapper around `TeachingLayer`; `instructionSnapshotRef` + throttled refresh effect; composite step in the vision loop; `[TEACHING STATE]` deduped send effect + `lastTeachingHintRef`. |
+| `src/vision/snapshotNode.ts` | No change — `snapshotNode` is reused as-is (already transparent-background); §3 explains why. |
+| `src/teaching/teachingState.ts` *(new)* | `serializeTeachingState(state, entities)` — pure serializer, returns `string \| null`; `makeChangeGate()` — pure send-once-per-change gate. |
+| `src/teaching/teachingState.test.ts` *(new)* | Serializer + `makeChangeGate` unit tests. |
+| `src/App.tsx` | `instructionLayerRef` wrapper around `TeachingLayer`; `instructionSnapshotRef` + throttled refresh effect; composite step in the vision loop; `[TEACHING STATE]` deduped send effect + `teachingHintGateRef`. |
 
 No changes to `TeachingLayer`, the teaching reducer, or the selectors — C2a is purely additive
 perception plumbing around them.
@@ -154,12 +163,12 @@ perception plumbing around them.
   steps listed by name (or "none"); blocked entities by displayName (or "none"); fade level value;
   paused flag; posture word maps guide→"Guiding", teach→"Teaching". Degrades gracefully when an
   entity id is absent from `entities` (falls back, never throws).
-- **Dedupe/gating logic:** extract the "send only when changed" decision as a pure helper
-  (like `makeThrottle`) and unit-test that identical successive states send once, a change sends
-  again, and a `null` resets so the next active sequence re-sends.
-- **`snapshotNodeTransparent`:** the pure throttle path (`makeThrottle`) is covered; actual
-  rasterization stays fail-soft — jsdom cannot run `html-to-image`, the same boundary as today's
-  `snapshotNode` (whose test covers only `makeThrottle`).
+- **Dedupe/gating logic (`makeChangeGate`):** identical successive values return `true` once then
+  `false`; a changed value returns `true`; a `null` returns `false` and resets, so the next
+  non-null value returns `true` again.
+- **Snapshot path:** unchanged and reused as-is; actual rasterization stays fail-soft — jsdom
+  cannot run `html-to-image`, the same boundary as today's `snapshotNode` (whose test covers only
+  `makeThrottle`).
 - **Human smoke (owed, needs an API key):** run `?teach=1` alongside a live session and confirm
   (a) the numbered rings / relate arc appear in the model's vision frame, (b) a `[TEACHING STATE]`
   hint arrives naming the active step and the blocked set, (c) advancing a step changes the hint
