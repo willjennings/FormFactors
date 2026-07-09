@@ -122,6 +122,8 @@ const KEYWORD_MAP: Record<string, string> = {
 // the App component. Swap programs (Word/Excel/PowerPoint) via the dropdown — or repoint
 // the whole demo by editing scenarios.ts.
 
+const entityArea = (e: SceneEntity) => (e.bbox[2] - e.bbox[0]) * (e.bbox[3] - e.bbox[1]);
+
 // --- DIFF 1: pointing confidence (demo-grade proxy) ---
 // This is NOT a perception-confidence model. It's a composite signal — a geometric
 // margin plus a seeded confusable-pairs table — sufficient to demonstrate the interaction
@@ -151,8 +153,7 @@ function computePointingConfidence(
     const [ymin, xmin, ymax, xmax] = o.bbox;
     return hX >= xmin && hX <= xmax && hY >= ymin && hY <= ymax;
   });
-  const areaOf = (o: SceneEntity) => (o.bbox[2]-o.bbox[0]) * (o.bbox[3]-o.bbox[1]);
-  const inner = containing.reduce((a, b) => (areaOf(b) < areaOf(a) ? b : a), found);
+  const inner = containing.reduce((a, b) => (entityArea(b) < entityArea(a) ? b : a), found);
   const strictlyContains = (outer: SceneEntity, x: SceneEntity) =>
     outer.bbox[0] <= x.bbox[0] && outer.bbox[1] <= x.bbox[1] && outer.bbox[2] >= x.bbox[2] && outer.bbox[3] >= x.bbox[3] && outer.id !== x.id;
   const competitors = containing.filter(o => o.id !== inner.id && !strictlyContains(o, inner));
@@ -2033,8 +2034,7 @@ export default function App() {
       const [ymin, xmin, ymax, xmax] = e.bbox;
       return (ymax - ymin) > 0 && x >= xmin && x <= xmax && y >= ymin && y <= ymax;
     });
-    const area = (e: SceneEntity) => (e.bbox[2] - e.bbox[0]) * (e.bbox[3] - e.bbox[1]);
-    const found = containing.length ? containing.reduce((a, b) => (area(b) < area(a) ? b : a)) : undefined;
+    const found = containing.length ? containing.reduce((a, b) => (entityArea(b) < entityArea(a) ? b : a)) : undefined;
     const hovered = found ? found.id : null;
     setHoveredId(hovered);
     hoveredIdRef.current = hovered;

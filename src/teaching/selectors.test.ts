@@ -44,4 +44,22 @@ describe('selectors', () => {
     expect(blockedElementNumbers(st, entities).sort()).toEqual([3, 4]); // ui leaf 3 + content 4; chrome 1 excluded; target 2 excluded
     expect(blockedElementNumbers(initialTeachingState(), entities)).toEqual([]);
   });
+  it('blockedElementNumbers excludes slide sub-entities (only top-level numbers)', () => {
+    const program = getProgram('powerpoint');
+    // Two slides → sub-entities powerpoint-slide-1 and powerpoint-slide-2 are produced.
+    // slide-2 would split('-').pop() = "2" = Number(2), colliding with top-level element 2 (New Slide button).
+    const doc: import('../scenarios').MockDoc = { kind: 'powerpoint', slides: ['Title slide', 'Slide 2'], transition: undefined, saved: false };
+    const entities = buildEntities(program, doc, {}, { items: program.images.map((img) => ({ id: `powerpoint-${img.id}`, bbox: { ymin: img.id, xmin: 0, ymax: img.id + 1, xmax: 1 } })) });
+    // Sequence targets element 2 (New Slide button); at fade=0 it soft-blocks the rest.
+    const st = reduce(initialTeachingState(), { type: 'teach.sequence', title: 't', taskKey: 'k', posture: 'guide',
+      steps: [{ entityId: 'powerpoint-2' as any, subgoal: 's', instruction: 'i' }] }, 0);
+    const blocked = blockedElementNumbers(st, entities);
+    // Without !e.sub, powerpoint-slide-2 leaks through and Number("2")=2 appears in blocked,
+    // colliding with the target element number — this test must fail without the fix.
+    expect(blocked).not.toContain(2);             // target element must never be in the blocked set
+    expect(blocked.every(n => n >= 1 && n <= 4)).toBe(true); // only top-level element numbers
+    expect(blocked).not.toContain(NaN);
+    // Elements 3 and 4 are the non-target, non-chrome top-level leaves.
+    expect(blocked.sort()).toEqual([3, 4]);
+  });
 });

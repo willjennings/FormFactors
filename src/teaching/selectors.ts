@@ -31,7 +31,7 @@ export function blockedEntityIds(state: TeachingState, allTileIds: EntityId[]): 
 /** The scrimmed leaf elements as numeric image ids — lets surfaces set `inert` so keyboard
  *  (Tab+Enter) cannot bypass the pointer-only scrim. Chrome ('program') is never blocked. */
 export function blockedElementNumbers(state: TeachingState, entities: SceneEntity[]): number[] {
-  const leafIds = entities.filter(e => e.category !== 'program').map(e => e.id);
+  const leafIds = entities.filter(e => e.category !== 'program' && !e.sub).map(e => e.id);
   return blockedEntityIds(state, leafIds)
     .map(id => Number(String(id).split('-').pop()))
     .filter(n => Number.isFinite(n));
