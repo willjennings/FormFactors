@@ -721,7 +721,9 @@ export default function App() {
 
   // Re-measure on window move/resize/open/close — ResizeObserver only fires on size changes,
   // so drags and reopen would otherwise leave stale bboxes (a false screen for the AI).
-  useEffect(() => { updateLayout(); }, [updateLayout, windowRect, windowOpen]);
+  // Also re-measure on doc change so dynamically-added sub-entities (e.g. new slides) get
+  // their DOM bboxes picked up immediately without requiring a window resize.
+  useEffect(() => { updateLayout(); }, [updateLayout, windowRect, windowOpen, mockDoc]);
 
   // Mount/reattach observers — re-runs when windowOpen flips so the new .program-window
   // element (which the old observer never saw) gets observed immediately on reopen.
