@@ -42,6 +42,8 @@ import type { PerceivedCache } from './perception/perceiveTile';
 import { buildEntities, entityById, entityByTitle, displayName, resolveEchoedTarget } from './entities/registry';
 import type { SceneEntity, EntityId } from './entities/registry';
 import { TeachingLayer } from './teaching/TeachingLayer';
+import { AnnotationLayer } from './annotations/AnnotationLayer';
+import type { AnnotationEvent, AnnotationState } from './annotations/types';
 import { blockedElementNumbers } from './teaching/selectors';
 import { emitFeedbackAudio, FEEDBACK_OPTIONS } from './feedback';
 import type { FeedbackMode, FeedbackEvent } from './feedback';
@@ -395,6 +397,7 @@ export default function App() {
   const [hoveredId, setHoveredId] = useState<EntityId | null>(null);
   const perceivedLabelsRef = useRef<PerceivedCache>({});
   const teachMode = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('teach');
+  const illustrateMode = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('illustrate');
   const railMode = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('rail');
   const hoveredIdRef = useRef<EntityId | null>(null);
   // Throttle state for proactive hover grounding (non-Gemini backends).
@@ -570,6 +573,8 @@ export default function App() {
   const teachingHintGateRef = useRef(makeChangeGate());
   const teachingDispatchRef = useRef<((e: TeachingEvent) => void) | null>(null);
   const [teachingSnapshot, setTeachingSnapshot] = useState<TeachingState | null>(null);
+  const annotationDispatchRef = useRef<((e: AnnotationEvent) => void) | null>(null);
+  const [annotationSnapshot, setAnnotationSnapshot] = useState<AnnotationState | null>(null);
   const blockedElements = useMemo(
     () => (teachingSnapshot ? blockedElementNumbers(teachingSnapshot, entities) : []),
     [teachingSnapshot, entities]);
@@ -2528,6 +2533,7 @@ export default function App() {
               teaching marks (and, later, the annotation renderer) as one node. */}
           <div ref={instructionLayerRef} className="absolute inset-0 pointer-events-none" data-instruction-layer>
             <TeachingLayer entities={entities} program={program} demo={teachMode} dispatchRef={teachingDispatchRef} onStateChange={setTeachingSnapshot} />
+            <AnnotationLayer entities={entities} program={program} demo={illustrateMode} dispatchRef={annotationDispatchRef} onStateChange={setAnnotationSnapshot} />
           </div>
           {/* G6 FEEDFORWARD: live "what I'll act on" preview as the cursor moves, so the user
               sees the interpretation forming BEFORE they speak (closes the gulf of execution).
