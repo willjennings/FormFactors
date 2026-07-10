@@ -1407,6 +1407,21 @@ export default function App() {
     providerRef.current?.sendTextHint('[SYSTEM: the user cancelled the action via button — drop it and wait.]');
   };
 
+  const acceptSuggestion = () => {
+    const s = pendingSuggestion;
+    if (!s) return;
+    setPendingSuggestion(null);
+    // Accept routes through the normal grammar: an actionable step is witness-rendered like any
+    // action verb (the user then confirms its details); an informational nudge just acknowledges.
+    if (s.verb) {
+      const { label, target, detail } = describeAction(s.verb, { target: s.target });
+      setPendingAction({ verb: s.verb, label, target, detail, confirmed: false });
+      emitFeedback({ outcome: 'needs-confirm', verbClass: classOf(s.verb), label: `Confirm: ${label} ${target}` });
+    } else {
+      emitFeedback({ outcome: 'committed', verbClass: 'command', label: s.label });
+    }
+  };
+
   const processInputTranscript = (text: string) => {
     addLog('info', `User: "${text}"`);
     lastTranscriptionTimeRef.current = Date.now();
@@ -2725,6 +2740,15 @@ export default function App() {
               </span>
             </div>
           )}
+          {/* C3: Tentative goal chip — shows active goal + step progress + clear button */}
+          {goalState.objective && (
+            <div className="absolute top-14 left-1/2 -translate-x-1/2 z-40 pointer-events-auto flex items-center gap-2 px-3 py-1.5 rounded-full border border-[var(--card-border)] bg-[var(--card-bg)]/90 backdrop-blur shadow-sm">
+              <span className="text-[10px] font-mono uppercase tracking-wide text-[var(--text-secondary)]">Working toward</span>
+              <span className="text-[11px] font-mono text-[var(--text-primary)] max-w-[280px] truncate">{goalState.objective}</span>
+              <span className="text-[10px] font-mono text-[var(--text-secondary)]">· {goalState.steps.filter((s) => s.done).length}/{goalState.steps.length}</span>
+              <button aria-label="Clear goal" className="text-[var(--text-secondary)] hover:text-[var(--text-primary)]" onClick={() => goalDispatch({ type: 'goal.clear' })}><X size={12} /></button>
+            </div>
+          )}
           {/* Highlight category legend — explains the colour ↔ category mapping while debug markings are on */}
           {showMarkings && (
             <div className="absolute top-3 right-3 z-50 pointer-events-none rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)]/90 backdrop-blur px-3 py-2 shadow-md">
@@ -2882,6 +2906,36 @@ export default function App() {
                 )}
               </section>
             )}
+            {pendingSuggestion && (
+              <section className="shrink-0 bg-[var(--card-bg)] border border-indigo-500/40 rounded-2xl p-6 animate-in fade-in slide-in-from-top-2 duration-300">
+                <div className="flex items-center gap-2 mb-3">
+                  <Shield size={16} className="text-indigo-500" />
+                  <span className="text-[11px] font-mono font-bold uppercase tracking-widest text-indigo-500">Next · suggested</span>
+                </div>
+                <div className="text-sm text-[var(--text-primary)] font-semibold mb-1">{pendingSuggestion.label}</div>
+                {pendingSuggestion.why && <p className="text-[11px] font-mono text-[var(--text-secondary)] mb-3">{pendingSuggestion.why}</p>}
+                <div className="flex items-center gap-2">
+                  <Button variant="primary" size="sm" onClick={() => acceptSuggestion()}>Accept</Button>
+                  <Button variant="outline" size="sm" onClick={() => setPendingSuggestion(null)}>Dismiss</Button>
+                </div>
+              </section>
+            )}
+            {pendingGoal && (
+              <section className="shrink-0 bg-[var(--card-bg)] border border-amber-500/40 rounded-2xl p-6 animate-in fade-in slide-in-from-top-2 duration-300">
+                <div className="flex items-center gap-2 mb-3">
+                  <Shield size={16} className="text-amber-500" />
+                  <span className="text-[11px] font-mono font-bold uppercase tracking-widest text-amber-500">Track this goal?</span>
+                </div>
+                <div className="text-sm font-semibold text-[var(--text-primary)] mb-2">{pendingGoal.objective}</div>
+                <ul className="text-[11px] font-mono text-[var(--text-secondary)] mb-3 list-disc pl-4">
+                  {pendingGoal.steps.map((s, i) => <li key={i}>{s.label}</li>)}
+                </ul>
+                <div className="flex items-center gap-2">
+                  <Button variant="primary" size="sm" onClick={() => { goalDispatch({ type: 'goal.set', objective: pendingGoal.objective, steps: pendingGoal.steps }); setPendingGoal(null); }}>Track it</Button>
+                  <Button variant="outline" size="sm" onClick={() => setPendingGoal(null)}>No thanks</Button>
+                </div>
+              </section>
+            )}
             {pendingAction && (
               <section className={`shrink-0 bg-[var(--card-bg)] border rounded-2xl p-6 animate-in fade-in slide-in-from-top-2 duration-300 ${pendingAction.confirmed ? 'border-green-500/50' : 'border-amber-500/40'}`}>
                 <div className="flex items-center gap-2 mb-3">
@@ -2938,6 +2992,8 @@ export default function App() {
             onSendFrequency={setSendFrequency}
             showMarkings={showMarkings}
             onShowMarkings={setShowMarkings}
+            confirmGoals={confirmGoals}
+            onConfirmGoals={setConfirmGoals}
             worldState={serializeMockDoc(mockDoc)}
             undoCount={undoStack.length}
             onUndo={handleUndo}

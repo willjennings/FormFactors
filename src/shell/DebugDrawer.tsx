@@ -30,6 +30,7 @@ type DrawerProps = {
   feedbackMode: FeedbackMode; onFeedbackMode: (v: FeedbackMode) => void;
   sendFrequency: number; onSendFrequency: (v: number) => void;
   showMarkings: boolean; onShowMarkings: (v: boolean) => void;
+  confirmGoals: boolean; onConfirmGoals: (v: boolean) => void;
   worldState: string;
   undoCount: number; onUndo: () => void;
   onEndSession: () => void; onReset: () => void; isLive: boolean;
@@ -161,6 +162,14 @@ export function DebugDrawer(props: DrawerProps) {
         hint="highlight rings + legend"
         checked={props.showMarkings}
         onCheckedChange={props.onShowMarkings}
+      />
+
+      {/* 8b. Confirm goals toggle (C3 eval: Approach A vs B) */}
+      <Switch
+        label="Confirm goals"
+        hint="on: set_goal asks first · off: tracks directly"
+        checked={props.confirmGoals}
+        onCheckedChange={props.onConfirmGoals}
       />
 
       {/* 9. Embedded-preview warning */}
