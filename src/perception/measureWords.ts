@@ -33,3 +33,65 @@ export function rectToBox(
     ((rect.right - plane.left) / plane.width) * 1000,
   ];
 }
+
+// Build a hidden div that reproduces the textarea's text layout at its exact on-screen position,
+// so Range.getClientRects() over its text node yields the words' real viewport rects.
+function buildMirror(textarea: HTMLTextAreaElement): HTMLDivElement {
+  const r = textarea.getBoundingClientRect();
+  const cs = window.getComputedStyle(textarea);
+  const mirror = document.createElement('div');
+  const copy = [
+    'fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'letterSpacing', 'textTransform',
+    'lineHeight', 'textIndent', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
+    'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth', 'boxSizing',
+  ] as const;
+  for (const p of copy) mirror.style[p as any] = cs[p as any];
+  mirror.style.position = 'fixed';
+  mirror.style.top = `${r.top}px`;
+  mirror.style.left = `${r.left}px`;
+  mirror.style.width = `${r.width}px`;
+  mirror.style.height = `${r.height}px`;
+  mirror.style.whiteSpace = 'pre-wrap';
+  mirror.style.overflowWrap = 'break-word';
+  mirror.style.wordWrap = 'break-word';
+  mirror.style.visibility = 'hidden';
+  mirror.style.pointerEvents = 'none';
+  mirror.style.overflow = 'hidden';
+  mirror.style.zIndex = '-1';
+  mirror.textContent = textarea.value;
+  return mirror;
+}
+
+/**
+ * Measure per-word boxes for a textarea via a transient mirror div + Range. Returns [] on any
+ * failure (fail-soft → whole-element pointing). Boxes are in 0-1000 plane space.
+ */
+export function measureWords(
+  textarea: HTMLTextAreaElement,
+  plane: { top: number; left: number; width: number; height: number },
+): WordBox[] {
+  const tokens = tokenizeWords(textarea.value);
+  if (!tokens.length) return [];
+  let mirror: HTMLDivElement | null = null;
+  try {
+    mirror = buildMirror(textarea);
+    document.body.appendChild(mirror);
+    const node = mirror.firstChild;
+    if (!node) return [];
+    const range = document.createRange();
+    const boxes: WordBox[] = [];
+    for (const t of tokens) {
+      range.setStart(node, t.charStart);
+      range.setEnd(node, t.charEnd);
+      const rects = range.getClientRects();
+      if (!rects.length) continue;
+      const r = rects[0]; // first fragment if the word wraps a line
+      boxes.push({ text: t.text, charStart: t.charStart, charEnd: t.charEnd, box: rectToBox(r, plane) });
+    }
+    return boxes;
+  } catch {
+    return [];
+  } finally {
+    if (mirror && mirror.parentNode) mirror.parentNode.removeChild(mirror);
+  }
+}
