@@ -2081,14 +2081,17 @@ export default function App() {
     // The other backends get sparse frames + end-of-turn transcripts, so the deixis hint can
     // land too late. Pre-inform them what's under the cursor the moment it changes (throttled,
     // silent, no response forced) — so "this/here" is grounded regardless of transcript timing.
+    // C2b: key the hint throttle on element+word so moving word→word within the Document body
+    // re-arms the passive deixis hint (word-granular grounding is this phase's whole point).
+    const hoverKey = hovered ? `${hovered}|${hoveredWordBoxRef.current?.charStart ?? ''}` : null;
     if (
       providerRef.current &&
       voiceBackendRef.current !== 'gemini' &&
       hovered &&
-      hovered !== lastHoverHintRef.current &&
+      hoverKey !== lastHoverHintRef.current &&
       now - lastHoverHintAtRef.current > HOVER_HINT_THROTTLE_MS
     ) {
-      lastHoverHintRef.current = hovered;
+      lastHoverHintRef.current = hoverKey;
       lastHoverHintAtRef.current = now;
       const hoveredResolved = displayName(found);
       const w = hoveredWordBoxRef.current;
