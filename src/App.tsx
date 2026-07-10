@@ -62,6 +62,7 @@ import { Button } from './ui/Button';
 import { clampWindow, loadWindowRect, saveWindowRect, type WindowRect } from './shell/windowState';
 import { docStatusLabel } from './widgets/surfaceModels';
 import type { TeachingEvent, TeachingState } from './teaching/types';
+import { serializeTeachingState, makeChangeGate } from './teaching/teachingState';
 import { initialRailState, reduceRail, railComplete, type RailEvent, type RailState } from './rail/railStore';
 import { respondCallToRail } from './rail/respondCallToRail';
 import { buildRailDemo } from './rail/demoRail';
@@ -564,6 +565,9 @@ export default function App() {
   // inside it is perceived for free.
   const instructionLayerRef = useRef<HTMLDivElement>(null);
   const instructionSnapshotRef = useRef<HTMLCanvasElement | null>(null);
+  // C2a: one change-gate for the component's lifetime, so the [TEACHING STATE] hint fires once per
+  // teaching-state change, not once per frame (honors the R2 re-send-every-frame follow-up).
+  const teachingHintGateRef = useRef(makeChangeGate());
   const teachingDispatchRef = useRef<((e: TeachingEvent) => void) | null>(null);
   const [teachingSnapshot, setTeachingSnapshot] = useState<TeachingState | null>(null);
   const blockedElements = useMemo(
@@ -2400,6 +2404,17 @@ export default function App() {
     const hint = formatSnapshotForModel(buildSpreadsheetSnapshot(mockDoc));
     providerRef.current?.sendTextHint(hint);
   }, [isLive, activeProgram, mockDoc]);
+
+  // C2a: send the structured [TEACHING STATE] hint alongside the overlay pixels (learnings §4:
+  // never labels-only). Deduped via the change-gate; null (no active sequence) resets it so the
+  // next sequence re-sends. Silent context — the hint tells the model not to acknowledge.
+  useEffect(() => {
+    if (!isLive) return;
+    const hint = teachingSnapshot ? serializeTeachingState(teachingSnapshot, entities) : null;
+    if (teachingHintGateRef.current(hint) && hint) {
+      providerRef.current?.sendTextHint(hint);
+    }
+  }, [isLive, teachingSnapshot, entities]);
 
   // Cleanup timeouts on unmount
   useEffect(() => {
