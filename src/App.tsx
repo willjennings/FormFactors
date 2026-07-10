@@ -2456,8 +2456,8 @@ export default function App() {
   // C2b Part A: keep wordBoxesRef in sync with the Word textarea's live layout. Cleared for
   // non-word programs so stale word boxes never leak. Fail-soft: measureWords returns [] on error.
   useEffect(() => {
+    const ta = surfaceRef.current?.querySelector('textarea') as HTMLTextAreaElement | null;
     const measure = () => {
-      const ta = surfaceRef.current?.querySelector('textarea') as HTMLTextAreaElement | null;
       const planeEl = mainContainerRef.current;
       if (activeProgram !== 'word' || !ta || !planeEl) { wordBoxesRef.current = []; return; }
       const r = planeEl.getBoundingClientRect();
@@ -2465,7 +2465,13 @@ export default function App() {
     };
     measure();
     window.addEventListener('resize', measure);
-    return () => window.removeEventListener('resize', measure);
+    ta?.addEventListener('input', measure);   // live draft (value = draft ?? text), not yet in mockDoc
+    ta?.addEventListener('scroll', measure);  // long doc scrolled → re-measure visible words
+    return () => {
+      window.removeEventListener('resize', measure);
+      ta?.removeEventListener('input', measure);
+      ta?.removeEventListener('scroll', measure);
+    };
   }, [activeProgram, mockDoc, windowRect, windowOpen]);
 
   // Cleanup timeouts on unmount
