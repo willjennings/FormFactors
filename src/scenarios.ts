@@ -425,7 +425,10 @@ const A_CELLS = ['A1', 'A2', 'A3', 'A4', 'A5', 'A6']; // the grid's A column (se
  * Pure reducer: given the current mock doc and an action verb call, return the next doc.
  * Unknown verb/arg combinations return the doc unchanged (safe by default).
  */
-export function applyAction(doc: MockDoc, verb: string, args: { target?: string; detail?: string } = {}): MockDoc {
+export function applyAction(
+  doc: MockDoc, verb: string,
+  args: { target?: string; detail?: string; charStart?: number; charEnd?: number; newText?: string } = {},
+): MockDoc {
   const detail = args.detail ?? '';
   if (verb === 'save_file') {
     if (doc.kind === 'word' && has(detail, 'as') && !has(detail, 'pdf'))
@@ -438,6 +441,12 @@ export function applyAction(doc: MockDoc, verb: string, args: { target?: string;
       if (verb === 'edit_content') {
         if (has(args.target, 'head') || has(detail, 'head')) return { ...doc, heading: detail || 'Heading' };
         return { ...doc, text: detail || doc.text };
+      }
+      if (verb === 'revise_text') {
+        const t = doc.text;
+        const s = Math.max(0, Math.min(args.charStart ?? 0, t.length));
+        const e = Math.max(s, Math.min(args.charEnd ?? s, t.length));
+        return { ...doc, text: t.slice(0, s) + (args.newText ?? '') + t.slice(e) };
       }
       return doc;
     case 'excel':
@@ -496,11 +505,22 @@ export const VERB_CLASS: Record<string, VerbClass> = {
   insert_object: 'create',
   photo_edit: 'transform',
   save_file: 'mutate',
+  revise_text: 'mutate',
   explain: 'query',
   share: 'share',
 };
 
 export const classOf = (verb: string): VerbClass => VERB_CLASS[verb] ?? 'command';
+
+export const REVISE_TOOL: VoiceTool = {
+  name: 'revise_text',
+  description: 'Rewrite a span of the Word document the user is pointing at — change a word, rephrase a sentence, or make it more formal/casual. Provide charStart and charEnd (the character range to replace, from the [CONTEXT] word span the user is pointing at, expanded to the sentence/phrase they mean) and newText (your replacement). HIGH-COMMITMENT: it is witness-rendered as a before→after diff and applied only after the user confirms. To iterate, call again with a new newText.',
+  parameters: { type: 'object', properties: {
+    charStart: { type: 'number', description: 'Start character offset (inclusive) of the span to replace.' },
+    charEnd: { type: 'number', description: 'End character offset (exclusive) of the span to replace.' },
+    newText: { type: 'string', description: 'The replacement text.' },
+  }, required: ['charStart', 'charEnd', 'newText'] },
+};
 
 // DIAL A notches (Levels of Automation). 'auto-safe' is the default.
 export type Autonomy = 'manual' | 'confirm' | 'auto-safe' | 'autonomous';

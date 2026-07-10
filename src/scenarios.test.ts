@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { applyAction, initialMockDoc, serializeMockDoc } from './scenarios';
+import type { MockDoc } from './scenarios';
 
 describe('applyAction — functional surface verbs', () => {
   it('word: Save As marks saved and records the copy filename', () => {
@@ -74,5 +75,33 @@ describe('applyAction — functional surface verbs', () => {
     expect(serializeMockDoc(word)).toContain('copy');
     const photo = applyAction(initialMockDoc('photo'), 'photo_edit', { detail: 'resize' });
     expect(serializeMockDoc(photo)).toContain('resized');
+  });
+});
+
+describe('revise_text splice', () => {
+  // narrowed so { ...d, text } is the word variant → assignable to MockDoc (no `as const`).
+  const word = (): MockDoc => {
+    const d = initialMockDoc('word');
+    return d.kind === 'word' ? { ...d, text: 'The quarterly report summary.' } : d;
+  };
+
+  it('replaces a mid-text span', () => {
+    const d = applyAction(word(), 'revise_text', { charStart: 4, charEnd: 13, newText: 'annual' });
+    expect((d as { text: string }).text).toBe('The annual report summary.');
+  });
+
+  it('clamps a span past the end and treats start>len as end', () => {
+    const d = applyAction(word(), 'revise_text', { charStart: 100, charEnd: 200, newText: '!' });
+    expect((d as { text: string }).text).toBe('The quarterly report summary.!');
+  });
+
+  it('empty newText deletes the span', () => {
+    const d = applyAction(word(), 'revise_text', { charStart: 3, charEnd: 13, newText: '' });
+    expect((d as { text: string }).text).toBe('The report summary.');
+  });
+
+  it('leaves non-word docs unchanged', () => {
+    const excel = initialMockDoc('excel');
+    expect(applyAction(excel, 'revise_text', { charStart: 0, charEnd: 1, newText: 'x' })).toEqual(excel);
   });
 });
