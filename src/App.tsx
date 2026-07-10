@@ -39,6 +39,7 @@ import {
 } from './scenarios';
 import type { ProgramId, ElementCategory, MockDoc, Program, Autonomy } from './scenarios';
 import type { PerceivedCache } from './perception/perceiveTile';
+import { measureWords, type WordBox } from './perception/measureWords';
 import { buildEntities, entityById, entityByTitle, displayName, resolveEchoedTarget } from './entities/registry';
 import type { SceneEntity, EntityId } from './entities/registry';
 import { TeachingLayer } from './teaching/TeachingLayer';
@@ -494,24 +495,22 @@ export default function App() {
   const ocrWordsRef = useRef<Record<string, OcrWord[]>>({});
   const [hoveredWord, setHoveredWord] = useState<string | null>(null);
   const hoveredWordRef = useRef<string | null>(null);
+  // C2b Part A: live per-word boxes measured from the Word textarea (replaces the retired OCR
+  // source). hoveredWordBoxRef carries the full referent (text + char span) for deixis + editing.
+  const wordBoxesRef = useRef<WordBox[]>([]);
+  const hoveredWordBoxRef = useRef<WordBox | null>(null);
 
-  // Find the OCR word (if any) under a normalized 0–1000 point, mapping each word's image-
-  // relative bbox into the live tile bbox. Returns the word text + its containing element.
-  const wordAt = (x: number, y: number): { word: string; photoTitle: string } | null => {
-    for (const obj of entitiesRef.current) {
-      const [tymin, txmin, tymax, txmax] = obj.bbox;
-      if (x < txmin || x > txmax || y < tymin || y > tymax) continue;
-      const words = ocrWordsRef.current[obj.title];
-      if (!words || words.length === 0) return null;
-      const tw = txmax - txmin, th = tymax - tymin;
-      for (const w of words) {
-        const gx0 = txmin + w.nx0 * tw, gx1 = txmin + w.nx1 * tw;
-        const gy0 = tymin + w.ny0 * th, gy1 = tymin + w.ny1 * th;
-        if (x >= gx0 && x <= gx1 && y >= gy0 && y <= gy1) return { word: w.text, photoTitle: obj.title };
-      }
-      return null;
+  // C2b: the measured word (if any) under a normalized 0-1000 point — smallest containing box.
+  const wordAt = (x: number, y: number): WordBox | null => {
+    let best: WordBox | null = null;
+    for (const w of wordBoxesRef.current) {
+      const [ymin, xmin, ymax, xmax] = w.box;
+      if (x < xmin || x > xmax || y < ymin || y > ymax) continue;
+      if (!best) { best = w; continue; }
+      const area = (b: WordBox) => (b.box[2] - b.box[0]) * (b.box[3] - b.box[1]);
+      if (area(w) < area(best)) best = w;
     }
-    return null;
+    return best;
   };
   const [pendingAction, setPendingAction] = useState<{ verb: string; label: string; target: string; detail?: string; confirmed: boolean; note?: string } | null>(null);
   // Mirror in a ref so voice callbacks (stale closures) can read the live value.
@@ -1547,12 +1546,12 @@ export default function App() {
           // G4: give the model recent referents so it can resolve cross-turn back-references
           // ("make that bold", "the chart I just made") to a concrete element.
           const refCtx = referents.promptContext();
-          // G3: if an OCR word sits under the focus point, refine the referent to that word.
+          // C2b: if a measured word sits under the focus point, refine the referent to that word.
           const sub = wordAt(hX, hY);
-          const subTag = sub && sub.photoTitle === foundObject.title ? ` (specifically the word "${sub.word}")` : '';
+          const subTag = sub ? ` (specifically the word "${sub.text}")` : '';
           const hintText = `[USER JUST SAID "${kw.toUpperCase()}" WHILE POINTING AT: ${displayName(foundObject)}${subTag}${confidenceTag}. ${isCommand ? "NOTE: This is part of an explicit command." : "NOTE: This is just a mention, stay silent unless they give a command."}${refCtx ? ` ${refCtx}` : ''}]`;
           providerRef.current?.sendTextHint(hintText);
-          if (sub && sub.photoTitle === foundObject.title) referents.note(`"${sub.word}"`, 'pointed');
+          if (sub) referents.note(`"${sub.text}"`, 'pointed');
         }
       } else {
         // SEND "NOTHING" HINT TO PREVENT GUESSING
@@ -2068,9 +2067,10 @@ export default function App() {
     setHoveredId(hovered);
     hoveredIdRef.current = hovered;
 
-    // G3: which OCR word (if any) is under the cursor — finer-grained referent + feedforward.
+    // C2b: which measured word (if any) is under the cursor — finer-grained referent + feedforward.
     const sub = hovered ? wordAt(hX, hY) : null;
-    const wordName = sub?.word ?? null;
+    hoveredWordBoxRef.current = sub;
+    const wordName = sub?.text ?? null;
     if (wordName !== hoveredWordRef.current) {
       hoveredWordRef.current = wordName;
       setHoveredWord(wordName);
@@ -2091,7 +2091,11 @@ export default function App() {
       lastHoverHintRef.current = hovered;
       lastHoverHintAtRef.current = now;
       const hoveredResolved = displayName(found);
-      providerRef.current.sendTextHint(`[CONTEXT: the cursor is currently over "${hoveredResolved}". If the user says "this", "here", or "that", they are pointing at ${hoveredResolved}. This is silent context — DO NOT RESPOND OR SPEAK.]`);
+      const w = hoveredWordBoxRef.current;
+      const wordClause = w
+        ? ` — specifically the word "${w.text}" (chars ${w.charStart}–${w.charEnd} in the document text)`
+        : '';
+      providerRef.current.sendTextHint(`[CONTEXT: the cursor is currently over "${hoveredResolved}"${wordClause}. If the user says "this", "here", or "that", they are pointing at ${w ? `the word "${w.text}"` : hoveredResolved}. This is silent context — DO NOT RESPOND OR SPEAK.]`);
     }
 
     // Only add to history if distance is enough (MIN_DISTANCE) to reduce jitter
@@ -2445,6 +2449,21 @@ export default function App() {
       providerRef.current?.sendTextHint(hint);
     }
   }, [isLive, annotationSnapshot, entities]);
+
+  // C2b Part A: keep wordBoxesRef in sync with the Word textarea's live layout. Cleared for
+  // non-word programs so stale word boxes never leak. Fail-soft: measureWords returns [] on error.
+  useEffect(() => {
+    const measure = () => {
+      const ta = surfaceRef.current?.querySelector('textarea') as HTMLTextAreaElement | null;
+      const planeEl = mainContainerRef.current;
+      if (activeProgram !== 'word' || !ta || !planeEl) { wordBoxesRef.current = []; return; }
+      const r = planeEl.getBoundingClientRect();
+      wordBoxesRef.current = measureWords(ta, { top: r.top, left: r.left, width: r.width, height: r.height });
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, [activeProgram, mockDoc, windowRect, windowOpen]);
 
   // Cleanup timeouts on unmount
   useEffect(() => {
