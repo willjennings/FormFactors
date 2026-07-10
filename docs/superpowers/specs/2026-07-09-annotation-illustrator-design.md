@@ -124,11 +124,29 @@ export function reduce(state: AnnotationState, event: AnnotationEvent): Annotati
 - `annotate.clear`: `{ annotations: [], nextId: state.nextId }` (keep the counter monotonic so ids
   never collide across clears).
 
-## 5. Rendering — `AnnotationLayer.tsx`
+## 5. Rendering — pure `geometry.ts` + `AnnotationLayer.tsx`
 
-Mounted as a second child of `instructionLayerRef`, sibling to `TeachingLayer` (App §7). Renders
-SVG marks positioned from entity bboxes in 0–1000 plane space via the same `pct(v) = v/10 %` map
-`TeachingLayer` and the relate arc use — so it inherits correct coordinate alignment in the vision
+The load-bearing math is extracted into a pure, unit-tested `src/annotations/geometry.ts` (the
+project runs vitest in the `node` environment — no jsdom/@testing-library — so correctness is
+proven by testing pure geometry, not by rendering the DOM; the JSX→SVG glue is verified by the
+`?illustrate=1` demo + tsc/build, the same boundary `TeachingLayer` lives at):
+
+```ts
+import type { SceneEntity, EntityId } from '../entities/registry';
+type Bbox = [number, number, number, number]; // ymin,xmin,ymax,xmax (0-1000)
+
+export function isDegenerate(b: Bbox): boolean;              // ymax-ymin<=0 || xmax-xmin<=0
+export function bboxOf(entities: SceneEntity[], id: EntityId): Bbox | null; // null if missing OR degenerate
+export function center(b: Bbox): { x: number; y: number };   // 0-1000
+export function unionBbox(boxes: Bbox[]): Bbox | null;       // group bounds; ignores degenerate; null if none valid
+export function placementPoint(b: Bbox, placement: LabelPlacement): { x: number; y: number }; // 0-1000 attach point just outside b
+```
+
+`AnnotationLayer.tsx` — mounted as a second child of `instructionLayerRef`, sibling to
+`TeachingLayer` (App §7). Holds its own `AnnotationState` (a `useReducer` over §4's `reduce`),
+exposes a `dispatchRef` and calls `onStateChange` — mirroring `TeachingLayer`'s seam exactly. It
+maps each annotation through `geometry.ts` and the same `pct(v) = v/10 %` conversion
+`TeachingLayer` and the relate arc use, so it inherits correct coordinate alignment in the vision
 frame automatically (verified in C2a's final review).
 
 - **arrow:** an SVG line/path from the `from` bbox edge to the `to` bbox edge with an arrowhead
@@ -194,13 +212,16 @@ don't entangle) that dispatches a short sequence (`annotate_shape circle` on a c
   drops the oldest; `annotate.clear` empties but keeps `nextId` monotonic.
 - **Pure `serializeAnnotations`:** empty → `null`; each kind rendered by name; missing entity →
   raw-id fallback (never blank); ends with `DO NOT acknowledge this message.]`.
-- **jsdom render test for `AnnotationLayer`:** an arrow between two entities renders an SVG line
-  whose endpoints track the two bboxes; a `circle` shape over a group renders an ellipse covering
-  the group bounding box; an unmeasured anchor renders nothing. (The render-test class the project
-  has owed since `TeachingLayer` — this is where a viewBox/geometry bug would hide.)
-- **Human smoke (owed, needs a key):** live `annotate_arrow`/`annotate_shape`/`annotate_label`
-  draw the right marks over the right elements; an `[ANNOTATIONS]` hint arrives naming them;
-  `annotate_clear` removes them; an unresolvable target returns an honest error to the model.
+- **Pure geometry (`geometry.ts`):** `isDegenerate` true for zero/negative extents; `bboxOf`
+  returns null for a missing OR degenerate entity; `center` midpoints a bbox; `unionBbox` covers a
+  group and ignores degenerate members (null when none valid); `placementPoint` offsets outside the
+  bbox per placement. This is where a geometry bug would hide — the honest substitute for a DOM
+  render test given the node-only test env.
+- **Human smoke (owed, needs a key OR `?illustrate=1` for the visual path):** the `?illustrate=1`
+  demo draws circle→arrow→label→clear over real controls (no key); live
+  `annotate_arrow`/`annotate_shape`/`annotate_label` draw the right marks over the right elements;
+  an `[ANNOTATIONS]` hint arrives naming them; `annotate_clear` removes them; an unresolvable target
+  returns an honest error to the model.
 
 ## 10. Files
 
@@ -209,9 +230,11 @@ don't entangle) that dispatches a short sequence (`annotate_shape circle` on a c
 | `src/annotations/types.ts` *(new)* | `Annotation` union, `AnnotationSpec`, `AnnotationEvent`, `AnnotationState`. |
 | `src/annotations/annotationStore.ts` *(new)* | `initialAnnotationState`, `reduce`, `MAX_ANNOTATIONS`. |
 | `src/annotations/annotateTools.ts` *(new)* | `ANNOTATE_TOOLS`, `annotateCallToEvent`. |
-| `src/annotations/AnnotationLayer.tsx` *(new)* | SVG renderer mounted in the C2a seam. |
+| `src/annotations/geometry.ts` *(new)* | Pure mark geometry — `bboxOf`, `center`, `unionBbox`, `placementPoint`, `isDegenerate`. |
+| `src/annotations/AnnotationLayer.tsx` *(new)* | SVG renderer (consumes `geometry.ts`) mounted in the C2a seam. |
 | `src/annotations/serialize.ts` *(new)* | `serializeAnnotations` — the `[ANNOTATIONS]` text channel. |
-| `src/annotations/*.test.ts(x)` *(new)* | Unit tests for mapper, reducer, serializer + the AnnotationLayer render test. |
+| `src/annotations/illustrateDemo.ts` *(new)* | `buildIllustrateScript` — the `?illustrate=1` demo events. |
+| `src/annotations/*.test.ts` *(new)* | Unit tests for reducer, geometry, mapper, serializer, demo script (pure node). |
 | `src/App.tsx` | Mount `AnnotationLayer`; `annotationDispatchRef` + `annotationSnapshot`; `ANNOTATE_TOOLS` in `voiceTools`; `annotate_*` routing in `handleVoiceToolCall`; the `[ANNOTATIONS]` send effect; demo wiring. |
 | `src/prompt/instructions.ts` | A short "you may illustrate" note. |
 
