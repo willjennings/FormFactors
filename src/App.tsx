@@ -57,8 +57,6 @@ import { telemetry, detectDevice } from './telemetry';
 import { referents } from './referents';
 import { CallDeduper, argsKey, parseRepair } from './coherence';
 import { assignTargetNumbers, parseTargetSelection } from './input_targets';
-import { ocrImage, terminateOcr, clearOcrCache } from './ocr';
-import type { OcrWord } from './ocr';
 import { buildSpreadsheetSnapshot, formatSnapshotForModel } from './widgets/spreadsheetData';
 import { ProgramSurface } from './widgets/ProgramSurface';
 import { ProgramWindow } from './shell/ProgramWindow';
@@ -498,9 +496,6 @@ export default function App() {
   // model has temporal context (bumped on structural layout changes, e.g. program swap).
   const callDeduperRef = useRef(new CallDeduper());
   const layoutVersionRef = useRef(0);
-  // G3 OCR sub-elements: opt-in word-level pointing. ocrWordsRef[title] = normalized words.
-  const [ocrEnabled, setOcrEnabled] = useState(false);
-  const ocrWordsRef = useRef<Record<string, OcrWord[]>>({});
   const [hoveredWord, setHoveredWord] = useState<string | null>(null);
   const hoveredWordRef = useRef<string | null>(null);
   // C2b Part A: live per-word boxes measured from the Word textarea (replaces the retired OCR
@@ -2376,13 +2371,6 @@ export default function App() {
   }, [handlePointerMove, handlePointerUp]);
 
 
-  // G3 OCR retired: this effect previously OCR-d img.url picsum stock photos and sent hints
-  // like `[OCR: "Word Ribbon" contains the text: ...]` — asserting on-screen text from images
-  // that no longer render anywhere. Retired with the picsum tiles (Task 9/10). A future pass
-  // can OCR the live surface snapshot (surfaceSnapshotRef) instead and remain honest.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { /* retired — see comment above */ }, [ocrEnabled, isLive, activeProgram]);
-
   // Tile perception retired with the picsum tiles: the surfaces ARE self-describing DOM,
   // so registered titles are literally what's on screen. The PerceivedCache seam stays
   // (buildEntities accepts it) for a future surface-snapshot-based perception pass.
@@ -2639,7 +2627,6 @@ export default function App() {
   useEffect(() => {
     return () => {
       if (transcriptionTimeoutRef.current) clearTimeout(transcriptionTimeoutRef.current);
-      void terminateOcr(); // free the OCR worker
     };
   }, []);
 
@@ -2662,8 +2649,6 @@ export default function App() {
     setUndoStack([]);
     referents.clear();
     callDeduperRef.current.reset();
-    ocrWordsRef.current = {};
-    clearOcrCache();
     setHoveredWord(null);
     layoutVersionRef.current++; // G7: structural layout change → bump scene version
     addLog('info', `Program switched to ${getProgram(id).label}`);

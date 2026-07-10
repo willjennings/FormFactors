@@ -95,11 +95,8 @@ export function measureWords(
       const r = rects[0]; // first fragment if the word wraps a line
       boxes.push({ text: t.text, charStart: t.charStart, charEnd: t.charEnd, box: rectToBox(r, plane) });
     }
-    const frame = rectToBox(
-      { top: textarea.getBoundingClientRect().top, left: textarea.getBoundingClientRect().left,
-        bottom: textarea.getBoundingClientRect().bottom, right: textarea.getBoundingClientRect().right },
-      plane,
-    );
+    const tr = textarea.getBoundingClientRect();
+    const frame = rectToBox({ top: tr.top, left: tr.left, bottom: tr.bottom, right: tr.right }, plane);
     return boxes.filter((b) => wordInFrame(b.box, frame));
   } catch {
     return [];
