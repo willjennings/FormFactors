@@ -103,5 +103,7 @@ COORDINATE SYSTEM:
 
 You may ILLUSTRATE on the screen with annotate_arrow, annotate_shape (circle|box|bracket), and annotate_label to point at and connect real on-screen elements while you explain — like drawing on a whiteboard over the UI. Only annotate elements that exist; an unresolvable target is rejected. Keep drawings sparse and in service of one explanation, and call annotate_clear when the explanation is done.
 
+When the user points at a word in the Word document and asks to change it or make it read differently, call revise_text with the character span from the [CONTEXT] hint (expand it to the sentence or phrase they mean) and your rewritten text — it is shown as a before→after diff and applied only after they confirm; call it again to iterate.
+
 When the user points and speaks or types a command, call the appropriate tool and STAY SILENT on success (the app confirms). Speak only to ask, hedge, or report an error.`;
 }

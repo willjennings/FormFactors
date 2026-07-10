@@ -36,6 +36,7 @@ import {
   decideCommit,
   AUTONOMY_OPTIONS,
   serializeMockDoc,
+  REVISE_TOOL,
 } from './scenarios';
 import type { ProgramId, ElementCategory, MockDoc, Program, Autonomy } from './scenarios';
 import type { PerceivedCache } from './perception/perceiveTile';
@@ -307,7 +308,7 @@ export default function App() {
   // Tools offered to the voice model = the kept verbs (explain, share) + the action verbs this
   // program exposes. Read at connect time; program swap reconnects (see handleProgramChange).
   const voiceTools = React.useMemo(
-    () => [...VOICE_TOOLS, ...buildActionTools(activeProgram), ...ANNOTATE_TOOLS],
+    () => [...VOICE_TOOLS, ...buildActionTools(activeProgram), ...ANNOTATE_TOOLS, ...(activeProgram === 'word' ? [REVISE_TOOL] : [])],
     [activeProgram],
   );
   const CONFUSABLE_PAIRS = React.useMemo(() => {
@@ -512,7 +513,7 @@ export default function App() {
     }
     return best;
   };
-  const [pendingAction, setPendingAction] = useState<{ verb: string; label: string; target: string; detail?: string; confirmed: boolean; note?: string } | null>(null);
+  const [pendingAction, setPendingAction] = useState<{ verb: string; label: string; target: string; detail?: string; confirmed: boolean; note?: string; charStart?: number; charEnd?: number; newText?: string } | null>(null);
   // Mirror in a ref so voice callbacks (stale closures) can read the live value.
   const pendingActionRef = useRef<typeof pendingAction>(null);
   useEffect(() => { pendingActionRef.current = pendingAction; }, [pendingAction]);
@@ -1194,6 +1195,25 @@ export default function App() {
         providerRef.current?.sendTextHint(`[DOCUMENT STATE after your edit: ${serializeMockDoc(nextDoc)}. DO NOT acknowledge this message.]`);
         providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true, done: true });
       }
+    } else if (fc.name === 'revise_text') {
+      // C2b Part B: witnessed, reversible span edit. Always witness-render the before→after diff;
+      // the user confirms via the pending-action card (confirmPendingAction applies + undo memento).
+      const a = (fc.args ?? {}) as { charStart?: number; charEnd?: number; newText?: string };
+      const doc = mockDocRef.current;
+      const cs = Number(a.charStart), ce = Number(a.charEnd);
+      if (doc.kind !== 'word' || !Number.isFinite(cs) || !Number.isFinite(ce)) {
+        addLog('tool', `Tool Call: revise_text REJECTED — needs a valid span in the Word document`);
+        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: false, error: 'revise_text needs a valid character span in the Word document.' });
+      } else {
+        const s = Math.max(0, Math.min(cs, doc.text.length));
+        const e = Math.max(s, Math.min(ce, doc.text.length));
+        const oldText = doc.text.slice(s, e);
+        const newText = String(a.newText ?? '');
+        addLog('tool', `Tool Call: revise_text(witness) — "${oldText}" → "${newText}"`);
+        setPendingAction({ verb: 'revise_text', label: 'Revise', target: `"${oldText}"`, detail: `→ "${newText}"`, confirmed: false, charStart: s, charEnd: e, newText });
+        emitFeedback({ outcome: 'needs-confirm', verbClass: 'mutate', label: `Confirm revise: "${oldText}" → "${newText}"` });
+        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true, witnessed: true });
+      }
     } else if (fc.name.startsWith('annotate_')) {
       // C2a-illustrate: entity-anchored illustration. The pure mapper resolves target names;
       // an unresolvable target fails the whole call (honest — no partial mark).
@@ -1269,7 +1289,7 @@ export default function App() {
     const p = pendingAction;
     if (!p || p.confirmed) return;
     const prevDoc = mockDocRef.current;
-    const nextDoc = applyAction(prevDoc, p.verb, { target: p.target, detail: p.detail });
+    const nextDoc = applyAction(prevDoc, p.verb, { target: p.target, detail: p.detail, charStart: p.charStart, charEnd: p.charEnd, newText: p.newText });
     mockDocRef.current = nextDoc;
     setMockDoc(nextDoc);
     setUndoStack(s => [...s, { doc: prevDoc, label: `${p.label} ${p.target}` }]);
