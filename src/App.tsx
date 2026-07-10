@@ -1199,7 +1199,17 @@ export default function App() {
       // C2b Part B: witnessed, reversible span edit. Always witness-render the before→after diff;
       // the user confirms via the pending-action card (confirmPendingAction applies + undo memento).
       const a = (fc.args ?? {}) as { charStart?: number; charEnd?: number; newText?: string };
-      const doc = mockDocRef.current;
+      // Flush any uncommitted textarea draft into mockDoc FIRST, so the model's char offsets
+      // (measured from the live textarea) and the span we splice index the SAME string. Otherwise a
+      // mid-edit draft mis-grounds the edit and the witnessed span can go stale (final-review C1/I1).
+      // Direct spread (not edit_content — its has(detail,'head') check would misfire on body text).
+      let doc = mockDocRef.current;
+      const reviseTa = surfaceRef.current?.querySelector('textarea') as HTMLTextAreaElement | null;
+      if (doc.kind === 'word' && reviseTa && reviseTa.value !== doc.text) {
+        doc = { ...doc, text: reviseTa.value };
+        mockDocRef.current = doc;
+        setMockDoc(doc);
+      }
       const cs = Number(a.charStart), ce = Number(a.charEnd);
       if (doc.kind !== 'word' || !Number.isFinite(cs) || !Number.isFinite(ce)) {
         addLog('tool', `Tool Call: revise_text REJECTED — needs a valid span in the Word document`);
