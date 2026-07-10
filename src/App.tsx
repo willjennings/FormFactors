@@ -2416,7 +2416,7 @@ export default function App() {
     };
     const interval = setInterval(tick, 250);
     return () => { cancelled = true; clearInterval(interval); };
-  }, [isLive, activeProgram, teachingSnapshot]);
+  }, [isLive, activeProgram, teachingSnapshot, annotationSnapshot]);
 
   // Send the live structured spreadsheet data alongside the pixels (learnings §4: never labels-only).
   useEffect(() => {
@@ -2464,6 +2464,8 @@ export default function App() {
     markersRef.current = [];
     setEntities([]);
     entitiesRef.current = [];
+    annotationDispatchRef.current?.({ type: 'annotate.clear' });
+    teachingDispatchRef.current?.({ type: 'teach.clear' });
     setPendingAction(null);
     const fresh = initialMockDoc(id);
     setMockDoc(fresh);
