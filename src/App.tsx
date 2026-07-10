@@ -44,6 +44,8 @@ import type { SceneEntity, EntityId } from './entities/registry';
 import { TeachingLayer } from './teaching/TeachingLayer';
 import { AnnotationLayer } from './annotations/AnnotationLayer';
 import type { AnnotationEvent, AnnotationState } from './annotations/types';
+import { ANNOTATE_TOOLS, annotateCallToEvent } from './annotations/annotateTools';
+import { serializeAnnotations } from './annotations/serialize';
 import { blockedElementNumbers } from './teaching/selectors';
 import { emitFeedbackAudio, FEEDBACK_OPTIONS } from './feedback';
 import type { FeedbackMode, FeedbackEvent } from './feedback';
@@ -304,7 +306,7 @@ export default function App() {
   // Tools offered to the voice model = the kept verbs (explain, share) + the action verbs this
   // program exposes. Read at connect time; program swap reconnects (see handleProgramChange).
   const voiceTools = React.useMemo(
-    () => [...VOICE_TOOLS, ...buildActionTools(activeProgram)],
+    () => [...VOICE_TOOLS, ...buildActionTools(activeProgram), ...ANNOTATE_TOOLS],
     [activeProgram],
   );
   const CONFUSABLE_PAIRS = React.useMemo(() => {
@@ -571,6 +573,7 @@ export default function App() {
   // C2a: one change-gate for the component's lifetime, so the [TEACHING STATE] hint fires once per
   // teaching-state change, not once per frame (honors the R2 re-send-every-frame follow-up).
   const teachingHintGateRef = useRef(makeChangeGate());
+  const annotationHintGateRef = useRef(makeChangeGate());
   const teachingDispatchRef = useRef<((e: TeachingEvent) => void) | null>(null);
   const [teachingSnapshot, setTeachingSnapshot] = useState<TeachingState | null>(null);
   const annotationDispatchRef = useRef<((e: AnnotationEvent) => void) | null>(null);
@@ -1191,6 +1194,18 @@ export default function App() {
         // (closes the action→result loop for multi-step work). Also drawn into the vision frame.
         providerRef.current?.sendTextHint(`[DOCUMENT STATE after your edit: ${serializeMockDoc(nextDoc)}. DO NOT acknowledge this message.]`);
         providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true, done: true });
+      }
+    } else if (fc.name.startsWith('annotate_')) {
+      // C2a-illustrate: entity-anchored illustration. The pure mapper resolves target names;
+      // an unresolvable target fails the whole call (honest — no partial mark).
+      const mapped = annotateCallToEvent(fc, entitiesRef.current);
+      if ('error' in mapped) {
+        addLog('tool', `Tool Call: ${fc.name} REJECTED — ${mapped.error}`);
+        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: false, error: mapped.error });
+      } else {
+        annotationDispatchRef.current?.(mapped);
+        addLog('tool', `Tool Call: ${fc.name}`);
+        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true });
       }
     }
   };
@@ -2420,6 +2435,16 @@ export default function App() {
       providerRef.current?.sendTextHint(hint);
     }
   }, [isLive, teachingSnapshot, entities]);
+
+  // C2a-illustrate: send the [ANNOTATIONS] hint alongside the marks (learnings §4). Deduped via
+  // the change-gate; empty-entities guard mirrors the teaching hint (no id-only payload mid-swap).
+  useEffect(() => {
+    if (!isLive || entities.length === 0) return;
+    const hint = annotationSnapshot ? serializeAnnotations(annotationSnapshot, entities) : null;
+    if (annotationHintGateRef.current(hint) && hint) {
+      providerRef.current?.sendTextHint(hint);
+    }
+  }, [isLive, annotationSnapshot, entities]);
 
   // Cleanup timeouts on unmount
   useEffect(() => {

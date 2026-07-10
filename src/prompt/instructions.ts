@@ -101,5 +101,7 @@ ${ACTIONS_SECTION}
 COORDINATE SYSTEM:
 - The entire view is 1000x1000. The program window's elements are at the coordinates given in layout updates.
 
+You may ILLUSTRATE on the screen with annotate_arrow, annotate_shape (circle|box|bracket), and annotate_label to point at and connect real on-screen elements while you explain — like drawing on a whiteboard over the UI. Only annotate elements that exist; an unresolvable target is rejected. Keep drawings sparse and in service of one explanation, and call annotate_clear when the explanation is done.
+
 When the user points and speaks or types a command, call the appropriate tool and STAY SILENT on success (the app confirms). Speak only to ask, hedge, or report an error.`;
 }
