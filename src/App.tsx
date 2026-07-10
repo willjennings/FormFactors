@@ -2396,7 +2396,7 @@ export default function App() {
     };
     const interval = setInterval(tick, 250);
     return () => { cancelled = true; clearInterval(interval); };
-  }, [isLive, activeProgram]);
+  }, [isLive, activeProgram, teachingSnapshot]);
 
   // Send the live structured spreadsheet data alongside the pixels (learnings §4: never labels-only).
   useEffect(() => {
@@ -2409,7 +2409,7 @@ export default function App() {
   // never labels-only). Deduped via the change-gate; null (no active sequence) resets it so the
   // next sequence re-sends. Silent context — the hint tells the model not to acknowledge.
   useEffect(() => {
-    if (!isLive) return;
+    if (!isLive || entities.length === 0) return;
     const hint = teachingSnapshot ? serializeTeachingState(teachingSnapshot, entities) : null;
     if (teachingHintGateRef.current(hint) && hint) {
       providerRef.current?.sendTextHint(hint);
