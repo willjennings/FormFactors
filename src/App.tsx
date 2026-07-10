@@ -528,11 +528,6 @@ export default function App() {
   // Witness semantics (spec §2): focus moves to Confirm on open; Esc cancels. Non-modal —
   // no trap, the desktop stays pointable while confirming.
   const confirmBtnRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    if ((pendingAction && !pendingAction.confirmed) || (shareRequest && !shareRequest.confirmed) || (actRequest && !actRequest.confirmed)) {
-      confirmBtnRef.current?.focus();
-    }
-  }, [pendingAction, shareRequest, actRequest]);
 
   // --- The two control dials ---
   // DIAL A (autonomy/friction): how readily verbs commit vs. witness-render first.
@@ -596,6 +591,16 @@ export default function App() {
   // UI-pending states rendered by the goal surfaces (Task 5):
   const [pendingGoal, setPendingGoal] = useState<{ objective: string; steps: { label: string; verb?: string; target?: string }[] } | null>(null);
   const [pendingSuggestion, setPendingSuggestion] = useState<GoalProposal | null>(null);
+  const pendingGoalRef = useRef(pendingGoal);
+  useEffect(() => { pendingGoalRef.current = pendingGoal; }, [pendingGoal]);
+  const pendingSuggestionRef = useRef(pendingSuggestion);
+  useEffect(() => { pendingSuggestionRef.current = pendingSuggestion; }, [pendingSuggestion]);
+  // Focus precedence: pendingAction > actRequest > shareRequest > pendingGoal > pendingSuggestion.
+  useEffect(() => {
+    if ((pendingAction && !pendingAction.confirmed) || (shareRequest && !shareRequest.confirmed) || (actRequest && !actRequest.confirmed) || pendingGoal || pendingSuggestion) {
+      confirmBtnRef.current?.focus();
+    }
+  }, [pendingAction, shareRequest, actRequest, pendingGoal, pendingSuggestion]);
 
   const blockedElements = useMemo(
     () => (teachingSnapshot ? blockedElementNumbers(teachingSnapshot, entities) : []),
@@ -1356,6 +1361,7 @@ export default function App() {
     if (nextDoc === prevDoc) return;
     mockDocRef.current = nextDoc;
     setMockDoc(nextDoc);
+    goalDispatch({ type: 'goal.actionCommitted', verb, target: args.target });
     const d = describeAction(verb, args);
     setUndoStack(s => [...s, { doc: prevDoc, label: `${d.label} ${d.target}` }]);
     lastInputModalityRef.current = 'direct';
@@ -1410,16 +1416,32 @@ export default function App() {
   const acceptSuggestion = () => {
     const s = pendingSuggestion;
     if (!s) return;
+    // I1: don't clobber an in-flight witnessed action awaiting the user.
+    if (pendingActionRef.current && !pendingActionRef.current.confirmed) return;
     setPendingSuggestion(null);
-    // Accept routes through the normal grammar: an actionable step is witness-rendered like any
-    // action verb (the user then confirms its details); an informational nudge just acknowledges.
-    if (s.verb) {
+    if (!s.verb) { emitFeedback({ outcome: 'committed', verbClass: 'command', label: s.label }); return; }
+    // C1: route by verb class through the SAME grammar handleVoiceToolCall uses. NEVER funnel a
+    // non-document verb through applyAction — share/act_on/explain match no applyAction branch, so
+    // they would no-op yet still push undo, mark the goal step done (false progress), and claim an
+    // apply that never happened.
+    if (s.verb === 'share') {
+      setShareRequest({ recipient: s.target ?? '', payload: s.label, confirmed: false });
+      emitFeedback({ outcome: 'needs-confirm', verbClass: 'share', label: `Confirm: share with ${s.target ?? ''}` });
+      return;
+    }
+    if (s.verb === 'act_on') {
+      setActRequest({ target: s.target ?? '', intent: s.label, confirmed: false });
+      emitFeedback({ outcome: 'needs-confirm', verbClass: 'share', label: `Confirm: ${s.label}` });
+      return;
+    }
+    if (ACTION_VERB_NAMES.includes(s.verb)) {
       const { label, target, detail } = describeAction(s.verb, { target: s.target });
       setPendingAction({ verb: s.verb, label, target, detail, confirmed: false });
       emitFeedback({ outcome: 'needs-confirm', verbClass: classOf(s.verb), label: `Confirm: ${label} ${target}` });
-    } else {
-      emitFeedback({ outcome: 'committed', verbClass: 'command', label: s.label });
+      return;
     }
+    // explain / revise_text / unknown → acknowledge, never fake a document apply.
+    emitFeedback({ outcome: 'committed', verbClass: classOf(s.verb), label: s.label });
   };
 
   const processInputTranscript = (text: string) => {
@@ -1895,6 +1917,8 @@ export default function App() {
         if (pendingActionRef.current && !pendingActionRef.current.confirmed) { cancelPendingAction(); return; }
         if (shareRequestRef.current && !shareRequestRef.current.confirmed) { cancelShare(); return; }
         if (actRequestRef.current && !actRequestRef.current.confirmed) { cancelAct(); return; }
+        if (pendingGoalRef.current) { setPendingGoal(null); return; }
+        if (pendingSuggestionRef.current) { setPendingSuggestion(null); return; }
       }
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) { e.preventDefault(); handleUndo(); return; }
@@ -2915,7 +2939,7 @@ export default function App() {
                 <div className="text-sm text-[var(--text-primary)] font-semibold mb-1">{pendingSuggestion.label}</div>
                 {pendingSuggestion.why && <p className="text-[11px] font-mono text-[var(--text-secondary)] mb-3">{pendingSuggestion.why}</p>}
                 <div className="flex items-center gap-2">
-                  <Button variant="primary" size="sm" onClick={() => acceptSuggestion()}>Accept</Button>
+                  <Button variant="primary" size="sm" ref={!pendingGoal && !shareRequest && !actRequest && !pendingAction ? confirmBtnRef : undefined} onClick={() => acceptSuggestion()}>Accept</Button>
                   <Button variant="outline" size="sm" onClick={() => setPendingSuggestion(null)}>Dismiss</Button>
                 </div>
               </section>
@@ -2931,7 +2955,7 @@ export default function App() {
                   {pendingGoal.steps.map((s, i) => <li key={i}>{s.label}</li>)}
                 </ul>
                 <div className="flex items-center gap-2">
-                  <Button variant="primary" size="sm" onClick={() => { goalDispatch({ type: 'goal.set', objective: pendingGoal.objective, steps: pendingGoal.steps }); setPendingGoal(null); }}>Track it</Button>
+                  <Button variant="primary" size="sm" ref={!shareRequest && !actRequest && !pendingAction ? confirmBtnRef : undefined} onClick={() => { goalDispatch({ type: 'goal.set', objective: pendingGoal.objective, steps: pendingGoal.steps }); setPendingGoal(null); }}>Track it</Button>
                   <Button variant="outline" size="sm" onClick={() => setPendingGoal(null)}>No thanks</Button>
                 </div>
               </section>
