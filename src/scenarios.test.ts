@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { applyAction, initialMockDoc, serializeMockDoc } from './scenarios';
+import { applyAction, initialMockDoc, serializeMockDoc, ACT_TOOL, classOf } from './scenarios';
 import type { MockDoc } from './scenarios';
 
 describe('applyAction — functional surface verbs', () => {
@@ -75,6 +75,20 @@ describe('applyAction — functional surface verbs', () => {
     expect(serializeMockDoc(word)).toContain('copy');
     const photo = applyAction(initialMockDoc('photo'), 'photo_edit', { detail: 'resize' });
     expect(serializeMockDoc(photo)).toContain('resized');
+  });
+});
+
+describe('act_on tool', () => {
+  it('is defined with the outward-action params and simulation note', () => {
+    expect(ACT_TOOL.name).toBe('act_on');
+    const props = (ACT_TOOL.parameters as { properties: Record<string, unknown>; required: string[] });
+    expect(Object.keys(props.properties)).toEqual(expect.arrayContaining(['target', 'intent', 'details', 'confirm']));
+    expect(props.required).toEqual(['target', 'intent']);
+    expect(ACT_TOOL.description.toLowerCase()).toContain('simulated');
+  });
+
+  it('classifies act_on as an outward (share-class) verb', () => {
+    expect(classOf('act_on')).toBe('share');
   });
 });
 

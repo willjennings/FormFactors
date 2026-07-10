@@ -508,6 +508,7 @@ export const VERB_CLASS: Record<string, VerbClass> = {
   revise_text: 'mutate',
   explain: 'query',
   share: 'share',
+  act_on: 'share',
 };
 
 export const classOf = (verb: string): VerbClass => VERB_CLASS[verb] ?? 'command';
@@ -520,6 +521,17 @@ export const REVISE_TOOL: VoiceTool = {
     charEnd: { type: 'number', description: 'End character offset (exclusive) of the span to replace.' },
     newText: { type: 'string', description: 'The replacement text.' },
   }, required: ['charStart', 'charEnd', 'newText'] },
+};
+
+export const ACT_TOOL: VoiceTool = {
+  name: 'act_on',
+  description: 'Perform an outward real-world action on what an on-screen word names — e.g. reserve a table, call, or look it up. Provide target (the name, e.g. a restaurant), intent (what to do, e.g. "reserve a table"), and optional details. OUTWARD, high-commitment, and SIMULATED: call WITHOUT confirm to witness-render the request first; call with confirm=true only after the user explicitly approves. Nothing is really sent, booked, or dialed.',
+  parameters: { type: 'object', properties: {
+    target: { type: 'string', description: 'The thing the word names (e.g. a restaurant or person).' },
+    intent: { type: 'string', description: 'The outward action, e.g. "reserve a table", "call".' },
+    details: { type: 'string', description: 'Optional specifics, e.g. "party of 4 at 7pm".' },
+    confirm: { type: 'boolean', description: 'Set true ONLY after the user explicitly confirms. Omit to witness-render first.' },
+  }, required: ['target', 'intent'] },
 };
 
 // DIAL A notches (Levels of Automation). 'auto-safe' is the default.
