@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useReducer } from 'react';
 import { GoogleGenAI, Modality, GenerateContentResponse } from '@google/genai';
 import type { VoiceTool, VoiceProvider, ProviderKind } from './voice/types';
 import {
@@ -70,6 +70,9 @@ import { clampWindow, loadWindowRect, saveWindowRect, type WindowRect } from './
 import { docStatusLabel } from './widgets/surfaceModels';
 import type { TeachingEvent, TeachingState } from './teaching/types';
 import { serializeTeachingState, makeChangeGate } from './teaching/teachingState';
+import { GOAL_TOOLS, goalCallToEvent, validateSuggestion, type GoalProposal } from './goal/goalTools';
+import { initialGoalState, reduce as goalReduce, type GoalState } from './goal/goalStore';
+import { serializeGoalState } from './goal/serialize';
 import { initialRailState, reduceRail, railComplete, type RailEvent, type RailState } from './rail/railStore';
 import { respondCallToRail } from './rail/respondCallToRail';
 import { buildRailDemo } from './rail/demoRail';
@@ -309,7 +312,7 @@ export default function App() {
   // Tools offered to the voice model = the kept verbs (explain, share) + the action verbs this
   // program exposes. Read at connect time; program swap reconnects (see handleProgramChange).
   const voiceTools = React.useMemo(
-    () => [...VOICE_TOOLS, ...buildActionTools(activeProgram), ...ANNOTATE_TOOLS, ...(activeProgram === 'word' ? [REVISE_TOOL] : []), ACT_TOOL],
+    () => [...VOICE_TOOLS, ...buildActionTools(activeProgram), ...ANNOTATE_TOOLS, ...(activeProgram === 'word' ? [REVISE_TOOL] : []), ACT_TOOL, ...GOAL_TOOLS],
     [activeProgram],
   );
   const CONFUSABLE_PAIRS = React.useMemo(() => {
@@ -582,6 +585,18 @@ export default function App() {
   const [teachingSnapshot, setTeachingSnapshot] = useState<TeachingState | null>(null);
   const annotationDispatchRef = useRef<((e: AnnotationEvent) => void) | null>(null);
   const [annotationSnapshot, setAnnotationSnapshot] = useState<AnnotationState | null>(null);
+
+  const [goalState, goalDispatch] = useReducer(goalReduce, undefined, initialGoalState);
+  const goalStateRef = useRef<GoalState>(goalState);
+  useEffect(() => { goalStateRef.current = goalState; }, [goalState]);
+  const goalHintGateRef = useRef(makeChangeGate());
+  const [confirmGoals, setConfirmGoals] = useState(false); // C3 eval toggle: On = Approach A (confirm set_goal)
+  const confirmGoalsRef = useRef(confirmGoals);
+  useEffect(() => { confirmGoalsRef.current = confirmGoals; }, [confirmGoals]);
+  // UI-pending states rendered by the goal surfaces (Task 5):
+  const [pendingGoal, setPendingGoal] = useState<{ objective: string; steps: { label: string; verb?: string; target?: string }[] } | null>(null);
+  const [pendingSuggestion, setPendingSuggestion] = useState<GoalProposal | null>(null);
+
   const blockedElements = useMemo(
     () => (teachingSnapshot ? blockedElementNumbers(teachingSnapshot, entities) : []),
     [teachingSnapshot, entities]);
@@ -1185,6 +1200,7 @@ export default function App() {
         mockDocRef.current = nextDoc;
         setMockDoc(nextDoc);
         setUndoStack(s => [...s, { doc: prevDoc, label: phrase }]); // memento for undo
+        goalDispatch({ type: 'goal.actionCommitted', verb: fc.name, target: args.target });
         setPendingAction({ verb: fc.name, label, target, detail, confirmed: true });
         emitFeedback({ outcome: 'committed', verbClass, label: phrase });
         // G4: register newly-created objects so "send the chart I just made" resolves later.
@@ -1249,6 +1265,34 @@ export default function App() {
         emitFeedback({ outcome: 'committed', verbClass: 'share', label: `${intent} → ${target} (simulated)` });
         providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true, simulated: true });
         providerRef.current?.sendTextHint('[SYSTEM: that was SIMULATED — nothing was really sent, booked, or dialed. Do not claim a real action happened.]');
+      }
+    } else if (fc.name === 'set_goal' || fc.name === 'suggest_next') {
+      // C3: the LLM proposes; the structured state guards. set_goal is confirm-gated by the toggle;
+      // suggest_next must pass validateSuggestion before it can surface as an offer.
+      const mapped = goalCallToEvent(fc);
+      if ('error' in mapped) {
+        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: false, error: mapped.error });
+      } else if (mapped.kind === 'set') {
+        const ev = mapped.event as Extract<import('./goal/goalStore').GoalEvent, { type: 'goal.set' }>;
+        if (confirmGoalsRef.current) {
+          setPendingGoal({ objective: ev.objective, steps: ev.steps }); // Approach A: confirm card (Task 5)
+          addLog('tool', `Tool Call: set_goal(witness) — "${ev.objective}"`);
+        } else {
+          goalDispatch(ev); // Approach B: track directly (tentative chip)
+          addLog('tool', `Tool Call: set_goal — "${ev.objective}"`);
+        }
+        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true });
+      } else {
+        const proposal = mapped.proposal as Extract<GoalProposal, { kind: 'suggest' }>;
+        const reason = validateSuggestion(goalStateRef.current, proposal);
+        if (reason) {
+          addLog('tool', `Tool Call: suggest_next REJECTED — ${reason}`);
+          providerRef.current?.sendToolResponse(fc.id, fc.name, { success: false, error: reason });
+        } else {
+          setPendingSuggestion(proposal);
+          addLog('tool', `Tool Call: suggest_next — "${proposal.label}"`);
+          providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true, offered: true });
+        }
       }
     } else if (fc.name.startsWith('annotate_')) {
       // C2a-illustrate: entity-anchored illustration. The pure mapper resolves target names;
@@ -1329,6 +1373,7 @@ export default function App() {
     mockDocRef.current = nextDoc;
     setMockDoc(nextDoc);
     setUndoStack(s => [...s, { doc: prevDoc, label: `${p.label} ${p.target}` }]);
+    goalDispatch({ type: 'goal.actionCommitted', verb: p.verb, target: p.target });
     telemetry.action(p.verb, classOf(p.verb), 'commit', 'direct');
     emitFeedback({ outcome: 'committed', verbClass: classOf(p.verb), label: `${p.label} ${p.target}` });
     setPendingAction({ ...p, confirmed: true });
@@ -2520,6 +2565,15 @@ export default function App() {
       providerRef.current?.sendTextHint(hint);
     }
   }, [isLive, annotationSnapshot, entities]);
+
+  // C3: keep the model's view equal to the goal store's truth. Deduped; gated on a live session.
+  useEffect(() => {
+    if (!isLive) return;
+    const hint = serializeGoalState(goalState);
+    if (goalHintGateRef.current(hint) && hint) {
+      providerRef.current?.sendTextHint(hint);
+    }
+  }, [isLive, goalState]);
 
   // C2b Part A: keep wordBoxesRef in sync with the Word textarea's live layout. Cleared for
   // non-word programs so stale word boxes never leak. Fail-soft: measureWords returns [] on error.

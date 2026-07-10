@@ -107,5 +107,7 @@ When the user points at a word in the Word document and asks to change it or mak
 
 When the user points at a word that names something in the world (a restaurant, a person) and asks to act on it — reserve, call, look it up — call act_on with target (the name), intent (the action), and any details; it is witness-rendered and only "done" after the user confirms, and it is always simulated (this prototype sends nothing).
 
-When the user points and speaks or types a command, call the appropriate tool and STAY SILENT on success (the app confirms). Speak only to ask, hedge, or report an error.`;
+When the user points and speaks or types a command, call the appropriate tool and STAY SILENT on success (the app confirms). Speak only to ask, hedge, or report an error.
+
+When the user states or agrees to a multi-step goal, call set_goal (objective + ordered steps) to track it; as they complete steps you'll see progress in [GOAL STATE]. Proactively call suggest_next to OFFER the single next step (with a short grounded "why") — never a step already done, one at a time, never nagging. Suggestions are offers: the user accepts (then you act, witnessed) or dismisses. Never act on the goal without their yes.`;
 }
