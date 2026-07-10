@@ -559,6 +559,11 @@ export default function App() {
   useEffect(() => { saveWindowRect(activeProgram, windowRect); }, [activeProgram, windowRect]);
   const surfaceRef = useRef<HTMLDivElement>(null);
   const surfaceSnapshotRef = useRef<HTMLCanvasElement | null>(null);
+  // C2a: the instructional-overlay layer (teaching marks today, annotations later) + its
+  // WYSIWYG snapshot for the vision frame. The wrapper is the general seam; anything rendered
+  // inside it is perceived for free.
+  const instructionLayerRef = useRef<HTMLDivElement>(null);
+  const instructionSnapshotRef = useRef<HTMLCanvasElement | null>(null);
   const teachingDispatchRef = useRef<((e: TeachingEvent) => void) | null>(null);
   const [teachingSnapshot, setTeachingSnapshot] = useState<TeachingState | null>(null);
   const blockedElements = useMemo(
@@ -2299,6 +2304,14 @@ export default function App() {
         ctx.fillText(`M${i+1}`, mx, my - 15);
       });
 
+      // C2a: composite the WYSIWYG teaching/annotation overlay over the plane region. Transparent
+      // except where marks are drawn; drawn at full frame extent because the layer spans the same
+      // 0-1000 plane the window is reconstructed in. null → omitted (honest), never a fake mark.
+      const iCanvas = instructionSnapshotRef.current;
+      if (iCanvas) {
+        try { ctx.drawImage(iCanvas, 0, 0, VISION_SIZE, VISION_SIZE); } catch { /* keep the frame clean */ }
+      }
+
       // DOCUMENT STRIP (G2): render the live mock-doc state so the model sees the result of its
       // own edits — closes the action→result loop for multi-step work.
       ctx.fillStyle = '#0f172a';
@@ -2356,6 +2369,26 @@ export default function App() {
       if (!node) { surfaceSnapshotRef.current = null; return; } // closed window — clear stale pixels
       const canvas = await snapshotNode(node);
       if (!cancelled && canvas) surfaceSnapshotRef.current = canvas;
+    };
+    const interval = setInterval(tick, 250);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [isLive, activeProgram]);
+
+  // C2a: refresh the instructional-overlay snapshot (teaching marks) — throttled, fail-soft.
+  // Reuses snapshotNode: the layer is transparent except where marks are drawn, and snapshotNode
+  // omits backgroundColor, so only the marks composite (surface shows through). null (snapshot
+  // failed or window closed) → the overlay is omitted from the frame, never faked.
+  useEffect(() => {
+    instructionSnapshotRef.current = null; // clear on program swap so marks never carry over
+    if (!isLive) return;
+    let cancelled = false;
+    const gate = makeThrottle(500);
+    const tick = async () => {
+      if (cancelled || !gate(Date.now())) return;
+      const node = instructionLayerRef.current;
+      if (!node) { instructionSnapshotRef.current = null; return; }
+      const canvas = await snapshotNode(node);
+      if (!cancelled) instructionSnapshotRef.current = canvas; // canvas on success, null on failure
     };
     const interval = setInterval(tick, 250);
     return () => { cancelled = true; clearInterval(interval); };
@@ -2475,7 +2508,12 @@ export default function App() {
             height={mainSize.height}
             className={`absolute inset-0 z-50 pointer-events-none opacity-100 transition-opacity duration-300`}
           />
-          <TeachingLayer entities={entities} program={program} demo={teachMode} dispatchRef={teachingDispatchRef} onStateChange={setTeachingSnapshot} />
+          {/* C2a: the instructional-overlay seam. z-auto wrapper preserves TeachingLayer's own
+              z-[60] stacking and plane geometry; it exists so the vision frame can snapshot the
+              teaching marks (and, later, the annotation renderer) as one node. */}
+          <div ref={instructionLayerRef} className="absolute inset-0 pointer-events-none" data-instruction-layer>
+            <TeachingLayer entities={entities} program={program} demo={teachMode} dispatchRef={teachingDispatchRef} onStateChange={setTeachingSnapshot} />
+          </div>
           {/* G6 FEEDFORWARD: live "what I'll act on" preview as the cursor moves, so the user
               sees the interpretation forming BEFORE they speak (closes the gulf of execution).
               Shown with or without a session — the pointer is alive offline; only hints cost. */}
