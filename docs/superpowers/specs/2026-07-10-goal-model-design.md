@@ -17,8 +17,14 @@ Decision record:
   talk past.
 - **A suggestion is an offer, never an action.** Accepting routes through the existing witnessed
   action flow — nothing new bypasses confirmation. The agent never auto-advances.
-- **Honest by grounding:** the goal is stated/confirmed (not a silent guess acted upon); progress
-  is read from real committed actions; suggestions are validated against deterministic state.
+- **Honest by grounding:** progress is read from real committed actions; suggestions are validated
+  against deterministic state; accepting a suggestion goes through witness/commit.
+- **Goal-confirmation is an evaluation TOGGLE** (`confirmGoals`, in the debug drawer), because this
+  is a research prototype for comparing interaction form factors. **On (Approach A):** `set_goal`
+  witness-confirms before tracking (conservative baseline). **Off (Approach B, default):** `set_goal`
+  tracks directly as a tentative, dismissable goal chip (the thesis-fit — gate the *action*, not the
+  no-op context). Everything downstream (the chip, `validateSuggestion`, Accept → witnessed flow) is
+  identical in both modes; the toggle only gates whether `set_goal` passes a confirm step first.
 
 ---
 
@@ -116,16 +122,28 @@ export function validateSuggestion(state: GoalState, proposal: GoalProposal): st
   render. On failure the app returns the reason to the model (no surface, no nag). On success it
   renders the offer card (§6). The structured state is the guard the LLM cannot bypass.
 
-## 5. Confirmation of the goal
+## 5. Setting the goal — the `confirmGoals` evaluation toggle
 
-`set_goal` does not silently start tracking. The app **uniformly** witness-renders the proposed
-objective + steps (reusing the pending-confirmation pattern) and the user confirms — *then*
-`goal.set` commits. One rule, no branching on whether the goal was user-declared or agent-inferred:
-the app can't reliably tell the two apart (the model calls `set_goal` in both cases), and a quick
-confirm of a goal the user just stated is cheap and unambiguous. Rationale: the honesty thesis
-forbids acting on an inferred goal without an explicit yes, and a tracked goal that drives
-suggestions is consequential enough to confirm once. Cancelling the confirmation leaves no goal
-tracked.
+Because this is a research prototype for comparing form factors, goal-establishment is a **toggle**
+(`confirmGoals`, a `Switch` in the debug drawer, mirroring `showMarkings`; App state, default
+**Off**). Both modes are built; the toggle only gates whether `set_goal` passes a confirm step.
+
+- **Off — Approach B (default, the thesis-fit):** a `set_goal` call tracks the goal immediately.
+  It shows as a **tentative, dismissable goal chip** — *"Working toward: get the report ready to
+  send · 2/4 · ✕"* — framed as the agent's *working assumption*, never asserted as fact. The user
+  clears it in one tap or restates to correct it. Rationale: setting a goal touches nothing in the
+  world; it only establishes context that drives offers, and every offer is *already* gated
+  (`validateSuggestion` + Accept → witnessed flow). Putting the yes on the no-op context is
+  belt-and-suspenders; B puts it where the consequence is.
+
+- **On — Approach A (conservative baseline):** a `set_goal` call first **witness-renders** the
+  proposed objective + steps (reusing the pending-confirmation pattern); the user confirms — *then*
+  `goal.set` commits and the goal chip appears. Cancelling leaves no goal tracked. Prevents a
+  wrongly-inferred goal from ever starting, at the cost of a confirm step on every goal.
+
+Everything after the goal is tracked — the chip, `validateSuggestion`, the offer card, Accept →
+witnessed flow — is identical in both modes. The toggle exists so the friction-vs-safety tradeoff
+can be measured with real users, not guessed.
 
 ## 6. The suggestion surface — a next-step offer card
 
@@ -146,6 +164,11 @@ why: it's saved and formatted — the last step of "get the report ready to send
 - **Dismiss** clears the suggestion.
 - **At most one** suggestion is active at a time; a new `suggest_next` replaces the prior. No nagging.
 
+**The goal chip** (both modes) is the second surface: a small, always-visible, one-tap-dismissable
+indicator of the tracked objective + progress (*"Working toward: … · 2/4 · ✕"*), placed in the
+shell chrome (near the menu bar / omnibox). In Approach B it appears immediately (tentative wording);
+in Approach A it appears after the confirm. Dismissing it dispatches `goal.clear`.
+
 ## 7. Perception (the `[GOAL STATE]` hint)
 
 A pure `serializeGoalState(state): string | null` emits a deduped `[GOAL STATE: objective "…" — step
@@ -156,8 +179,13 @@ vision-frame change.
 
 ## 8. Honesty invariants
 
-- **Stated/confirmed, not guessed:** a goal is tracked only after `set_goal` is confirmed (or
-  user-declared); the agent never acts on an inferred goal without a yes.
+- **The yes is on the action, not the context:** setting a goal touches nothing in the world; the
+  consequential gate is `validateSuggestion` + Accept → witnessed flow, which apply in both toggle
+  modes. `confirmGoals: On` adds an upfront confirm of the goal itself (Approach A); `Off` relies on
+  the tentative, dismissable goal chip (Approach B). Either way the agent never *acts* on an inferred
+  goal without a yes.
+- **Working assumption, not asserted fact:** the goal chip is framed tentatively and is always
+  one-tap-dismissable — the agent presents its working model, it does not claim to know your goal.
 - **Deterministic progress:** steps are marked done from committed actions, never inferred.
 - **Validated suggestions:** every `suggest_next` passes `validateSuggestion` (no done steps, must
   have objective context) before it can surface — the structured model guards the LLM's proposals.
@@ -176,9 +204,11 @@ vision-frame change.
 - **Pure `serializeGoalState`:** null when no objective; else objective + N-of-M done + next pending,
   ending `DO NOT acknowledge this message.]`; missing data degrades gracefully.
 - **App wiring** gates on tsc + full suite + build.
-- **Human smoke (needs a key):** state a goal → the agent confirms it (card) → tracked; complete a
-  step (save) → `[GOAL STATE]` shows it done + a `suggest_next` offers the next; Accept issues the
-  step (witnessed); Dismiss clears; a suggestion for a done step never surfaces.
+- **Human smoke (needs a key), both toggle modes:** with `confirmGoals: Off` (default), state a goal
+  → it tracks immediately as a tentative chip; with `confirmGoals: On`, `set_goal` shows a confirm
+  card first and tracks only on confirm. Then (either mode): complete a step (save) → `[GOAL STATE]`
+  shows it done + a `suggest_next` offers the next; Accept issues the step (witnessed); Dismiss and
+  the chip's ✕ both clear; a suggestion naming a done step never surfaces.
 
 ## 10. Files
 
@@ -188,8 +218,10 @@ vision-frame change.
 | `src/goal/goalTools.ts` *(new)* | `GOAL_TOOLS`, `goalCallToEvent`, `validateSuggestion`. |
 | `src/goal/serialize.ts` *(new)* | `serializeGoalState` — the `[GOAL STATE]` hint. |
 | `src/goal/*.test.ts` *(new)* | Reducer, tools/gate, serializer unit tests. |
-| `src/App.tsx` | `goalDispatchRef` + `goalSnapshot`; route `set_goal` (confirmed) / `suggest_next` (validated); `goal.actionCommitted` in the commit paths; `[GOAL STATE]` effect; the next-step offer card + accept/dismiss. |
-| `src/prompt/instructions.ts` | A note: when to `set_goal` (and that it's confirmed), when to `suggest_next` (validated, one at a time), and that suggestions are offers the user drives. |
+| `src/App.tsx` | `goalDispatchRef` + `goalSnapshot`; `confirmGoals` state; route `set_goal` (confirm-gated by the toggle) / `suggest_next` (validated); `goal.actionCommitted` in the commit paths; `[GOAL STATE]` effect; the next-step offer card + accept/dismiss; the goal chip. |
+| `src/shell/DebugDrawer.tsx` | The `confirmGoals` `Switch` (mirrors `showMarkings`) + its `onConfirmGoals` prop. |
+| `src/shell/MenuBar.tsx` (or a small `GoalChip`) | The tentative, dismissable goal chip surface. |
+| `src/prompt/instructions.ts` | A note: when to `set_goal`, when to `suggest_next` (validated, one at a time), and that suggestions are offers the user drives. |
 
 No changes to teaching, the entities, or the perception plumbing — C3 adds a sibling goal subsystem.
 
