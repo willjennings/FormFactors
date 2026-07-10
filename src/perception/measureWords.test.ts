@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { tokenizeWords, rectToBox } from './measureWords';
+import { tokenizeWords, rectToBox, wordInFrame } from './measureWords';
 
 describe('tokenizeWords', () => {
   it('splits into non-whitespace runs with exact char offsets', () => {
@@ -38,5 +38,21 @@ describe('rectToBox', () => {
     const box = rectToBox({ top: 500, left: 700, bottom: 580, right: 800 }, plane);
     // ymin=(400/800)*1000=500, xmin=(500/1000)*1000=500, ymax=(480/800)*1000=600, xmax=(600/1000)*1000=600
     expect(box).toEqual([500, 500, 600, 600]);
+  });
+});
+
+describe('wordInFrame', () => {
+  const frame: [number, number, number, number] = [100, 100, 300, 900]; // ymin,xmin,ymax,xmax
+
+  it('keeps a word whose centre is inside the frame', () => {
+    expect(wordInFrame([150, 200, 180, 260], frame)).toBe(true);
+  });
+
+  it('drops a word scrolled above the frame', () => {
+    expect(wordInFrame([40, 200, 70, 260], frame)).toBe(false); // centre y=55 < 100
+  });
+
+  it('drops a word below the frame', () => {
+    expect(wordInFrame([320, 200, 360, 260], frame)).toBe(false); // centre y=340 > 300
   });
 });

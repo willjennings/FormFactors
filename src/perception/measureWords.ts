@@ -21,6 +21,13 @@ export function tokenizeWords(text: string): { text: string; charStart: number; 
   return out;
 }
 
+/** True if the word box's centre lies within the visible frame (both boxes in 0-1000 plane space). */
+export function wordInFrame(box: [number, number, number, number], frame: [number, number, number, number]): boolean {
+  const cy = (box[0] + box[2]) / 2;
+  const cx = (box[1] + box[3]) / 2;
+  return cy >= frame[0] && cy <= frame[2] && cx >= frame[1] && cx <= frame[3];
+}
+
 /** Map a viewport client rect into 0-1000 plane space — matches updateLayout's toBBox convention. */
 export function rectToBox(
   rect: { top: number; left: number; bottom: number; right: number },
@@ -47,8 +54,8 @@ function buildMirror(textarea: HTMLTextAreaElement): HTMLDivElement {
   ] as const;
   for (const p of copy) mirror.style[p as any] = cs[p as any];
   mirror.style.position = 'fixed';
-  mirror.style.top = `${r.top}px`;
-  mirror.style.left = `${r.left}px`;
+  mirror.style.top = `${r.top - textarea.scrollTop}px`;
+  mirror.style.left = `${r.left - textarea.scrollLeft}px`;
   mirror.style.width = `${r.width}px`;
   mirror.style.height = `${r.height}px`;
   mirror.style.whiteSpace = 'pre-wrap';
@@ -88,7 +95,12 @@ export function measureWords(
       const r = rects[0]; // first fragment if the word wraps a line
       boxes.push({ text: t.text, charStart: t.charStart, charEnd: t.charEnd, box: rectToBox(r, plane) });
     }
-    return boxes;
+    const frame = rectToBox(
+      { top: textarea.getBoundingClientRect().top, left: textarea.getBoundingClientRect().left,
+        bottom: textarea.getBoundingClientRect().bottom, right: textarea.getBoundingClientRect().right },
+      plane,
+    );
+    return boxes.filter((b) => wordInFrame(b.box, frame));
   } catch {
     return [];
   } finally {
