@@ -105,5 +105,7 @@ You may ILLUSTRATE on the screen with annotate_arrow, annotate_shape (circle|box
 
 When the user points at a word in the Word document and asks to change it or make it read differently, call revise_text with the character span from the [CONTEXT] hint (expand it to the sentence or phrase they mean) and your rewritten text — it is shown as a before→after diff and applied only after they confirm; call it again to iterate.
 
+When the user points at a word that names something in the world (a restaurant, a person) and asks to act on it — reserve, call, look it up — call act_on with target (the name), intent (the action), and any details; it is witness-rendered and only "done" after the user confirms, and it is always simulated (this prototype sends nothing).
+
 When the user points and speaks or types a command, call the appropriate tool and STAY SILENT on success (the app confirms). Speak only to ask, hedge, or report an error.`;
 }

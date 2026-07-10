@@ -37,6 +37,7 @@ import {
   AUTONOMY_OPTIONS,
   serializeMockDoc,
   REVISE_TOOL,
+  ACT_TOOL,
 } from './scenarios';
 import type { ProgramId, ElementCategory, MockDoc, Program, Autonomy } from './scenarios';
 import type { PerceivedCache } from './perception/perceiveTile';
@@ -308,7 +309,7 @@ export default function App() {
   // Tools offered to the voice model = the kept verbs (explain, share) + the action verbs this
   // program exposes. Read at connect time; program swap reconnects (see handleProgramChange).
   const voiceTools = React.useMemo(
-    () => [...VOICE_TOOLS, ...buildActionTools(activeProgram), ...ANNOTATE_TOOLS, ...(activeProgram === 'word' ? [REVISE_TOOL] : [])],
+    () => [...VOICE_TOOLS, ...buildActionTools(activeProgram), ...ANNOTATE_TOOLS, ...(activeProgram === 'word' ? [REVISE_TOOL] : []), ACT_TOOL],
     [activeProgram],
   );
   const CONFUSABLE_PAIRS = React.useMemo(() => {
@@ -479,6 +480,9 @@ export default function App() {
   // Mirror in a ref so the keyboard handler (stale closure) can read the live value.
   const shareRequestRef = useRef<typeof shareRequest>(null);
   useEffect(() => { shareRequestRef.current = shareRequest; }, [shareRequest]);
+  const [actRequest, setActRequest] = useState<{ target: string; intent: string; details?: string; confirmed: boolean } | null>(null);
+  const actRequestRef = useRef<typeof actRequest>(null);
+  useEffect(() => { actRequestRef.current = actRequest; }, [actRequest]);
   // Action verbs (save/edit/format/insert/photo) mutate this mock document; a pending action
   // is witness-rendered before it commits — the same grammar as `share`.
   const [mockDoc, setMockDoc] = useState<MockDoc>(() => initialMockDoc(DEFAULT_PROGRAM));
@@ -522,10 +526,10 @@ export default function App() {
   // no trap, the desktop stays pointable while confirming.
   const confirmBtnRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
-    if ((pendingAction && !pendingAction.confirmed) || (shareRequest && !shareRequest.confirmed)) {
+    if ((pendingAction && !pendingAction.confirmed) || (shareRequest && !shareRequest.confirmed) || (actRequest && !actRequest.confirmed)) {
       confirmBtnRef.current?.focus();
     }
-  }, [pendingAction, shareRequest]);
+  }, [pendingAction, shareRequest, actRequest]);
 
   // --- The two control dials ---
   // DIAL A (autonomy/friction): how readily verbs commit vs. witness-render first.
@@ -1224,6 +1228,27 @@ export default function App() {
         emitFeedback({ outcome: 'needs-confirm', verbClass: 'mutate', label: `Confirm revise: "${oldText}" → "${newText}"` });
         providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true, witnessed: true });
       }
+    } else if (fc.name === 'act_on') {
+      // C2b Part C: outward action on what a word names (reserve, call, look up). SIMULATED like
+      // share — witness the intent, "commit" only on confirm, and never actually send/book/dial.
+      const args = (fc.args ?? {}) as { target?: string; intent?: string; details?: string; confirm?: boolean };
+      const target = typeof args.target === 'string' ? args.target : '';
+      const intent = typeof args.intent === 'string' ? args.intent : '';
+      const details = typeof args.details === 'string' ? args.details : undefined;
+      const confirmed = args.confirm === true;
+      if (!target || !intent) {
+        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: false, error: 'act_on needs a target and an intent.' });
+      } else if (!confirmed) {
+        addLog('tool', `Tool Call: act_on(witness) — ${intent} → ${target}${details ? `: ${details}` : ''}`);
+        setActRequest({ target, intent, details, confirmed: false });
+        emitFeedback({ outcome: 'needs-confirm', verbClass: 'share', label: `Confirm: ${intent} → ${target}` });
+        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true, witnessed: true });
+      } else {
+        addLog('event', `Simulated: ${intent} → ${target}${details ? `: ${details}` : ''}`);
+        setActRequest({ target, intent, details, confirmed: true });
+        emitFeedback({ outcome: 'committed', verbClass: 'share', label: `${intent} → ${target} (simulated)` });
+        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true, simulated: true });
+      }
     } else if (fc.name.startsWith('annotate_')) {
       // C2a-illustrate: entity-anchored illustration. The pure mapper resolves target names;
       // an unresolvable target fails the whole call (honest — no partial mark).
@@ -1323,6 +1348,17 @@ export default function App() {
     if (!shareRequest || shareRequest.confirmed) return;
     setShareRequest(null);
     providerRef.current?.sendTextHint('[SYSTEM: the user cancelled the share via button — drop it and wait.]');
+  };
+  const confirmAct = () => {
+    if (!actRequest || actRequest.confirmed) return;
+    setActRequest({ ...actRequest, confirmed: true });
+    emitFeedback({ outcome: 'committed', verbClass: 'share', label: `${actRequest.intent} → ${actRequest.target} (simulated)` });
+    providerRef.current?.sendTextHint('[SYSTEM: the user confirmed the action via button — it was SIMULATED (nothing really sent/booked). Do not re-call the tool; do not acknowledge.]');
+  };
+  const cancelAct = () => {
+    if (!actRequest || actRequest.confirmed) return;
+    setActRequest(null);
+    providerRef.current?.sendTextHint('[SYSTEM: the user cancelled the action via button — drop it and wait.]');
   };
 
   const processInputTranscript = (text: string) => {
@@ -2749,6 +2785,42 @@ export default function App() {
                   <div className="flex items-center gap-2">
                     <Button variant="primary" size="sm" ref={!pendingAction ? confirmBtnRef : undefined} onClick={confirmShare}>Confirm</Button>
                     <Button variant="outline" size="sm" onClick={cancelShare}>Cancel</Button>
+                    <span className="text-[10px] font-mono text-[var(--text-secondary)] ml-1">or say "yes"</span>
+                  </div>
+                )}
+              </section>
+            )}
+            {actRequest && (
+              <section className={`shrink-0 bg-[var(--card-bg)] border rounded-2xl p-6 animate-in fade-in slide-in-from-top-2 duration-300 ${actRequest.confirmed ? 'border-green-500/50' : 'border-amber-500/40'}`}>
+                <div className="flex items-center gap-2 mb-3">
+                  {actRequest.confirmed
+                    ? <CheckCircle size={16} className="text-green-500" />
+                    : <Shield size={16} className="text-amber-500" />}
+                  <span className={`text-[11px] font-mono font-bold uppercase tracking-widest ${actRequest.confirmed ? 'text-green-500' : 'text-amber-500'}`}>
+                    {actRequest.confirmed ? 'Done · simulated' : 'About to act — confirm'}
+                  </span>
+                </div>
+                <div className="flex flex-col gap-1.5 mb-2">
+                  <div className="flex items-center gap-2 text-sm text-[var(--text-primary)]">
+                    <span className="text-[10px] font-mono uppercase text-[var(--text-secondary)] w-16 shrink-0">Action</span>
+                    <span className="font-semibold">{actRequest.intent}</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-sm text-[var(--text-primary)]">
+                    <span className="text-[10px] font-mono uppercase text-[var(--text-secondary)] w-16 shrink-0">Target</span>
+                    <span className="font-semibold">{actRequest.target}</span>
+                  </div>
+                  {actRequest.details && (
+                    <div className="flex items-center gap-2 text-sm text-[var(--text-primary)]">
+                      <span className="text-[10px] font-mono uppercase text-[var(--text-secondary)] w-16 shrink-0">Details</span>
+                      <span>{actRequest.details}</span>
+                    </div>
+                  )}
+                </div>
+                <p className="text-[10px] font-mono text-[var(--text-secondary)] mb-3">Simulated — this prototype doesn't really send, book, or dial anything.</p>
+                {!actRequest.confirmed && (
+                  <div className="flex items-center gap-2">
+                    <Button variant="primary" size="sm" onClick={confirmAct}>Confirm</Button>
+                    <Button variant="outline" size="sm" onClick={cancelAct}>Cancel</Button>
                     <span className="text-[10px] font-mono text-[var(--text-secondary)] ml-1">or say "yes"</span>
                   </div>
                 )}
