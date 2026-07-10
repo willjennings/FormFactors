@@ -1,13 +1,16 @@
-import React, { useEffect, useReducer } from 'react';
+import React, { useEffect, useReducer, useRef } from 'react';
 import type { SceneEntity } from '../entities/registry';
+import type { Program } from '../scenarios';
 import type { AnnotationState, AnnotationEvent } from './types';
 import { initialAnnotationState, reduce } from './annotationStore';
 import { bboxOf, center, unionBbox, placementPoint } from './geometry';
+import { buildIllustrateScript } from './illustrateDemo';
 
 const pct = (v: number) => v / 10; // 0-1000 → percent (SVG viewBox is 0..100)
 
 type Props = {
   entities: SceneEntity[];
+  program: Program;
   demo?: boolean;
   dispatchRef?: React.MutableRefObject<((e: AnnotationEvent) => void) | null>;
   onStateChange?: (s: AnnotationState) => void;
@@ -15,7 +18,7 @@ type Props = {
 
 const INK = 'rgb(99,102,241)'; // indigo — matches the relate arc
 
-export function AnnotationLayer({ entities, dispatchRef, onStateChange }: Props) {
+export function AnnotationLayer({ entities, program, demo = false, dispatchRef, onStateChange }: Props) {
   const [state, dispatch] = useReducer(reduce, undefined, initialAnnotationState);
 
   useEffect(() => {
@@ -25,6 +28,21 @@ export function AnnotationLayer({ entities, dispatchRef, onStateChange }: Props)
   }, [dispatchRef]);
 
   useEffect(() => { onStateChange?.(state); }, [state, onStateChange]);
+
+  // Demo driver: play the illustration script once entities exist. StrictMode-safe — `played`
+  // is set when the first event FIRES, and cleanup re-arms only if nothing fired yet.
+  const scheduled = useRef(false);
+  const played = useRef(false);
+  useEffect(() => {
+    if (!demo || scheduled.current || entities.length < 4) return;
+    scheduled.current = true;
+    const timers = buildIllustrateScript(program, entities).map(({ at, event }) =>
+      setTimeout(() => { played.current = true; dispatch(event); }, at));
+    return () => {
+      timers.forEach(clearTimeout);
+      if (!played.current) scheduled.current = false;
+    };
+  }, [demo, entities, program]);
 
   return (
     <div className="absolute inset-0 z-[55] pointer-events-none" data-annotation-layer>
