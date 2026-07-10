@@ -1248,6 +1248,7 @@ export default function App() {
         setActRequest({ target, intent, details, confirmed: true });
         emitFeedback({ outcome: 'committed', verbClass: 'share', label: `${intent} → ${target} (simulated)` });
         providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true, simulated: true });
+        providerRef.current?.sendTextHint('[SYSTEM: that was SIMULATED — nothing was really sent, booked, or dialed. Do not claim a real action happened.]');
       }
     } else if (fc.name.startsWith('annotate_')) {
       // C2a-illustrate: entity-anchored illustration. The pure mapper resolves target names;
@@ -1833,6 +1834,7 @@ export default function App() {
       if (e.key === 'Escape') {
         if (pendingActionRef.current && !pendingActionRef.current.confirmed) { cancelPendingAction(); return; }
         if (shareRequestRef.current && !shareRequestRef.current.confirmed) { cancelShare(); return; }
+        if (actRequestRef.current && !actRequestRef.current.confirmed) { cancelAct(); return; }
       }
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) { e.preventDefault(); handleUndo(); return; }
@@ -2783,7 +2785,7 @@ export default function App() {
                 </div>
                 {!shareRequest.confirmed && (
                   <div className="flex items-center gap-2">
-                    <Button variant="primary" size="sm" ref={!pendingAction ? confirmBtnRef : undefined} onClick={confirmShare}>Confirm</Button>
+                    <Button variant="primary" size="sm" ref={!actRequest && !pendingAction ? confirmBtnRef : undefined} onClick={confirmShare}>Confirm</Button>
                     <Button variant="outline" size="sm" onClick={cancelShare}>Cancel</Button>
                     <span className="text-[10px] font-mono text-[var(--text-secondary)] ml-1">or say "yes"</span>
                   </div>
@@ -2819,7 +2821,7 @@ export default function App() {
                 <p className="text-[10px] font-mono text-[var(--text-secondary)] mb-3">Simulated — this prototype doesn't really send, book, or dial anything.</p>
                 {!actRequest.confirmed && (
                   <div className="flex items-center gap-2">
-                    <Button variant="primary" size="sm" onClick={confirmAct}>Confirm</Button>
+                    <Button variant="primary" size="sm" ref={!pendingAction ? confirmBtnRef : undefined} onClick={confirmAct}>Confirm</Button>
                     <Button variant="outline" size="sm" onClick={cancelAct}>Cancel</Button>
                     <span className="text-[10px] font-mono text-[var(--text-secondary)] ml-1">or say "yes"</span>
                   </div>
