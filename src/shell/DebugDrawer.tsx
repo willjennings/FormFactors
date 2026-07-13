@@ -31,6 +31,7 @@ type DrawerProps = {
   sendFrequency: number; onSendFrequency: (v: number) => void;
   showMarkings: boolean; onShowMarkings: (v: boolean) => void;
   confirmGoals: boolean; onConfirmGoals: (v: boolean) => void;
+  whiteboardMode: 'board' | 'overlay'; onWhiteboardMode: (v: 'board' | 'overlay') => void;
   worldState: string;
   undoCount: number; onUndo: () => void;
   onEndSession: () => void; onReset: () => void; isLive: boolean;
@@ -171,6 +172,17 @@ export function DebugDrawer(props: DrawerProps) {
         checked={props.confirmGoals}
         onCheckedChange={props.onConfirmGoals}
       />
+
+      {/* 8c. Whiteboard surface select */}
+      <div className="flex flex-col gap-1">
+        <span className="text-[10px] font-mono uppercase tracking-wide text-[var(--text-secondary)]" title="Where the agent's diagrams render">Whiteboard</span>
+        <Select
+          value={props.whiteboardMode}
+          onValueChange={(v) => props.onWhiteboardMode(v as 'board' | 'overlay')}
+          options={[{ value: 'board', label: 'Dedicated panel' }, { value: 'overlay', label: 'Overlay on UI' }]}
+          ariaLabel="Whiteboard surface"
+        />
+      </div>
 
       {/* 9. Embedded-preview warning */}
       {props.isEmbedded && !props.isLive && (

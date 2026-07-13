@@ -46,6 +46,8 @@ import { buildEntities, entityById, entityByTitle, displayName, resolveEchoedTar
 import type { SceneEntity, EntityId } from './entities/registry';
 import { TeachingLayer } from './teaching/TeachingLayer';
 import { AnnotationLayer } from './annotations/AnnotationLayer';
+import { WhiteboardMarks } from './whiteboard/WhiteboardMarks';
+import { WhiteboardPanel } from './whiteboard/WhiteboardPanel';
 import type { AnnotationEvent, AnnotationState } from './annotations/types';
 import { ANNOTATE_TOOLS, annotateCallToEvent } from './annotations/annotateTools';
 import { serializeAnnotations } from './annotations/serialize';
@@ -2775,6 +2777,7 @@ export default function App() {
           <div ref={instructionLayerRef} className="absolute inset-0 pointer-events-none" data-instruction-layer>
             <TeachingLayer entities={entities} program={program} demo={teachMode} dispatchRef={teachingDispatchRef} onStateChange={setTeachingSnapshot} />
             <AnnotationLayer entities={entities} program={program} demo={illustrateMode} dispatchRef={annotationDispatchRef} onStateChange={setAnnotationSnapshot} />
+            {whiteboardMode === 'overlay' && <WhiteboardMarks state={whiteboard} />}
           </div>
           {/* G6 FEEDFORWARD: live "what I'll act on" preview as the cursor moves, so the user
               sees the interpretation forming BEFORE they speak (closes the gulf of execution).
@@ -2789,6 +2792,7 @@ export default function App() {
               </span>
             </div>
           )}
+          {whiteboardMode === 'board' && <WhiteboardPanel state={whiteboard} onClear={() => whiteboardDispatch({ type: 'wb.clear' })} />}
           {/* C3: Tentative goal chip — shows active goal + step progress + clear button */}
           {goalState.objective && (
             <div className="absolute top-14 left-1/2 -translate-x-1/2 z-40 pointer-events-auto flex items-center gap-2 px-3 py-1.5 rounded-full border border-[var(--card-border)] bg-[var(--card-bg)]/90 backdrop-blur shadow-sm">
@@ -3043,6 +3047,8 @@ export default function App() {
             onShowMarkings={setShowMarkings}
             confirmGoals={confirmGoals}
             onConfirmGoals={setConfirmGoals}
+            whiteboardMode={whiteboardMode}
+            onWhiteboardMode={setWhiteboardMode}
             worldState={serializeMockDoc(mockDoc)}
             undoCount={undoStack.length}
             onUndo={handleUndo}
