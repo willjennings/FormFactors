@@ -71,6 +71,10 @@ import { serializeTeachingState, makeChangeGate } from './teaching/teachingState
 import { GOAL_TOOLS, goalCallToEvent, validateSuggestion, type GoalProposal } from './goal/goalTools';
 import { initialGoalState, reduce as goalReduce, type GoalState } from './goal/goalStore';
 import { serializeGoalState } from './goal/serialize';
+import { WB_TOOLS, wbCallToEvent } from './whiteboard/tools';
+import { initialWhiteboardState, reduce as wbReduce } from './whiteboard/store';
+import { serializeWhiteboard } from './whiteboard/serialize';
+import { buildWhiteboardDemo } from './whiteboard/demo';
 import { initialRailState, reduceRail, railComplete, type RailEvent, type RailState } from './rail/railStore';
 import { respondCallToRail } from './rail/respondCallToRail';
 import { buildRailDemo } from './rail/demoRail';
@@ -310,7 +314,7 @@ export default function App() {
   // Tools offered to the voice model = the kept verbs (explain, share) + the action verbs this
   // program exposes. Read at connect time; program swap reconnects (see handleProgramChange).
   const voiceTools = React.useMemo(
-    () => [...VOICE_TOOLS, ...buildActionTools(activeProgram), ...ANNOTATE_TOOLS, ...(activeProgram === 'word' ? [REVISE_TOOL] : []), ACT_TOOL, ...GOAL_TOOLS],
+    () => [...VOICE_TOOLS, ...buildActionTools(activeProgram), ...ANNOTATE_TOOLS, ...(activeProgram === 'word' ? [REVISE_TOOL] : []), ACT_TOOL, ...GOAL_TOOLS, ...WB_TOOLS],
     [activeProgram],
   );
   const CONFUSABLE_PAIRS = React.useMemo(() => {
@@ -405,6 +409,7 @@ export default function App() {
   const teachMode = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('teach');
   const illustrateMode = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('illustrate');
   const railMode = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('rail');
+  const whiteboardDemoMode = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('whiteboard');
   const hoveredIdRef = useRef<EntityId | null>(null);
   // Throttle state for proactive hover grounding (non-Gemini backends).
   const lastHoverHintRef = useRef<string | null>(null);
@@ -580,6 +585,9 @@ export default function App() {
   const goalStateRef = useRef<GoalState>(goalState);
   useEffect(() => { goalStateRef.current = goalState; }, [goalState]);
   const goalHintGateRef = useRef(makeChangeGate());
+  const [whiteboard, whiteboardDispatch] = useReducer(wbReduce, undefined, initialWhiteboardState);
+  const [whiteboardMode, setWhiteboardMode] = useState<'board' | 'overlay'>('board');
+  const wbHintGateRef = useRef(makeChangeGate());
   const [confirmGoals, setConfirmGoals] = useState(false); // C3 eval toggle: On = Approach A (confirm set_goal)
   const confirmGoalsRef = useRef(confirmGoals);
   useEffect(() => { confirmGoalsRef.current = confirmGoals; }, [confirmGoals]);
@@ -1293,6 +1301,18 @@ export default function App() {
           addLog('tool', `Tool Call: suggest_next — "${proposal.label}"`);
           providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true, offered: true });
         }
+      }
+    } else if (fc.name.startsWith('wb_')) {
+      // Whiteboard: free-coordinate diagram marks. Unresolved connector keys simply render nothing
+      // (fail-soft); the model learns live node keys from [WHITEBOARD].
+      const mapped = wbCallToEvent(fc);
+      if ('error' in mapped) {
+        addLog('tool', `Tool Call: ${fc.name} REJECTED — ${mapped.error}`);
+        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: false, error: mapped.error });
+      } else {
+        whiteboardDispatch(mapped);
+        addLog('tool', `Tool Call: ${fc.name}`);
+        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true });
       }
     } else if (fc.name.startsWith('annotate_')) {
       // C2a-illustrate: entity-anchored illustration. The pure mapper resolves target names;
@@ -2601,6 +2621,26 @@ export default function App() {
       providerRef.current?.sendTextHint(hint);
     }
   }, [isLive, goalState]);
+
+  // Whiteboard board-mode perception: the model authored these marks, so the store is its truth.
+  // Overlay mode is perceived for free via the C2a snapshot, so this hint is board-mode only.
+  useEffect(() => {
+    if (!isLive || whiteboardMode !== 'board') return;
+    const hint = serializeWhiteboard(whiteboard);
+    if (wbHintGateRef.current(hint) && hint) {
+      providerRef.current?.sendTextHint(hint);
+    }
+  }, [isLive, whiteboard, whiteboardMode]);
+
+  // Whiteboard demo driver: StrictMode-safe, fires once, re-arms if nothing fired.
+  const wbDemoScheduled = useRef(false);
+  const wbDemoPlayed = useRef(false);
+  useEffect(() => {
+    if (!whiteboardDemoMode || wbDemoScheduled.current) return;
+    wbDemoScheduled.current = true;
+    const timers = buildWhiteboardDemo().map(({ at, event }) => setTimeout(() => { wbDemoPlayed.current = true; whiteboardDispatch(event); }, at));
+    return () => { timers.forEach(clearTimeout); if (!wbDemoPlayed.current) wbDemoScheduled.current = false; };
+  }, [whiteboardDemoMode]);
 
   // C2b Part A: keep wordBoxesRef in sync with the Word textarea's live layout. Cleared for
   // non-word programs so stale word boxes never leak. Fail-soft: measureWords returns [] on error.
