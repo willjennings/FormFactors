@@ -46,6 +46,7 @@ import { buildEntities, entityById, entityByTitle, displayName, resolveEchoedTar
 import type { SceneEntity, EntityId } from './entities/registry';
 import { TeachingLayer } from './teaching/TeachingLayer';
 import { TEACH_TOOLS, teachCallToEvent } from './teaching/teachTools';
+import { advanceOnClick } from './teaching/advanceOnClick';
 import { AnnotationLayer } from './annotations/AnnotationLayer';
 import { WhiteboardMarks } from './whiteboard/WhiteboardMarks';
 import { WhiteboardPanel } from './whiteboard/WhiteboardPanel';
@@ -581,6 +582,9 @@ export default function App() {
   const annotationHintGateRef = useRef(makeChangeGate());
   const teachingDispatchRef = useRef<((e: TeachingEvent) => void) | null>(null);
   const [teachingSnapshot, setTeachingSnapshot] = useState<TeachingState | null>(null);
+  // Plan 2: stale-closure-free reads for the click gate (Contract A) + hover handler (Contract B).
+  const teachingSnapshotRef = useRef<TeachingState | null>(null);
+  useEffect(() => { teachingSnapshotRef.current = teachingSnapshot; }, [teachingSnapshot]);
   const annotationDispatchRef = useRef<((e: AnnotationEvent) => void) | null>(null);
   const [annotationSnapshot, setAnnotationSnapshot] = useState<AnnotationState | null>(null);
 
@@ -1370,7 +1374,11 @@ export default function App() {
   // how a click on a REAL control both selects it and advances an active teach sequence.
   const handleSurfaceElementClick = (elementId: number) => {
     const entity = entitiesRef.current.find(e => e.id === `${program.id}-${elementId}`);
-    if (entity) teachingDispatchRef.current?.({ type: 'user.stepAction', entityId: entity.id });
+    // Contract A (advancement authority): live guide is agent-paced via teach_step_done — a
+    // click still selects/grounds the element below; it just must not ALSO advance the sequence.
+    if (entity && advanceOnClick(isLive, teachingSnapshotRef.current?.sequence?.posture ?? null)) {
+      teachingDispatchRef.current?.({ type: 'user.stepAction', entityId: entity.id });
+    }
     if (entity) railDispatch({ type: 'user.elementAction', entityId: entity.id });
     // GROUNDING 1:1: a selected element appears as a chip in the omnibox — what you see
     // in the box is exactly what the model is told at submit. Cap 2 (marker parity).
