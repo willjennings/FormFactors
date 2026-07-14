@@ -45,6 +45,7 @@ import { measureWords, type WordBox } from './perception/measureWords';
 import { buildEntities, entityById, entityByTitle, displayName, resolveEchoedTarget } from './entities/registry';
 import type { SceneEntity, EntityId } from './entities/registry';
 import { TeachingLayer } from './teaching/TeachingLayer';
+import { TEACH_TOOLS, teachCallToEvent } from './teaching/teachTools';
 import { AnnotationLayer } from './annotations/AnnotationLayer';
 import { WhiteboardMarks } from './whiteboard/WhiteboardMarks';
 import { WhiteboardPanel } from './whiteboard/WhiteboardPanel';
@@ -316,7 +317,7 @@ export default function App() {
   // Tools offered to the voice model = the kept verbs (explain, share) + the action verbs this
   // program exposes. Read at connect time; program swap reconnects (see handleProgramChange).
   const voiceTools = React.useMemo(
-    () => [...VOICE_TOOLS, ...buildActionTools(activeProgram), ...ANNOTATE_TOOLS, ...(activeProgram === 'word' ? [REVISE_TOOL] : []), ACT_TOOL, ...GOAL_TOOLS, ...WB_TOOLS],
+    () => [...VOICE_TOOLS, ...buildActionTools(activeProgram), ...ANNOTATE_TOOLS, ...(activeProgram === 'word' ? [REVISE_TOOL] : []), ACT_TOOL, ...GOAL_TOOLS, ...WB_TOOLS, ...TEACH_TOOLS],
     [activeProgram],
   );
   const CONFUSABLE_PAIRS = React.useMemo(() => {
@@ -1313,6 +1314,19 @@ export default function App() {
         providerRef.current?.sendToolResponse(fc.id, fc.name, { success: false, error: mapped.error });
       } else {
         whiteboardDispatch(mapped);
+        addLog('tool', `Tool Call: ${fc.name}`);
+        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true });
+      }
+    } else if (fc.name.startsWith('teach_')) {
+      // Plan 2: the live model drives teaching posture through the foundation's pure mapper.
+      // An unresolvable target is DATA (reported to the model), never thrown — no partial
+      // sequence starts. The G9 deduper above already drops a re-emitted teach_step_done.
+      const mapped = teachCallToEvent(fc, entitiesRef.current);
+      if ('error' in mapped) {
+        addLog('tool', `Tool Call: ${fc.name} REJECTED — ${mapped.error}`);
+        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: false, error: mapped.error });
+      } else {
+        teachingDispatchRef.current?.(mapped);
         addLog('tool', `Tool Call: ${fc.name}`);
         providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true });
       }
