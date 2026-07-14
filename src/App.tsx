@@ -2275,13 +2275,14 @@ export default function App() {
     // C2b: key the hint throttle on element+word so moving word→word within the Document body
     // re-arms the passive deixis hint (word-granular grounding is this phase's whole point).
     const hoverKey = hovered ? `${hovered}|${hoveredWordBoxRef.current?.charStart ?? ''}` : null;
-    // Contract B (deixis vs teaching): while a teach sequence is active, the proactive hint
-    // would feed the model spurious "pointed command" context mid-teaching — mute it. The
+    // Contract B (deixis vs teaching): while a teach step is active (sequence mid-flight), the
+    // proactive hint would feed the model spurious "pointed command" context — mute it. A
+    // completed sequence (activeIndex null) re-arms the hint without needing teach_clear. The
     // "Pointing at" pill still renders locally; only this silent model hint is gated.
     if (
       providerRef.current &&
       voiceBackendRef.current !== 'gemini' &&
-      !teachingSnapshotRef.current?.sequence &&
+      (teachingSnapshotRef.current?.sequence?.activeIndex ?? null) === null &&
       hovered &&
       hoverKey !== lastHoverHintRef.current &&
       now - lastHoverHintAtRef.current > HOVER_HINT_THROTTLE_MS

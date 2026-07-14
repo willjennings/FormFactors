@@ -50,6 +50,7 @@ describe('buildInstructions — honest desktop assistant', () => {
       expect(s).toContain('teach_sequence');
       expect(s).toContain('teach_step_done');
       expect(s).toContain('teach_clear');
+      expect(s).toContain('teach_relate');
       expect(s).toMatch(/JUST DO IT/);
       expect(s).toMatch(/"guide"/);
       expect(s).toMatch(/"teach"/);
