@@ -42,4 +42,20 @@ describe('buildInstructions — honest desktop assistant', () => {
     expect(honest).toContain('guideLine');
     expect(confident).toContain('RESPONSE CONTRACT');
   });
+
+  it('carries the teaching posture judgment (Plan 2)', () => {
+    for (const s of [honest, confident]) {
+      // The three postures and every teach tool the model may call:
+      expect(s).toContain('teach_highlight');
+      expect(s).toContain('teach_sequence');
+      expect(s).toContain('teach_step_done');
+      expect(s).toContain('teach_clear');
+      expect(s).toMatch(/JUST DO IT/);
+      expect(s).toMatch(/"guide"/);
+      expect(s).toMatch(/"teach"/);
+      // Intensity ∝ complexity + the automatic fade contract:
+      expect(s).toMatch(/one-step task/i);
+      expect(s).toMatch(/\[TEACHING STATE\]/);
+    }
+  });
 });
