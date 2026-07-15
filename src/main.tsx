@@ -2,12 +2,13 @@ import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
 import { RambleDemo } from './ramble/RambleDemo';
+import { RambleLive } from './ramble/RambleLive';
 import './index.css';
 
-const useRamble = typeof window !== 'undefined' && window.location.search.includes('ramble');
+const rambleParam = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('ramble') : null;
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    {useRamble ? <RambleDemo /> : <App />}
+    {rambleParam === 'live' ? <RambleLive /> : rambleParam ? <RambleDemo /> : <App />}
   </StrictMode>,
 );
