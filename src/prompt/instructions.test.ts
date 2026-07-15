@@ -57,6 +57,10 @@ describe('buildInstructions — honest desktop assistant', () => {
       // Intensity ∝ complexity + the automatic fade contract:
       expect(s).toMatch(/one-step task/i);
       expect(s).toMatch(/\[TEACHING STATE\]/);
+      // Every step must target a visible control (live smoke 2026-07-15: the model
+      // emitted target:"" steps like "type a name" and the whole sequence failed):
+      expect(s).toMatch(/EVERY STEP TARGETS A CONTROL/);
+      expect(s).toMatch(/fold it into the previous step/i);
     }
   });
 });

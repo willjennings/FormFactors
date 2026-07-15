@@ -1878,6 +1878,10 @@ export default function App() {
             });
             setIsConnecting(false);
             if (pendingTypedRef.current) {
+              // The queued typed text IS the first user turn: arm the transcription clock
+              // before sending, or the guards below discard the model's entire first
+              // response ("Ignoring model turn/tool call before first transcription").
+              lastTranscriptionTimeRef.current = Date.now();
               providerRef.current?.sendUserText(pendingTypedRef.current);
               pendingTypedRef.current = null;
             }

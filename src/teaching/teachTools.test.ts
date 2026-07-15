@@ -36,8 +36,25 @@ describe('teachCallToEvent', () => {
         { target: 'Save button', subgoal: 'A', instruction: 'B.' },
         { target: 'Cell Q99', subgoal: 'C', instruction: 'D.' },
       ],
-    } }, entities);
-    expect(ev).toEqual({ error: 'Could not resolve target "Cell Q99" to an on-screen element.' });
+    } }, entities) as { error: string };
+    expect(ev.error).toMatch(/^Could not resolve target "Cell Q99" to an on-screen element\./);
+  });
+  it('unresolved errors list the visible top-level element names so the model can recover', () => {
+    const ev = teachCallToEvent({ name: 'teach_highlight', args: { target: 'Nonsense Widget' } }, entities) as { error: string };
+    expect(ev.error).toMatch(/Visible elements: /);
+    expect(ev.error).toContain('Save button');
+    expect(ev.error).toContain('Document body');
+  });
+  it('coaches the model on an EMPTY step target: fold non-click steps into the previous instruction', () => {
+    const ev = teachCallToEvent({ name: 'teach_sequence', args: {
+      title: 'Save As', taskKey: 'word.saveas', posture: 'teach',
+      steps: [
+        { target: 'Save As button', subgoal: 'Open dialog', instruction: 'Click Save As.' },
+        { target: '', subgoal: 'Name it', instruction: 'Type a new name.' },
+      ],
+    } }, entities) as { error: string };
+    expect(ev.error).toMatch(/^teach_sequence step 2 has an empty target\./);
+    expect(ev.error).toMatch(/fold it into the previous step's instruction/);
   });
   it('maps step_done and clear; unknown tool → error', () => {
     expect(teachCallToEvent({ name: 'teach_step_done', args: {} }, entities)).toEqual({ type: 'teach.stepAdvance' });
@@ -47,7 +64,7 @@ describe('teachCallToEvent', () => {
   it('maps teach_relate resolving both ends; fails naming the bad end', () => {
     const ok = teachCallToEvent({ name: 'teach_relate', args: { pairs: [{ from: 'Save button', to: 'Document body', label: 'writes to' }] } }, entities) as any;
     expect(ok.type).toBe('teach.relate');
-    const bad = teachCallToEvent({ name: 'teach_relate', args: { pairs: [{ from: 'Save button', to: 'Nonsense Widget', label: 'x' }] } }, entities);
-    expect(bad).toEqual({ error: 'Could not resolve target "Nonsense Widget" to an on-screen element.' });
+    const bad = teachCallToEvent({ name: 'teach_relate', args: { pairs: [{ from: 'Save button', to: 'Nonsense Widget', label: 'x' }] } }, entities) as { error: string };
+    expect(bad.error).toMatch(/^Could not resolve target "Nonsense Widget" to an on-screen element\./);
   });
 });

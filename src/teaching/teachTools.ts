@@ -1,6 +1,6 @@
 import type { VoiceTool } from '../voice/types';
 import type { SceneEntity, EntityId } from '../entities/registry';
-import { resolveEchoedTarget } from '../entities/registry';
+import { resolveEchoedTarget, displayName } from '../entities/registry';
 import type { TeachingEvent, TeachPosture, TeachRelation } from './types';
 
 export const TEACH_TOOLS: VoiceTool[] = [
@@ -33,7 +33,10 @@ export const TEACH_TOOLS: VoiceTool[] = [
     parameters: { type: 'object', properties: {}, required: [] } },
 ];
 
-const unresolved = (target: string) => ({ error: `Could not resolve target "${target}" to an on-screen element.` });
+// Errors are data the model recovers from: name the visible candidates so its retry can succeed.
+const unresolved = (target: string, entities: SceneEntity[]) => ({
+  error: `Could not resolve target "${target}" to an on-screen element. Visible elements: ${entities.filter(e => !e.sub).map(e => displayName(e)).join(', ')}.`,
+});
 
 function resolve(entities: SceneEntity[], target: string): EntityId | null {
   return resolveEchoedTarget(entities, target)?.entity.id ?? null;
@@ -47,14 +50,18 @@ export function teachCallToEvent(
   switch (call.name) {
     case 'teach_highlight': {
       const id = resolve(entities, String(a.target ?? ''));
-      if (!id) return unresolved(String(a.target ?? ''));
+      if (!id) return unresolved(String(a.target ?? ''), entities);
       return { type: 'teach.highlight', entityId: id, note: a.note ? String(a.note) : undefined };
     }
     case 'teach_sequence': {
       const steps: { entityId: EntityId; subgoal: string; instruction: string }[] = [];
+      let n = 0;
       for (const s of a.steps ?? []) {
-        const id = resolve(entities, String(s.target ?? ''));
-        if (!id) return unresolved(String(s.target ?? ''));
+        n++;
+        const target = String(s.target ?? '').trim();
+        if (!target) return { error: `teach_sequence step ${n} has an empty target. Every step must name a visible control — a step with nothing to click (typing text, choosing a name) is not its own step; fold it into the previous step's instruction.` };
+        const id = resolve(entities, target);
+        if (!id) return unresolved(target, entities);
         steps.push({ entityId: id, subgoal: String(s.subgoal ?? ''), instruction: String(s.instruction ?? '') });
       }
       if (!steps.length) return { error: 'teach_sequence requires at least one step.' };
@@ -66,9 +73,9 @@ export function teachCallToEvent(
       const relations: TeachRelation[] = [];
       for (const p of a.pairs ?? []) {
         const from = resolve(entities, String(p.from ?? ''));
-        if (!from) return unresolved(String(p.from ?? ''));
+        if (!from) return unresolved(String(p.from ?? ''), entities);
         const to = resolve(entities, String(p.to ?? ''));
-        if (!to) return unresolved(String(p.to ?? ''));
+        if (!to) return unresolved(String(p.to ?? ''), entities);
         relations.push({ from, to, label: String(p.label ?? '') });
       }
       if (!relations.length) return { error: 'teach_relate requires at least one pair.' };
