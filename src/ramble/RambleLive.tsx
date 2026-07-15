@@ -150,6 +150,10 @@ export function RambleLive() {
           // Orphan prevention for errored providers lives at the top of start() instead.
           onError: (m) => { setIsConnecting(false); setLastError(m); telemetry.error(m); },
           onInputTranscript: () => apply({ type: 'heartbeat' }),
+          // Model speech is activity too: without these, the monitor reads "stalled" while
+          // the agent is audibly asking a gap question or reading back (live smoke 2026-07-15).
+          onModelTranscript: () => apply({ type: 'heartbeat' }),
+          onResponseStart: () => apply({ type: 'heartbeat' }),
           onToolCall: handleToolCall,
         },
       );
