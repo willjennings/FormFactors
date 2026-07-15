@@ -85,3 +85,22 @@ describe('reduce — yield + edits', () => {
     expect(slot(st, 'location')).toMatchObject({ value: 'C-3', status: draft.status, source: 'heard', owner: 'agent' });
   });
 });
+
+describe('yield guards — agent events cannot touch a user-owned slot (Plan 2)', () => {
+  const userOwned = () => {
+    let st = reduce(start(), { type: 'slot.draft', slotId: 'location', value: 'C-3', confidence: 0.9, source: 'heard' }, 2000);
+    st = reduce(st, { type: 'user.editStart', slotId: 'location' }, 2100);
+    return reduce(st, { type: 'user.editCommit', slotId: 'location', value: 'C-9' }, 2200);
+  };
+  it('drops slot.needsInput on a user-owned slot (no status flip, no asking activity)', () => {
+    const after = reduce(userOwned(), { type: 'slot.needsInput', slotId: 'location', question: 'where exactly?' }, 2300);
+    expect(slot(after, 'location')).toMatchObject({ value: 'C-9', status: 'confirmed', owner: 'user' });
+    expect(after.activity).not.toBe('asking');
+  });
+  it('drops slot.confirmed on a user-owned slot mid-edit (status stays the pre-edit snapshot)', () => {
+    let st = reduce(start(), { type: 'slot.draft', slotId: 'drawingRef', value: 'S-301', confidence: 0.4, source: 'heard' }, 2000);
+    st = reduce(st, { type: 'user.editStart', slotId: 'drawingRef' }, 2100); // owner=user, still 'draft'
+    const after = reduce(st, { type: 'slot.confirmed', slotId: 'drawingRef' }, 2200);
+    expect(slot(after, 'drawingRef')).toMatchObject({ status: 'draft', owner: 'user' });
+  });
+});

@@ -33,11 +33,11 @@ export function reduce(state: SessionState, event: RambleEvent, now: number): Se
       return { ...s, activeSlotId, activity: 'thinking', lastUpdateAt: now };
     }
     case 'slot.needsInput': {
-      if (!hasSlot(state, event.slotId)) return state;
+      if (!hasSlot(state, event.slotId) || ownerOf(state, event.slotId) === 'user') return state;
       return { ...patchSlot(state, event.slotId, { status: 'needsInput', pendingQuestion: event.question }, now), activity: 'asking', lastUpdateAt: now };
     }
     case 'slot.confirmed': {
-      if (!hasSlot(state, event.slotId)) return state;
+      if (!hasSlot(state, event.slotId) || ownerOf(state, event.slotId) === 'user') return state;
       return { ...patchSlot(state, event.slotId, { status: 'confirmed' }, now), lastUpdateAt: now };
     }
     case 'activity.change':
