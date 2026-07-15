@@ -30,6 +30,21 @@ export function argsKey(args: Record<string, unknown> | undefined | null): strin
   return `{${parts.join(',')}}`;
 }
 
+/**
+ * Dedup key for a tool call. Almost always `argsKey(args)` — but teach_step_done
+ * is zero-arg and NOT idempotent (each call advances the sequence), so a constant
+ * key made the deduper swallow legitimate consecutive advances (e.g. a catch-up
+ * burst after "I already clicked through them") while acking success. Keying on
+ * the active step keeps G9's replay protection (same step collides) without
+ * colliding distinct advances — and makes the `deduped:true` ack honest.
+ */
+export function dedupeKeyFor(
+  name: string, args: Record<string, unknown> | undefined | null, activeStepIndex: number | null,
+): string {
+  if (name === 'teach_step_done') return argsKey({ step: activeStepIndex });
+  return argsKey(args);
+}
+
 /** Recursively stringify a value with object keys sorted. */
 function stableStringify(value: unknown): string {
   if (value === undefined) return 'null';

@@ -59,7 +59,7 @@ import type { FeedbackMode, FeedbackEvent } from './feedback';
 import { primeEarcons } from './feedback/earcons';
 import { telemetry, detectDevice } from './telemetry';
 import { referents } from './referents';
-import { CallDeduper, argsKey, parseRepair } from './coherence';
+import { CallDeduper, dedupeKeyFor, parseRepair } from './coherence';
 import { assignTargetNumbers, parseTargetSelection } from './input_targets';
 import { buildSpreadsheetSnapshot, formatSnapshotForModel } from './widgets/spreadsheetData';
 import { ProgramSurface } from './widgets/ProgramSurface';
@@ -1117,7 +1117,10 @@ export default function App() {
     // G9 IDEMPOTENCY: drop a duplicate tool call the model re-emitted within the window (a
     // known agent failure mode — e.g. replaying a chain). Ack it so the model doesn't hang.
     // respond is exempt: rail.set is idempotent and a rejected payload must be retryable within the window.
-    if (fc.name !== 'respond' && callDeduperRef.current.seen(fc.name, argsKey(fc.args), Date.now())) {
+    // teach_step_done keys on the ACTIVE STEP (zero-arg + non-idempotent): consecutive
+    // advances of different steps pass; only a replay of the same step's advance dedupes.
+    const dedupeKey = dedupeKeyFor(fc.name, fc.args, teachingSnapshotRef.current?.sequence?.activeIndex ?? null);
+    if (fc.name !== 'respond' && callDeduperRef.current.seen(fc.name, dedupeKey, Date.now())) {
       addLog('info', `Duplicate tool call skipped: ${fc.name}`);
       providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true, deduped: true });
       return;
