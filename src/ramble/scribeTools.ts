@@ -1,5 +1,5 @@
 import type { VoiceTool } from '../voice/types';
-import type { RambleEvent, SlotSource } from './types';
+import type { RambleEvent, SlotSource, FormSchema } from './types';
 
 export const SCRIBE_TOOLS: VoiceTool[] = [
   {
@@ -45,21 +45,41 @@ export const SCRIBE_TOOLS: VoiceTool[] = [
   },
 ];
 
-/** Pure 1:1 mapping from a scribe tool call to a reducer event. Returns null for unknown tools. */
-export function toolCallToEvent(call: { name: string; args: any }): RambleEvent | null {
+const AGENT_SOURCES: SlotSource[] = ['heard', 'inferred', 'asked'];
+
+/** Errors are data: name the valid ids so the scribe's retry can succeed. */
+function badSlot(slotId: string, schema: FormSchema) {
+  return { error: `Unknown slotId "${slotId}". Valid slot ids: ${schema.slots.map((s) => s.id).join(', ')}.` };
+}
+
+/** Pure mapping from a scribe tool call to reducer events. Unknown tool/slot fails the WHOLE call. */
+export function scribeCallToEvents(
+  call: { name: string; args: any }, schema: FormSchema,
+): RambleEvent[] | { error: string } {
   const a = call.args ?? {};
+  const slotId = String(a.slotId ?? '');
+  const known = (id: string) => schema.slots.some((s) => s.id === id);
   switch (call.name) {
-    case 'fill_slot':
-      return { type: 'slot.draft', slotId: String(a.slotId), value: String(a.value ?? ''), confidence: Number(a.confidence ?? 0.5), source: (a.source ?? 'heard') as SlotSource };
+    case 'fill_slot': {
+      if (!known(slotId)) return badSlot(slotId, schema);
+      const confidence = Math.min(1, Math.max(0, Number(a.confidence ?? 0.5)));
+      const source = (AGENT_SOURCES.includes(a.source) ? a.source : 'heard') as SlotSource;
+      return [
+        { type: 'slot.fillingStart', slotId },
+        { type: 'slot.draft', slotId, value: String(a.value ?? ''), confidence, source },
+      ];
+    }
     case 'ask_gap':
-      return { type: 'slot.needsInput', slotId: String(a.slotId), question: String(a.question ?? '') };
+      if (!known(slotId)) return badSlot(slotId, schema);
+      return [{ type: 'slot.needsInput', slotId, question: String(a.question ?? '') }];
     case 'confirm_slot':
-      return { type: 'slot.confirmed', slotId: String(a.slotId) };
+      if (!known(slotId)) return badSlot(slotId, schema);
+      return [{ type: 'slot.confirmed', slotId }];
     case 'recap':
-      return { type: 'session.phaseChange', phase: 'recapping' };
+      return [{ type: 'session.phaseChange', phase: 'recapping' }];
     case 'submit':
-      return { type: 'session.phaseChange', phase: 'awaitingConsent' };
+      return [{ type: 'session.phaseChange', phase: 'awaitingConsent' }];
     default:
-      return null;
+      return { error: `Unknown scribe tool "${call.name}".` };
   }
 }
