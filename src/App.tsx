@@ -1881,10 +1881,14 @@ export default function App() {
       );
       const voice = backend === 'gemini' ? 'Zephyr' : backend === 'azure' ? 'alloy' : 'marin';
       setTraffic({ frames: 0, hints: 0 });
+      // Stale-callback guard: gemini's WS fires onclose unconditionally, so a delayed close
+      // event from a REPLACED session must not touch the current one's state.
+      const thisProvider = providerRef.current;
       await providerRef.current.connect(
         { instructions: buildInstructions(honest, program, entitiesRef.current), tools: voiceTools, voice },
         {
           onOpen: () => {
+            if (providerRef.current !== thisProvider) { try { thisProvider?.close(); } catch {} return; }
             setIsLive(true);
             addLog('info', 'Live Link Established');
             // TESTBED: snapshot the config + device so this session's metrics are attributable.
@@ -1913,8 +1917,12 @@ export default function App() {
               pendingTypedRef.current = null;
             }
           },
-          onClose: () => { setIsLive(false); setIsConnecting(false); connectInFlightRef.current = false; sessionRef.current = null; providerRef.current = null; addLog('info', 'Live Link Closed'); },
+          onClose: () => {
+            if (providerRef.current !== thisProvider) return; // stale close from a replaced session
+            setIsLive(false); setIsConnecting(false); connectInFlightRef.current = false; sessionRef.current = null; providerRef.current = null; addLog('info', 'Live Link Closed');
+          },
           onError: (m: string) => {
+            if (providerRef.current !== thisProvider) return; // stale error from a replaced session
             setIsConnecting(false);
             connectInFlightRef.current = false;
             // R1: a connect-time error must not silently eat the queued command — give it back.

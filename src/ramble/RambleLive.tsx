@@ -137,18 +137,27 @@ export function RambleLive() {
           voice: backend === 'gemini' ? 'Zephyr' : backend === 'azure' ? 'alloy' : 'marin',
         },
         {
+          // Stale-callback guards: gemini's WS fires onclose unconditionally, so a delayed
+          // event from a REPLACED session must not touch the current one's state.
           onOpen: () => {
+            if (providerRef.current !== provider) { try { provider.close(); } catch {} return; }
             setIsLive(true); setIsConnecting(false);
             startedAtRef.current = Date.now();
             telemetry.start({ backend, autonomy: 'witnessed', feedback: 'earcon', program: 'rfi-ramble', honest: true, device: detectDevice() });
             playEarcon('listening');
             apply({ type: 'heartbeat' });
           },
-          onClose: () => { clearSubmitTimer(); setIsLive(false); setIsConnecting(false); providerRef.current = null; },
+          onClose: () => {
+            if (providerRef.current !== provider) return; // stale close from a replaced session
+            clearSubmitTimer(); setIsLive(false); setIsConnecting(false); providerRef.current = null;
+          },
           // NOTE: onError must NOT close/null the provider — Azure routes a non-fatal advisory
           // (missing transcribe deployment) through onError on a session that keeps working.
           // Orphan prevention for errored providers lives at the top of start() instead.
-          onError: (m) => { setIsConnecting(false); setLastError(m); telemetry.error(m); },
+          onError: (m) => {
+            if (providerRef.current !== provider) return; // stale error from a replaced session
+            setIsConnecting(false); setLastError(m); telemetry.error(m);
+          },
           onInputTranscript: () => apply({ type: 'heartbeat' }),
           // Model speech is activity too: without these, the monitor reads "stalled" while
           // the agent is audibly asking a gap question or reading back (live smoke 2026-07-15).
