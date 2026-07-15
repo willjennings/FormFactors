@@ -38,7 +38,12 @@ export type TelemetryEvent =
   | { t: number; type: 'action'; verb: string; verbClass: string; decision: 'commit' | 'witness'; modality: InputModality }
   | { t: number; type: 'grounding'; appReferent: string | null; modelTarget: string | null; agree: boolean | null; resolution: 'structural' | 'visual' | 'none' }
   | { t: number; type: 'map'; query: string }
-  | { t: number; type: 'correction' } // undo
+  | { t: number; type: 'correction'; slotId?: string; overAgent?: boolean } // undo, or a ramble user-edit (overAgent = the key trust signal)
+  | { t: number; type: 'fill'; slotId: string; source: string; confidence: number }
+  | { t: number; type: 'gap_question'; slotId: string }
+  | { t: number; type: 'readback'; accepted: boolean }
+  | { t: number; type: 'stall' }
+  | { t: number; type: 'session_complete'; timeToCompleteMs: number; slotsFilled: number; inferredCount: number }
   | { t: number; type: 'error'; message: string }
   | { t: number; type: 'guidance'; kind: 'sequence_start' | 'step_done' | 'sequence_complete' | 'sequence_abandoned' | 'blocked' | 'reveal' | 'relate_shown' | 'card_dealt' | 'why_opened' | 'card_flipped' | 'show_me' | 'check_auto_pass' | 'check_auto_fail' | 'check_user_confirmed' | 'rail_complete' | 'rail_abandoned'; taskKey?: string; posture?: string; fadeLevel?: number; cardType?: string; band?: string };
 
@@ -88,7 +93,14 @@ class Telemetry {
     this.push({ type: 'grounding', appReferent, modelTarget, agree, resolution });
   }
   map(query: string) { this.push({ type: 'map', query }); }
-  correction() { this.push({ type: 'correction' }); }
+  correction(slotId?: string, overAgent?: boolean) { this.push({ type: 'correction', slotId, overAgent }); }
+  fill(slotId: string, source: string, confidence: number) { this.push({ type: 'fill', slotId, source, confidence }); }
+  gapQuestion(slotId: string) { this.push({ type: 'gap_question', slotId }); }
+  readback(accepted: boolean) { this.push({ type: 'readback', accepted }); }
+  stall() { this.push({ type: 'stall' }); }
+  sessionComplete(timeToCompleteMs: number, slotsFilled: number, inferredCount: number) {
+    this.push({ type: 'session_complete', timeToCompleteMs, slotsFilled, inferredCount });
+  }
   error(message: string) { this.push({ type: 'error', message }); }
   guidance(kind: 'sequence_start' | 'step_done' | 'sequence_complete' | 'sequence_abandoned' | 'blocked' | 'reveal' | 'relate_shown' | 'card_dealt' | 'why_opened' | 'card_flipped' | 'show_me' | 'check_auto_pass' | 'check_auto_fail' | 'check_user_confirmed' | 'rail_complete' | 'rail_abandoned', detail: { taskKey?: string; posture?: string; fadeLevel?: number; cardType?: string; band?: string } = {}) {
     this.push({ type: 'guidance', kind, ...detail });
@@ -170,16 +182,19 @@ class Telemetry {
 
   /** Download the session as JSON for offline analysis / A/B aggregation. */
   exportJSON() {
-    if (typeof window === 'undefined') return;
-    const blob = new Blob([JSON.stringify(this.snapshot(), null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    const ff = this.config?.device.formFactor ?? 'unknown';
-    const cfg = this.config ? `${this.config.backend}-${this.config.autonomy}-${this.config.feedback}` : 'session';
-    a.href = url;
-    a.download = `testbed-${ff}-${cfg}-${this.startedAt}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    const json = JSON.stringify(this.snapshot(), null, 2);
+    if (typeof window !== 'undefined') {
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const ff = this.config?.device.formFactor ?? 'unknown';
+      const cfg = this.config ? `${this.config.backend}-${this.config.autonomy}-${this.config.feedback}` : 'session';
+      a.href = url;
+      a.download = `testbed-${ff}-${cfg}-${this.startedAt}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+    return json;
   }
 }
 

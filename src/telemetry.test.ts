@@ -25,3 +25,23 @@ describe('telemetry resolution slicing', () => {
     expect(m.grounding.byResolution.none).toEqual({ total: 1, agree: 1 });
   });
 });
+
+describe('ramble telemetry (spec §7)', () => {
+  beforeEach(() => telemetry.start(cfg));
+  it('records fill / gap_question / readback / stall / session_complete and an attributed correction', () => {
+    telemetry.fill('location', 'heard', 0.8);
+    telemetry.gapQuestion('neededBy');
+    telemetry.readback(true);
+    telemetry.readback(false);
+    telemetry.stall();
+    telemetry.correction('location', true);
+    telemetry.sessionComplete(42_000, 6, 1);
+    const events = JSON.parse(telemetry.exportJSON()).events as any[];
+    expect(events.find(e => e.type === 'fill')).toMatchObject({ slotId: 'location', source: 'heard', confidence: 0.8 });
+    expect(events.find(e => e.type === 'gap_question')).toMatchObject({ slotId: 'neededBy' });
+    expect(events.filter(e => e.type === 'readback').map(e => e.accepted)).toEqual([true, false]);
+    expect(events.some(e => e.type === 'stall')).toBe(true);
+    expect(events.find(e => e.type === 'correction')).toMatchObject({ slotId: 'location', overAgent: true });
+    expect(events.find(e => e.type === 'session_complete')).toMatchObject({ timeToCompleteMs: 42_000, slotsFilled: 6, inferredCount: 1 });
+  });
+});
