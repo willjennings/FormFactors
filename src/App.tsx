@@ -391,6 +391,12 @@ export default function App() {
   const [liveTranscription, setLiveTranscription] = useState("");
   const [isConnecting, setIsConnecting] = useState(false);
   const pendingTypedRef = useRef<string | null>(null);
+  // R1 #1: the type-time deixis hint stashed while no session is open — flushed in onOpen
+  // BEFORE the pending typed text so the model reads the pointer context first.
+  const pendingHintRef = useRef<string | null>(null);
+  // R1 #5: connect re-entrancy guard (state is async — a double-submit in one frame would
+  // otherwise start two sessions and orphan the first provider).
+  const connectInFlightRef = useRef(false);
   const lastInputModalityRef = useRef<InputModality>('voice');
   const lastActivityRef = useRef(Date.now());
   const [lastError, setLastError] = useState<string | null>(null);
@@ -1741,7 +1747,10 @@ export default function App() {
           const sub = wordAt(hX, hY);
           const subTag = sub ? ` (specifically the word "${sub.text}")` : '';
           const hintText = `[USER JUST SAID "${kw.toUpperCase()}" WHILE POINTING AT: ${displayName(foundObject)}${subTag}${confidenceTag}. ${isCommand ? "NOTE: This is part of an explicit command." : "NOTE: This is just a mention, stay silent unless they give a command."}${refCtx ? ` ${refCtx}` : ''}]`;
-          providerRef.current?.sendTextHint(hintText);
+          // R1 #1: pre-session (typed auto-start), the pointer context would be lost —
+          // stash the hint; onOpen delivers it before the queued command.
+          if (providerRef.current) providerRef.current.sendTextHint(hintText);
+          else pendingHintRef.current = hintText;
           if (sub) referents.note(`"${sub.text}"`, 'pointed');
         }
       } else {
@@ -1764,12 +1773,17 @@ export default function App() {
     addLog('event', `⌨ ${text}`);
     setLiveTranscription(text);
     processInputTranscript(text);
-    if (providerRef.current) {
+    if (providerRef.current && isLive) {
       providerRef.current.sendUserText(text);
     } else {
-      pendingTypedRef.current = text;
-      setIsConnecting(true);
-      startLiveSession();
+      // R1 #2: no OPEN session (none, or one still connecting — providerRef is set before
+      // connect resolves, and a pre-open sendUserText is silently swallowed by the provider's
+      // null-session optional chain). Queue instead; onOpen flushes. Multiple submits join.
+      pendingTypedRef.current = pendingTypedRef.current ? `${pendingTypedRef.current}\n${text}` : text;
+      if (!connectInFlightRef.current && !providerRef.current) {
+        setIsConnecting(true);
+        startLiveSession();
+      }
     }
   };
 
@@ -1779,12 +1793,15 @@ export default function App() {
   // user their text back so nothing is lost.
   const abortPendingTyped = () => {
     setIsConnecting(false);
+    connectInFlightRef.current = false;
     if (pendingTypedRef.current) setRestoredDraft({ text: pendingTypedRef.current, at: Date.now() });
     pendingTypedRef.current = null;
+    pendingHintRef.current = null;
   };
 
   const startLiveSession = async () => {
-    if (isLive) return; // Prevent multiple sessions
+    if (isLive || connectInFlightRef.current) return; // Prevent multiple/concurrent sessions
+    connectInFlightRef.current = true;
     lastTranscriptionTimeRef.current = 0;
 
     const apiKey = process.env.GEMINI_API_KEY;
@@ -1880,6 +1897,13 @@ export default function App() {
               device: detectDevice(),
             });
             setIsConnecting(false);
+            connectInFlightRef.current = false;
+            // R1 #1: deliver the stashed type-time deixis hint before the queued text so
+            // the model reads the pointer context first.
+            if (pendingHintRef.current) {
+              providerRef.current?.sendTextHint(pendingHintRef.current);
+              pendingHintRef.current = null;
+            }
             if (pendingTypedRef.current) {
               // The queued typed text IS the first user turn: arm the transcription clock
               // before sending, or the guards below discard the model's entire first
@@ -1889,10 +1913,14 @@ export default function App() {
               pendingTypedRef.current = null;
             }
           },
-          onClose: () => { setIsLive(false); setIsConnecting(false); sessionRef.current = null; providerRef.current = null; addLog('info', 'Live Link Closed'); },
+          onClose: () => { setIsLive(false); setIsConnecting(false); connectInFlightRef.current = false; sessionRef.current = null; providerRef.current = null; addLog('info', 'Live Link Closed'); },
           onError: (m: string) => {
             setIsConnecting(false);
+            connectInFlightRef.current = false;
+            // R1: a connect-time error must not silently eat the queued command — give it back.
+            if (pendingTypedRef.current) setRestoredDraft({ text: pendingTypedRef.current, at: Date.now() });
             pendingTypedRef.current = null;
+            pendingHintRef.current = null;
             let errMsg = m;
             if (errMsg.includes('Permission denied') || errMsg.includes('NotAllowedError')) {
               errMsg = "Microphone access denied. Please check your browser settings and ensure this site has permission to use your microphone.";
