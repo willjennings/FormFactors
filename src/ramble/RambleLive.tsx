@@ -30,6 +30,11 @@ export function RambleLive() {
   const deduperRef = useRef(new CallDeduper());
   const startedAtRef = useRef(0);
   const typedRef = useRef<HTMLInputElement | null>(null);
+  const submitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearSubmitTimer = () => {
+    if (submitTimerRef.current != null) { clearTimeout(submitTimerRef.current); submitTimerRef.current = null; }
+  };
 
   const apply = (ev: RambleEvent) => {
     setState((prev) => {
@@ -48,7 +53,7 @@ export function RambleLive() {
     prevStalledRef.current = stalled;
   }, [stalled]);
 
-  useEffect(() => () => providerRef.current?.close(), []); // teardown on unmount
+  useEffect(() => () => { clearSubmitTimer(); providerRef.current?.close(); }, []); // teardown on unmount
 
   const handleToolCall = (call: { id: string; name: string; args: any }) => {
     // G9 idempotency (all scribe tools carry args; recap/submit repeats are idempotent phase changes).
@@ -76,6 +81,18 @@ export function RambleLive() {
 
   const start = async () => {
     if (isLive || isConnecting) return;
+    // Fresh session on every start: stale fills/phase from a prior run must not leak in,
+    // and a pending submit timer from a prior session must never fire into this one.
+    // Also close any leftover provider (e.g. one that errored before onOpen and never
+    // reached onClose) so its mic/socket isn't orphaned — close() is try/catch-safe
+    // in all three factories.
+    clearSubmitTimer();
+    providerRef.current?.close();
+    providerRef.current = null;
+    const fresh = initialSessionState(RFI_SCHEMA, new Date().toLocaleDateString(), Date.now());
+    stateRef.current = fresh;
+    setState(fresh);
+    deduperRef.current.reset();
     setIsConnecting(true); setLastError(null);
     try {
       const apiKey = process.env.GEMINI_API_KEY;
@@ -101,7 +118,10 @@ export function RambleLive() {
             playEarcon('listening');
             apply({ type: 'heartbeat' });
           },
-          onClose: () => { setIsLive(false); setIsConnecting(false); providerRef.current = null; },
+          onClose: () => { clearSubmitTimer(); setIsLive(false); setIsConnecting(false); providerRef.current = null; },
+          // NOTE: onError must NOT close/null the provider — Azure routes a non-fatal advisory
+          // (missing transcribe deployment) through onError on a session that keeps working.
+          // Orphan prevention for errored providers lives at the top of start() instead.
           onError: (m) => { setIsConnecting(false); setLastError(m); telemetry.error(m); },
           onInputTranscript: () => apply({ type: 'heartbeat' }),
           onToolCall: handleToolCall,
@@ -112,7 +132,15 @@ export function RambleLive() {
     }
   };
 
-  const stop = () => providerRef.current?.close();
+  // Explicit teardown: azure/openai suppress cb.onClose on app-initiated close (their
+  // `closed` flag), so stop() cannot rely on onClose firing. Idempotent with gemini's onClose.
+  const stop = () => {
+    clearSubmitTimer();
+    providerRef.current?.close();
+    providerRef.current = null;
+    setIsLive(false);
+    setIsConnecting(false);
+  };
 
   // UI→Agent edits: reducer enforces yield; the hint is defense-in-depth (spec §6.2).
   const onEditStart = (id: string) => {
@@ -132,7 +160,13 @@ export function RambleLive() {
   const confirmSubmit = () => {
     apply({ type: 'session.phaseChange', phase: 'submitting' });
     playEarcon('commit-mutate');
-    setTimeout(() => {
+    // Scope the timer to THIS session: capture the provider, and bail if the session
+    // changed before it fires — a stale "submitted" hint into a new session would be a lie.
+    const capturedProvider = providerRef.current;
+    clearSubmitTimer();
+    submitTimerRef.current = setTimeout(() => {
+      submitTimerRef.current = null;
+      if (providerRef.current !== capturedProvider) return; // session ended/restarted meanwhile
       apply({ type: 'session.phaseChange', phase: 'done' });
       const st = stateRef.current;
       telemetry.sessionComplete(
