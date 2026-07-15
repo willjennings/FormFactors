@@ -3,20 +3,21 @@ import { LivenessIndicator } from './LivenessIndicator';
 import { SlotRow } from './SlotRow';
 
 export function Monitor({
-  schema, state, now, onEditStart, onEditCommit, onEditCancel, onOpenFullEditor,
+  schema, state, now, onEditStart, onEditCommit, onEditCancel, onOpenFullEditor, live = true,
 }: {
   schema: FormSchema; state: SessionState; now: number;
   onEditStart: (id: string) => void;
   onEditCommit: (id: string, value: string) => void;
   onEditCancel: (id: string) => void;
   onOpenFullEditor: () => void;
+  live?: boolean;
 }) {
   const slots = [...schema.slots].sort((a, b) => a.order - b.order);
   return (
     <div className="max-w-md mx-auto mt-10 rounded-xl border border-slate-200 bg-white shadow-sm">
       <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
         <h2 className="text-sm font-semibold">{schema.title}</h2>
-        <LivenessIndicator state={state} now={now} />
+        <LivenessIndicator state={state} now={now} live={live} />
       </div>
       <div className="py-2">
         {slots.map((slot) => {

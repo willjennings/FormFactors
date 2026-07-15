@@ -49,28 +49,54 @@ export function RambleLive() {
   const stalled = isStalled(state, now);
   const prevStalledRef = useRef(false);
   useEffect(() => {
-    if (stalled && !prevStalledRef.current) { telemetry.stall(); playEarcon('error'); }
+    // Gate on isLive: with no session (never started, or after Stop) there's nothing
+    // live to be stalled — don't play the error earcon or record telemetry.stall()
+    // into a dead session (that would be a lie about what's happening).
+    if (isLive && stalled && !prevStalledRef.current) { telemetry.stall(); playEarcon('error'); }
     prevStalledRef.current = stalled;
-  }, [stalled]);
+  }, [stalled, isLive]);
 
   useEffect(() => () => { clearSubmitTimer(); providerRef.current?.close(); }, []); // teardown on unmount
 
   const handleToolCall = (call: { id: string; name: string; args: any }) => {
-    // G9 idempotency (all scribe tools carry args; recap/submit repeats are idempotent phase changes).
-    if (deduperRef.current.seen(call.name, argsKey(call.args), Date.now())) {
-      providerRef.current?.sendToolResponse(call.id, call.name, { success: true, deduped: true });
-      return;
-    }
+    // Validate FIRST: a call that fails validation never mutated anything, so it
+    // must never be recorded in the deduper — otherwise a retry of a genuinely
+    // failed call would come back as a false `{success:true, deduped:true}`.
     const mapped = scribeCallToEvents(call, RFI_SCHEMA);
     if ('error' in mapped) {
       providerRef.current?.sendToolResponse(call.id, call.name, { success: false, error: mapped.error });
       return;
     }
     const prev = stateRef.current;
+    // Yield guard (defense-in-depth for spec §6.2): the reducer silently drops
+    // fill_slot/ask_gap/confirm_slot for a user-owned slot, so a structurally valid
+    // call here would otherwise still get acked `{success:true}` with earcons and
+    // telemetry for a mutation that never happened. Ack the truth instead, and — same
+    // reasoning as above — never record a dropped call in the deduper.
+    if (call.name === 'fill_slot' || call.name === 'ask_gap' || call.name === 'confirm_slot') {
+      const slotId = String(call.args?.slotId ?? '');
+      if (prev.fills.find((f) => f.slotId === slotId)?.owner === 'user') {
+        providerRef.current?.sendToolResponse(call.id, call.name, {
+          success: false,
+          error: `"${label(slotId)}" is user-owned — the user filled it themselves; never fill, ask about, or change it.`,
+        });
+        return;
+      }
+    }
+    // G9 idempotency (all scribe tools carry args; recap/submit repeats are idempotent phase changes).
+    if (deduperRef.current.seen(call.name, argsKey(call.args), Date.now())) {
+      providerRef.current?.sendToolResponse(call.id, call.name, { success: true, deduped: true });
+      return;
+    }
     if (call.name === 'fill_slot') {
       // A re-fill over an existing draft = a patched read-back (spec §7 readback accepted-vs-patched).
       if (prev.fills.find((f) => f.slotId === call.args?.slotId)?.status === 'draft') telemetry.readback(false);
-      telemetry.fill(String(call.args?.slotId), String(call.args?.source ?? 'heard'), Number(call.args?.confidence ?? 0.5));
+      // Confidence for telemetry comes from the mapped slot.draft event (already
+      // clamped/NaN-guarded) so telemetry matches what actually lands in state,
+      // not the raw (possibly unparseable) arg.
+      const draft = mapped.find((ev) => ev.type === 'slot.draft');
+      const confidence = draft && draft.type === 'slot.draft' ? draft.confidence : 0.5;
+      telemetry.fill(String(call.args?.slotId), String(call.args?.source ?? 'heard'), confidence);
     }
     if (call.name === 'ask_gap') { telemetry.gapQuestion(String(call.args?.slotId)); playEarcon('confirm-needed'); }
     if (call.name === 'confirm_slot') { telemetry.readback(true); playEarcon('commit-mutate'); }
@@ -208,7 +234,7 @@ export function RambleLive() {
       {lastError && <div className="max-w-md mx-auto mt-2 px-4 text-xs text-red-600">{lastError}</div>}
 
       <Monitor
-        schema={RFI_SCHEMA} state={state} now={now}
+        schema={RFI_SCHEMA} state={state} now={now} live={isLive}
         onEditStart={onEditStart} onEditCommit={onEditCommit} onEditCancel={onEditCancel}
         onOpenFullEditor={() => { /* the edit pass is a follow-on spec */ }}
       />
@@ -223,14 +249,18 @@ export function RambleLive() {
       )}
 
       {state.phase === 'awaitingConsent' && (
-        <div className="fixed inset-0 z-40 bg-black/30 flex items-center justify-center" role="dialog" aria-label="Submit consent">
-          <div className="bg-white rounded-xl shadow-lg p-5 w-80">
-            <h3 className="text-sm font-semibold">Submit this {RFI_SCHEMA.title}?</h3>
-            <p className="text-xs text-slate-500 mt-1.5">You just heard the recap. Nothing is sent without your OK.</p>
-            <div className="flex gap-2 mt-4 justify-end">
-              <Button size="sm" variant="outline" onClick={declineSubmit}>Not yet</Button>
-              <Button size="sm" onClick={confirmSubmit}>Submit</Button>
-            </div>
+        // Non-blocking: a floating card, not a full-screen backdrop — the model may
+        // tell the user "they may edit fields" while this is up (declineSubmit), so
+        // every slot row and the Stop/Start button must stay reachable underneath.
+        <div
+          className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 bg-white rounded-xl shadow-lg p-5 w-80"
+          role="dialog" aria-label="Submit consent"
+        >
+          <h3 className="text-sm font-semibold">Submit this {RFI_SCHEMA.title}?</h3>
+          <p className="text-xs text-slate-500 mt-1.5">You just heard the recap. Nothing is sent without your OK.</p>
+          <div className="flex gap-2 mt-4 justify-end">
+            <Button size="sm" variant="outline" onClick={declineSubmit}>Not yet</Button>
+            <Button size="sm" onClick={confirmSubmit}>Submit</Button>
           </div>
         </div>
       )}

@@ -22,6 +22,10 @@ describe('scribeCallToEvents', () => {
     const evs = scribeCallToEvents({ name: 'fill_slot', args: { slotId: 'location', value: 'C-3', confidence: 7, source: 'guessed' } }, RFI_SCHEMA) as any[];
     expect(evs[1]).toMatchObject({ confidence: 1, source: 'heard' });
   });
+  it('falls back an unparseable confidence to 0.5 rather than leaking NaN', () => {
+    const evs = scribeCallToEvents({ name: 'fill_slot', args: { slotId: 'location', value: 'C-3', confidence: 'high', source: 'heard' } }, RFI_SCHEMA) as any[];
+    expect(evs[1]).toMatchObject({ confidence: 0.5 });
+  });
   it('FAILS THE CALL on an unknown slotId, naming the valid ids (errors are data)', () => {
     const bad = scribeCallToEvents({ name: 'fill_slot', args: { slotId: 'siteContact', value: 'x', confidence: 0.9, source: 'heard' } }, RFI_SCHEMA) as { error: string };
     expect(bad.error).toMatch(/^Unknown slotId "siteContact"\./);

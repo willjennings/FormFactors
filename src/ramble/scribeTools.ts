@@ -62,7 +62,12 @@ export function scribeCallToEvents(
   switch (call.name) {
     case 'fill_slot': {
       if (!known(slotId)) return badSlot(slotId, schema);
-      const confidence = Math.min(1, Math.max(0, Number(a.confidence ?? 0.5)));
+      // An unparseable confidence (e.g. the model sends "high") must fall back to a
+      // neutral 0.5, not leak NaN into state — NaN also fails the `< 0.6` uncertainty
+      // check, which would render an unparseable confidence as UNMARKED (inverting
+      // "mark only the uncertain").
+      const n = Number(a.confidence);
+      const confidence = Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0.5;
       const source = (AGENT_SOURCES.includes(a.source) ? a.source : 'heard') as SlotSource;
       return [
         { type: 'slot.fillingStart', slotId },

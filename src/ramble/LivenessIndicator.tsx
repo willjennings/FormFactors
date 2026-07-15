@@ -6,7 +6,18 @@ const DOT: Record<string, string> = {
   thinking: 'bg-blue-400', readingBack: 'bg-violet-500', idle: 'bg-slate-400', stalled: 'bg-red-500',
 };
 
-export function LivenessIndicator({ state, now }: { state: SessionState; now: number }) {
+export function LivenessIndicator({ state, now, live = true }: { state: SessionState; now: number; live?: boolean }) {
+  if (!live) {
+    // No session (never started, or after Stop): show a calm "off", never "stalled" —
+    // mirrors the main app's MenuBar "off — nothing sent" precedent (§ honesty: don't
+    // alarm about a dead session).
+    return (
+      <div className="flex items-center gap-2 text-xs font-mono">
+        <span className="inline-block w-2.5 h-2.5 rounded-full bg-slate-400 opacity-40" />
+        <span className="text-slate-400">off</span>
+      </div>
+    );
+  }
   const stalled = isStalled(state, now);
   const activity = stalled ? 'stalled' : state.activity;
   const secs = Math.round((now - state.lastUpdateAt) / 1000);
