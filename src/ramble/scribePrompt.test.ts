@@ -18,7 +18,8 @@ describe('buildScribeInstructions', () => {
     expect(s).toContain('7/15/2026');                      // seeded dateSubmitted context
   });
   it('carries the yield rule and the no-progress-narration rule', () => {
-    expect(s).toMatch(/user (has )?edited.*never (change|fill|overwrite)/is);
+    expect(s).toMatch(/system tells you/i);
+    expect(s).toMatch(/user is editing or has edited.*never (change|fill|overwrite)/is);
     expect(s).toMatch(/do not narrate progress|no progress/i);
   });
 });
