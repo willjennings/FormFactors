@@ -94,7 +94,12 @@ the end-to-end voice loop over them.*
 
 Pass: honest description; decline/confirm both behave; no shape over-claimed.
 
-Result: ☐
+Result: 〜 2026-07-16 — TWO FINDINGS, both fixed in cbcb619: (1) full-ink preview read as
+a committed diagram → declining felt like deletion (now a faint 40% "proposed" layer);
+(2) user's Replace emptied the WHOLE board (marks too) — agent repro could NOT reproduce
+(swap verified working: strokes→Start/Process/Result persisted + recap card); leading
+suspect = post-confirm wb_clear by the model, now explicitly forbidden in the CONFIRMED
+hint. Voice perception + card + decline/re-propose all worked in the user's run.
 
 ## Test 5 — Reconnect perception (today's gate fix) ~2 min
 
