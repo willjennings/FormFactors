@@ -24,7 +24,7 @@ export function Omnibox({ isLive, isConnecting, error, transcript, suggestions, 
   // Restore typed text that was lost when a cold-start connect failed (R1 path).
   React.useEffect(() => { if (restoredDraft) setDraft(restoredDraft.text); }, [restoredDraft?.at]);
   return (
-    <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-30 w-[min(640px,90vw)] flex flex-col items-stretch gap-2" onPointerDown={(e) => e.stopPropagation()} onPointerMove={(e) => e.stopPropagation()}>
+    <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-30 w-[min(640px,90vw)] flex flex-col items-stretch gap-2" data-shell onPointerDown={(e) => e.stopPropagation()}>
       {above}
       {firstRunHint && !isLive && (
         <p className="text-center text-[11px] font-mono text-[var(--text-secondary)]">Point at things and ask — or type.</p>

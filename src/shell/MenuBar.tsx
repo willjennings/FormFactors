@@ -9,7 +9,7 @@ export function MenuBar({ isLive, isConnecting, isDarkMode, traffic, onToggleThe
   onToggleTheme: () => void; onToggleDrawer: () => void; onRambleMode: () => void; onSketchBoard: () => void;
 }) {
   return (
-    <div className="absolute top-0 left-0 right-0 z-30 flex items-center justify-between px-4 h-12 border-b border-[var(--card-border)] bg-[var(--card-bg)]/80 backdrop-blur" onPointerDown={(e) => e.stopPropagation()} onPointerMove={(e) => e.stopPropagation()}>
+    <div className="absolute top-0 left-0 right-0 z-30 flex items-center justify-between px-4 h-12 border-b border-[var(--card-border)] bg-[var(--card-bg)]/80 backdrop-blur" data-shell onPointerDown={(e) => e.stopPropagation()}>
       <span className="text-[12px] font-semibold text-[var(--text-primary)]">FormFactors</span>
       <div className="flex items-center gap-1">
         <span className="flex items-center gap-1.5 text-xs font-mono text-[var(--text-secondary)] mr-2" aria-live="polite">

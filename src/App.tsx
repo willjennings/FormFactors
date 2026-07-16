@@ -2356,11 +2356,21 @@ export default function App() {
     
     const now = Date.now();
     const coords = { x, y };
-    cursorRef.current = coords;
+    // The VISUAL cursor tracks everywhere (the native cursor is hidden app-wide) —
+    // stopping this over the shell made the cursor vanish (human smoke 2026-07-16).
     setTrailMousePos({
       x: e.clientX - rect.left,
       y: e.clientY - rect.top
     });
+    // Shell surfaces (omnibox/chips/cards, menu bar, dock, whiteboard panel) are NOT the
+    // plane: skip deixis there — no cursor anchor, no hover, no markers landing on the
+    // compose box when the user types "this".
+    if ((e.target as HTMLElement)?.closest?.('[data-shell]')) {
+      if (hoveredIdRef.current !== null) { setHoveredId(null); hoveredIdRef.current = null; }
+      if (hoveredWordRef.current !== null) { hoveredWordRef.current = null; setHoveredWord(null); hoveredWordBoxRef.current = null; }
+      return;
+    }
+    cursorRef.current = coords;
 
     // Update hovered object for visual feedback
     const hX = Math.round(x);
@@ -2436,6 +2446,9 @@ export default function App() {
   
   const handlePointerDown = (e: React.PointerEvent) => {
     lastActivityRef.current = Date.now();
+    // Shell clicks are not pointing (most shell roots stopPropagation already; this covers
+    // any that bubble, e.g. future surfaces): no touch-deixis registration, no paint.
+    if ((e.target as HTMLElement)?.closest?.('[data-shell]')) return;
     // Pointer visuals work with or without a session (gap 8): painting, hover, and markers
     // are local. Everything that costs tokens stays behind providerRef (null offline).
 

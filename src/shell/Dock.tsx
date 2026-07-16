@@ -13,7 +13,7 @@ export function Dock({ active, onSelect, onReopen }: {
   active: ProgramId; onSelect: (id: ProgramId) => void; onReopen: () => void;
 }) {
   return (
-    <div className="absolute bottom-3 left-4 z-30 flex items-center gap-1.5 px-2 py-1.5 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)]/85 backdrop-blur shadow-lg" onPointerDown={(e) => e.stopPropagation()}>
+    <div data-shell className="absolute bottom-3 left-4 z-30 flex items-center gap-1.5 px-2 py-1.5 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)]/85 backdrop-blur shadow-lg" onPointerDown={(e) => e.stopPropagation()}>
       {PROGRAMS.map(p => (
         <Tip key={p.id} label={p.label}>
           <Button size="icon48" aria-label={p.label}
