@@ -79,6 +79,9 @@ import { WB_TOOLS, wbCallToEvent } from './whiteboard/tools';
 import { initialWhiteboardState, reduce as wbReduce } from './whiteboard/store';
 import { serializeWhiteboard } from './whiteboard/serialize';
 import { buildWhiteboardDemo } from './whiteboard/demo';
+import { initialSketchState, reduce as sketchReduce } from './sketch/sketchStore';
+import { serializeSketch } from './sketch/serialize';
+import { buildSketchDemo } from './sketch/demo';
 import { initialRailState, reduceRail, railComplete, type RailEvent, type RailState } from './rail/railStore';
 import { respondCallToRail } from './rail/respondCallToRail';
 import { buildRailDemo } from './rail/demoRail';
@@ -420,6 +423,7 @@ export default function App() {
   const illustrateMode = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('illustrate');
   const railMode = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('rail');
   const whiteboardDemoMode = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('whiteboard');
+  const sketchDemoMode = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('sketch');
   const hoveredIdRef = useRef<EntityId | null>(null);
   // Throttle state for proactive hover grounding (non-Gemini backends).
   const lastHoverHintRef = useRef<string | null>(null);
@@ -601,6 +605,8 @@ export default function App() {
   const [whiteboard, whiteboardDispatch] = useReducer(wbReduce, undefined, initialWhiteboardState);
   const [whiteboardMode, setWhiteboardMode] = useState<'board' | 'overlay'>('board');
   const wbHintGateRef = useRef(makeChangeGate());
+  const [sketch, sketchDispatch] = useReducer(sketchReduce, undefined, initialSketchState);
+  const [boardOpen, setBoardOpen] = useState(sketchDemoMode);
   const [confirmGoals, setConfirmGoals] = useState(false); // C3 eval toggle: On = Approach A (confirm set_goal)
   const confirmGoalsRef = useRef(confirmGoals);
   useEffect(() => { confirmGoalsRef.current = confirmGoals; }, [confirmGoals]);
@@ -2714,6 +2720,15 @@ export default function App() {
     return () => { timers.forEach(clearTimeout); if (!wbDemoPlayed.current) wbDemoScheduled.current = false; };
   }, [whiteboardDemoMode]);
 
+  // Sketch demo driver: replays buildSketchDemo() strokes through the REAL store (spec §9).
+  const sketchDemoPlayed = useRef(false);
+  useEffect(() => {
+    if (!sketchDemoMode || sketchDemoPlayed.current) return;
+    sketchDemoPlayed.current = true;
+    const strokes = buildSketchDemo();
+    strokes.forEach((points, i) => setTimeout(() => sketchDispatch({ type: 'sketch.strokeAdd', points }), 600 + i * 900));
+  }, []);
+
   // C2b Part A: keep wordBoxesRef in sync with the Word textarea's live layout. Cleared for
   // non-word programs so stale word boxes never leak. Fail-soft: measureWords returns [] on error.
   useEffect(() => {
@@ -2829,7 +2844,7 @@ export default function App() {
           className="h-full w-full relative bg-[var(--bg-color)]"
         >
           <div aria-hidden className="absolute inset-0 pointer-events-none opacity-[0.04] bg-[radial-gradient(circle_at_1px_1px,currentColor_1px,transparent_0)] [background-size:24px_24px]" />
-          <MenuBar isLive={isLive} isConnecting={isConnecting} isDarkMode={isDarkMode} traffic={traffic} onToggleTheme={() => setIsDarkMode(!isDarkMode)} onToggleDrawer={() => setDrawerOpen(o => !o)} onRambleMode={() => { window.location.search = 'ramble=live'; }} />
+          <MenuBar isLive={isLive} isConnecting={isConnecting} isDarkMode={isDarkMode} traffic={traffic} onToggleTheme={() => setIsDarkMode(!isDarkMode)} onToggleDrawer={() => setDrawerOpen(o => !o)} onRambleMode={() => { window.location.search = 'ramble=live'; }} onSketchBoard={() => setBoardOpen((o) => !o)} />
           <Dock active={activeProgram} onSelect={handleProgramChange} onReopen={() => setWindowOpen(true)} />
           <CursorResources mode={isPainting ? 'painting' : 'off'} color="#3b82f6" />
           <CursorTrail isActive={isPainting} mousePos={trailMousePos} color="#3b82f6" />
@@ -2862,7 +2877,15 @@ export default function App() {
               </span>
             </div>
           )}
-          {whiteboardMode === 'board' && <WhiteboardPanel state={whiteboard} onClear={() => whiteboardDispatch({ type: 'wb.clear' })} />}
+          {whiteboardMode === 'board' && (
+            <WhiteboardPanel
+              state={whiteboard} sketch={sketch} open={boardOpen}
+              onClear={() => whiteboardDispatch({ type: 'wb.clear' })}
+              onClearSketch={() => sketchDispatch({ type: 'sketch.clear' })}
+              onStroke={(points) => sketchDispatch({ type: 'sketch.strokeAdd', points })}
+              demoCaption={sketchDemoMode ? serializeSketch(sketch) : null}
+            />
+          )}
           {/* C3: Tentative goal chip — shows active goal + step progress + clear button */}
           {goalState.objective && (
             <div className="absolute top-14 left-1/2 -translate-x-1/2 z-40 pointer-events-auto flex items-center gap-2 px-3 py-1.5 rounded-full border border-[var(--card-border)] bg-[var(--card-bg)]/90 backdrop-blur shadow-sm">

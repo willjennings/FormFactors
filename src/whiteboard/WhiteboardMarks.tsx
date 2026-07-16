@@ -8,7 +8,7 @@ const INK = 'rgb(99,102,241)';
 export function WhiteboardMarks({ state }: { state: WhiteboardState }) {
   const nodes = state.marks.filter((m): m is Extract<WbMark, { kind: 'node' }> => m.kind === 'node');
   return (
-    <svg className="absolute inset-0 w-full h-full overflow-visible" viewBox="0 0 100 100" preserveAspectRatio="none">
+    <svg className="absolute inset-0 w-full h-full overflow-visible pointer-events-none" viewBox="0 0 100 100" preserveAspectRatio="none">
       <defs>
         <marker id="wb-arrow" markerWidth="6" markerHeight="6" refX="4" refY="2" orient="auto">
           <path d="M0,0 L4,2 L0,4 Z" fill={INK} />
