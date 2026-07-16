@@ -607,6 +607,10 @@ export default function App() {
   const goalHintGateRef = useRef(makeChangeGate());
   const [whiteboard, whiteboardDispatch] = useReducer(wbReduce, undefined, initialWhiteboardState);
   const [whiteboardMode, setWhiteboardMode] = useState<'board' | 'overlay'>('board');
+  // Stale-closure-free read for handleVoiceToolCall (its onToolCall callback is captured once
+  // at connect time — a mode toggle mid-session must not be invisible to it).
+  const whiteboardModeRef = useRef(whiteboardMode);
+  useEffect(() => { whiteboardModeRef.current = whiteboardMode; }, [whiteboardMode]);
   const wbHintGateRef = useRef(makeChangeGate());
   const sketchHintGateRef = useRef(makeChangeGate());
   const [sketch, sketchDispatch] = useReducer(sketchReduce, undefined, initialSketchState);
@@ -1342,6 +1346,13 @@ export default function App() {
     } else if (fc.name === 'wb_beautify') {
       // Witnessed sketch→diagram swap: validate everything up front (errors are data,
       // nothing partial), then show the card — the swap NEVER happens without the user's yes.
+      // In overlay mode neither the whiteboard panel nor the BeautifyCard renders, so a
+      // "shown to the user" ack would be false — reject before validation.
+      if (whiteboardModeRef.current !== 'board') {
+        addLog('tool', 'Tool Call: wb_beautify REJECTED — whiteboard is in overlay mode');
+        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: false, error: 'The whiteboard is in overlay mode — the sketch board (and its confirmation card) is not visible. Do not retry until the user switches to board mode.' });
+        return;
+      }
       const v = validateBeautifyCall(fc.args, sketchSnapshotRef.current);
       if ('error' in v) {
         addLog('tool', `Tool Call: wb_beautify REJECTED — ${v.error}`);
@@ -1924,6 +1935,11 @@ export default function App() {
             if (providerRef.current !== thisProvider) { try { thisProvider?.close(); } catch {} return; }
             setIsLive(true);
             addLog('info', 'Live Link Established');
+            // A fresh session has no memory of what the last session already told the model —
+            // reset the sketch dedup gate so an unchanged sketch still gets its [SKETCH] hint
+            // once on this new connection (honest-mode toggle, program swap, idle close all
+            // reconnect without a sketch edit in between).
+            sketchHintGateRef.current = makeChangeGate();
             // TESTBED: snapshot the config + device so this session's metrics are attributable.
             telemetry.start({
               backend: voiceBackendRef.current,
@@ -2807,6 +2823,7 @@ export default function App() {
     annotationDispatchRef.current?.({ type: 'annotate.clear' });
     teachingDispatchRef.current?.({ type: 'teach.clear' });
     setPendingAction(null);
+    setPendingBeautify(null); // the post-swap session never made this proposal — drop it, don't let a confirm hint a session about a card it didn't propose
     const fresh = initialMockDoc(id);
     setMockDoc(fresh);
     mockDocRef.current = fresh;
