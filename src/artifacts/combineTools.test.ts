@@ -42,10 +42,54 @@ describe('combine validation (spec §4/§5/§7)', () => {
     expect(r.error).toContain(`${MAX_ARTIFACTS}`);
     expect(r.error).toMatch(/close/i);
   });
-  it('doc kind requires non-empty content; M1 rejects widget kind honestly', () => {
+  it('doc kind requires non-empty content', () => {
     expect(validateCombineCall({ sources: ['word', 'excel'], kind: 'doc', title: 'T', content: '' }, corpus, initialArtifactState(), now)).toHaveProperty('error');
+  });
+});
+
+describe('widget validation (spec §8 — M2 real support)', () => {
+  it('valid widget combine (static + bound fields) → create event carrying fields', () => {
+    const r = validateCombineCall({
+      sources: ['word', 'excel'], kind: 'widget', title: 'Status board',
+      fields: [{ label: 'Project', value: 'Riverside Tower' }, { label: 'Time', feed: 'clock' }, { label: 'MERI', feed: 'stock' }],
+    }, corpus, initialArtifactState(), now);
+    expect('error' in r).toBe(false);
+    if (!('error' in r)) {
+      expect(r.event.type).toBe('artifact.create');
+      const artifact = (r.event as Extract<typeof r.event, { type: 'artifact.create' }>).artifact;
+      expect(artifact.kind).toBe('widget');
+      expect(artifact.fields).toEqual([
+        { label: 'Project', value: 'Riverside Tower' },
+        { label: 'Time', feed: 'clock' },
+        { label: 'MERI', feed: 'stock' },
+      ]);
+      expect(r.provenance).toBe('from: word + excel');
+    }
+  });
+  it('needs at least one field', () => {
+    const r = validateCombineCall({ sources: ['word', 'excel'], kind: 'widget', title: 'T', fields: [] }, corpus, initialArtifactState(), now) as { error: string };
+    expect(r.error).toMatch(/field/i);
+  });
+  it('rejects an empty label', () => {
+    const r = validateCombineCall({ sources: ['word', 'excel'], kind: 'widget', title: 'T', fields: [{ label: '  ', value: 'x' }] }, corpus, initialArtifactState(), now) as { error: string };
+    expect(r.error).toMatch(/label/i);
+  });
+  it('a field needs either a value or a feed', () => {
     const r = validateCombineCall({ sources: ['word', 'excel'], kind: 'widget', title: 'T', fields: [{ label: 'x' }] }, corpus, initialArtifactState(), now) as { error: string };
-    expect(r.error).toMatch(/widget/i); // replaced by real support in Task 7
+    expect(r.error).toMatch(/value|feed/i);
+  });
+  it('unknown feed id fails naming valid registry ids', () => {
+    const r = validateCombineCall({ sources: ['word', 'excel'], kind: 'widget', title: 'T', fields: [{ label: 'x', feed: 'bitcoin' }] }, corpus, initialArtifactState(), now) as { error: string };
+    expect(r.error).toContain('bitcoin');
+    expect(r.error).toContain('clock');
+    expect(r.error).toContain('weather');
+    expect(r.error).toContain('stock');
+  });
+  it('respects the same capacity rejection as doc kind', () => {
+    let arts = initialArtifactState();
+    for (let i = 0; i < MAX_ARTIFACTS; i++) arts = reduce(arts, { type: 'artifact.create', artifact: { kind: 'doc', title: `A${i}`, sources: ['word', 'excel'], content: 'x', createdAt: 1 } });
+    const r = validateCombineCall({ sources: ['word', 'excel'], kind: 'widget', title: 'T', fields: [{ label: 'x', feed: 'clock' }] }, corpus, arts, now) as { error: string };
+    expect(r.error).toContain(`${MAX_ARTIFACTS}`);
   });
 });
 

@@ -3,8 +3,9 @@
 import type { VoiceTool } from '../voice/types';
 import type { MockDoc, ProgramId } from '../scenarios';
 import { serializeMockDoc } from '../scenarios';
-import type { ArtifactState, ArtifactEvent, WidgetField } from './types';
+import type { Artifact, ArtifactState, ArtifactEvent, FeedId, WidgetField } from './types';
 import { reduce as artifactReduce, MAX_ARTIFACTS } from './artifactStore';
+import { FEEDS } from './feeds';
 
 export const COMBINE_TOOL: VoiceTool = {
   name: 'combine',
@@ -63,16 +64,49 @@ export function validateCombineCall(
   const kind = args?.kind === 'widget' ? 'widget' : 'doc';
   const title = String(args?.title ?? '').trim();
   if (!title) return { error: 'combine needs a non-empty title.' };
+
+  let artifact: Omit<Artifact, 'id'>;
   if (kind === 'widget') {
-    return { error: 'widget artifacts are not available yet — use kind "doc".' }; // Task 7 replaces this
+    const fields = validateWidgetFields(args?.fields);
+    if ('error' in fields) return fields;
+    artifact = { kind, title, sources, fields: fields.fields, createdAt: now };
+  } else {
+    const content = String(args?.content ?? '').trim();
+    if (!content) return { error: 'combine kind "doc" needs non-empty content — author the synthesis yourself from what read_sources returned.' };
+    artifact = { kind, title, sources, content, createdAt: now };
   }
-  const content = String(args?.content ?? '').trim();
-  if (!content) return { error: 'combine kind "doc" needs non-empty content — author the synthesis yourself from what read_sources returned.' };
-  const event: ArtifactEvent = { type: 'artifact.create', artifact: { kind, title, sources, content, createdAt: now } };
+
+  const event: ArtifactEvent = { type: 'artifact.create', artifact };
   // Capacity by SIMULATION through the real reducer (spec §7).
   const simulated = artifactReduce(artifacts, event);
   if (simulated.rejectedAtCap > artifacts.rejectedAtCap) {
     return { error: `The desk already holds ${MAX_ARTIFACTS} artifacts — ask the user to close one first. Nothing may be evicted without their say.` };
   }
   return { event, provenance: `from: ${sources.join(' + ')}` };
+}
+
+// Widget field validation (spec §8): ≥1 field, non-empty labels, every bound `feed` id must be
+// in the fixed registry (an unknown id fails naming the valid ones — spec §9).
+function validateWidgetFields(raw: unknown): { fields: WidgetField[] } | { error: string } {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return { error: 'combine kind "widget" needs at least one field.' };
+  }
+  const fields: WidgetField[] = [];
+  for (const entry of raw) {
+    const label = String((entry as { label?: unknown })?.label ?? '').trim();
+    if (!label) return { error: 'combine kind "widget" fields need a non-empty label.' };
+    const rawFeed = (entry as { feed?: unknown })?.feed;
+    if (rawFeed !== undefined && rawFeed !== null && rawFeed !== '') {
+      const feedId = String(rawFeed);
+      if (!(feedId in FEEDS)) {
+        return { error: `Unknown feed "${feedId}". Valid feeds: ${Object.keys(FEEDS).join(', ')}.` };
+      }
+      fields.push({ label, feed: feedId as FeedId });
+      continue;
+    }
+    const value = String((entry as { value?: unknown })?.value ?? '').trim();
+    if (!value) return { error: `combine kind "widget" field "${label}" needs a value or a feed.` };
+    fields.push({ label, value });
+  }
+  return { fields };
 }

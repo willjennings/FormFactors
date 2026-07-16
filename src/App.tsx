@@ -103,7 +103,7 @@ import { initialArtifactState, reduce as artifactReduce } from './artifacts/arti
 import { COMBINE_TOOL, READ_SOURCES_TOOL, validateCombineCall, sourceDetail } from './artifacts/combineTools';
 import { artifactEntities } from './artifacts/entities';
 import { ArtifactWindow } from './artifacts/ArtifactWindow';
-import { ARTIFACT_DEMO_ARGS, ARTIFACT_DEMO_EXCEL_SOURCE } from './artifacts/demo';
+import { ARTIFACT_DEMO_ARGS, ARTIFACT_DEMO_EXCEL_SOURCE, ARTIFACT_DEMO_WIDGET_ARGS } from './artifacts/demo';
 import type { ArtifactEvent } from './artifacts/types';
 
 // --- Types ---
@@ -2951,8 +2951,30 @@ export default function App() {
       const created = (v.event as Extract<ArtifactEvent, { type: 'artifact.create' }>).artifact;
       addLog('tool', `Tool Call: combine (demo) — "${created.title}" ${v.provenance}`);
       emitFeedback({ outcome: 'committed', verbClass: 'create', label: `Created: ${created.title}` });
-      const hint = serializeArtifacts(artifactReduce(artifactStateRef.current, v.event));
+      const afterDoc = artifactReduce(artifactStateRef.current, v.event);
+      artifactStateRef.current = afterDoc;
+      const hint = serializeArtifacts(afterDoc);
       if (hint) addLog('info', hint); // the [ARTIFACTS] hint the model would receive next turn
+
+      // M2 widget demo (spec §8/§10): chained after the doc lands so 'a1' resolves as a source
+      // (closure under composition) — clock/stock always tick offline; weather may fail in CI
+      // and renders "feed unavailable" without breaking anything else about the demo.
+      setTimeout(() => {
+        const widgetCorpus = { ...corpusRef.current, excel: ARTIFACT_DEMO_EXCEL_SOURCE, [activeProgram]: mockDocRef.current };
+        const vw = validateCombineCall(ARTIFACT_DEMO_WIDGET_ARGS, widgetCorpus, artifactStateRef.current, Date.now());
+        if ('error' in vw) {
+          addLog('tool', `Tool Call: combine (demo widget) REJECTED — ${vw.error}`);
+          return;
+        }
+        artifactDispatch(vw.event);
+        const widgetCreated = (vw.event as Extract<ArtifactEvent, { type: 'artifact.create' }>).artifact;
+        addLog('tool', `Tool Call: combine (demo widget) — "${widgetCreated.title}" ${vw.provenance}`);
+        emitFeedback({ outcome: 'committed', verbClass: 'create', label: `Created: ${widgetCreated.title}` });
+        const afterWidget = artifactReduce(artifactStateRef.current, vw.event);
+        artifactStateRef.current = afterWidget;
+        const widgetHint = serializeArtifacts(afterWidget);
+        if (widgetHint) addLog('info', widgetHint);
+      }, 900);
     }, 900);
     return () => { clearTimeout(timer); if (!artifactsDemoPlayed.current) artifactsDemoScheduled.current = false; };
   }, [artifactsDemoMode]); // eslint-disable-line react-hooks/exhaustive-deps

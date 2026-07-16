@@ -71,6 +71,8 @@ describe('buildInstructions — honest desktop assistant', () => {
       expect(s).toContain('read_sources');
       expect(s).toMatch(/two or more sources|at least 2 sources/i);
       expect(s).toMatch(/\[CORPUS/);
+      // Widget feeds (spec §8): the stock feed is simulated, never claimed as real.
+      expect(s).toMatch(/stock feed is SIMULATED/i);
     }
   });
 });
