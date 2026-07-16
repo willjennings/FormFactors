@@ -29,7 +29,6 @@ import {
   ACTION_CATEGORIES,
   buildActionTools,
   ACTION_VERB_NAMES,
-  initialMockDoc,
   applyAction,
   describeAction,
   classOf,
@@ -2945,9 +2944,14 @@ export default function App() {
     entitiesRef.current = baseEntities;
     setShareRequest(null);
     setPendingAction(null);
-    const freshDoc = initialMockDoc(activeProgram);
-    setMockDoc(freshDoc);
-    mockDocRef.current = freshDoc;
+    // Reset restores the Meridian SEED (not the unrelated initialMockDoc placeholder) so the
+    // coherent-story invariant survives a reset; drop any saved corpus entry for the active
+    // program — the live doc is the truth, and a stale copy would resurrect the pre-reset doc
+    // on the next program swap.
+    const seeded = seedCorpus()[activeProgram];
+    setMockDoc(seeded);
+    mockDocRef.current = seeded;
+    setCorpus((c) => { const { [activeProgram]: _drop, ...rest } = c; corpusRef.current = rest; return rest; });
     setUndoStack([]);
     referents.clear();
     addLog('info', 'Desktop reset to original state.');
