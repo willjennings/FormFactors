@@ -1936,9 +1936,13 @@ export default function App() {
             setIsLive(true);
             addLog('info', 'Live Link Established');
             // A fresh session has no memory of what the last session already told the model —
-            // reset the sketch dedup gate so an unchanged sketch still gets its [SKETCH] hint
-            // once on this new connection (honest-mode toggle, program swap, idle close all
-            // reconnect without a sketch edit in between).
+            // reset EVERY state-hint dedup gate so unchanged state still reaches this new
+            // connection once (honest-mode toggle, program swap, idle close all reconnect
+            // without a state edit in between; a gated hint would leave the session blind).
+            teachingHintGateRef.current = makeChangeGate();
+            annotationHintGateRef.current = makeChangeGate();
+            goalHintGateRef.current = makeChangeGate();
+            wbHintGateRef.current = makeChangeGate();
             sketchHintGateRef.current = makeChangeGate();
             // TESTBED: snapshot the config + device so this session's metrics are attributable.
             telemetry.start({
