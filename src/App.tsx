@@ -414,6 +414,9 @@ export default function App() {
   useEffect(() => { setGrounding([]); }, [activeProgram]);
   // Model captions: the response window for muted speakers. Persists until replaced.
   const [modelCaption, setModelCaption] = useState<{ text: string; final: boolean } | null>(null);
+  // In-flight model turn: the honest "working on it" signal between the user's ask and the
+  // first caption/tool result (human smoke 2026-07-16: silent thinking read as a hang).
+  const [modelBusy, setModelBusy] = useState(false);
   const modelCaptionRef = useRef('');
   const modelCaptionFinalRef = useRef(false);
   const [logs, setLogs] = useState<DebugLog[]>([]);
@@ -1991,7 +1994,7 @@ export default function App() {
           },
           onClose: () => {
             if (providerRef.current !== thisProvider) return; // stale close from a replaced session
-            setIsLive(false); setIsConnecting(false); connectInFlightRef.current = false; sessionRef.current = null; providerRef.current = null; addLog('info', 'Live Link Closed');
+            setIsLive(false); setIsConnecting(false); connectInFlightRef.current = false; setModelBusy(false); sessionRef.current = null; providerRef.current = null; addLog('info', 'Live Link Closed');
           },
           onError: (m: string) => {
             if (providerRef.current !== thisProvider) return; // stale error from a replaced session
@@ -2019,6 +2022,7 @@ export default function App() {
           onResponseStart: () => {
             if (showRotateOverlayRef.current || showMobileOverlayRef.current) return;
             if (lastTranscriptionTimeRef.current === 0) { addLog('info', 'Ignoring model turn before first transcription'); return; }
+            setModelBusy(true);
             setPersistentPaths([]);
             setLiveTranscription("");
             lastProcessedTranscriptionRef.current = "";
@@ -2028,6 +2032,7 @@ export default function App() {
           // with text replaces the accumulated turn; a stale final resets on the next chunk.
           onModelTranscript: (text: string, isFinal: boolean) => {
             if (isFinal) {
+              setModelBusy(false);
               if (text) modelCaptionRef.current = text;
               if (modelCaptionRef.current) setModelCaption({ text: modelCaptionRef.current, final: true });
             } else {
@@ -2047,6 +2052,7 @@ export default function App() {
             setLiveTranscription("");
             lastProcessedTranscriptionRef.current = "";
             addLog('event', 'Model interrupted');
+            setModelBusy(false);
           },
         },
       );
@@ -2860,6 +2866,7 @@ export default function App() {
     teachingDispatchRef.current?.({ type: 'teach.clear' });
     setPendingAction(null);
     setPendingBeautify(null); // the post-swap session never made this proposal — drop it, don't let a confirm hint a session about a card it didn't propose
+    railDispatch({ type: 'rail.dismiss' }); // answers about the OLD program are stale context in the new one (human smoke: Excel's "Cell A3" card survived into PowerPoint)
     const fresh = initialMockDoc(id);
     setMockDoc(fresh);
     mockDocRef.current = fresh;
@@ -3215,6 +3222,7 @@ export default function App() {
             suggestions={suggestions} firstRunHint={firstRunHint}
             restoredDraft={restoredDraft}
             modelCaption={modelCaption}
+            busy={modelBusy}
             grounding={grounding}
             onRemoveGrounding={(id) => setGrounding(g => g.filter(c => c.id !== id))}
             onSubmit={(text) => {

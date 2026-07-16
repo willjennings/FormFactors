@@ -6,12 +6,14 @@ import { Tip } from '../ui/Tooltip';
 export type Suggestion = { key: string; label: string; phrase: string; color: string };
 export type GroundingChip = { id: string; title: string; color: string };
 
-export function Omnibox({ isLive, isConnecting, error, transcript, suggestions, firstRunHint, restoredDraft, modelCaption, grounding = [], onRemoveGrounding, onSubmit, onMicToggle, onChipTap, above }: {
+export function Omnibox({ isLive, isConnecting, error, transcript, suggestions, firstRunHint, restoredDraft, modelCaption, busy = false, grounding = [], onRemoveGrounding, onSubmit, onMicToggle, onChipTap, above }: {
   isLive: boolean; isConnecting: boolean; error: string | null; transcript: string | null;
   suggestions: Suggestion[]; firstRunHint: boolean;
   restoredDraft?: { text: string; at: number } | null;
   /** The model's speech as text — the response window for muted speakers. Persists post-query. */
   modelCaption?: { text: string; final: boolean } | null;
+  /** A model turn is in flight and nothing has streamed yet — show the honest thinking pulse. */
+  busy?: boolean;
   /** Elements the user selected on screen — mirrored 1:1 as chips; sent with the query. */
   grounding?: GroundingChip[];
   onRemoveGrounding?: (id: string) => void;
@@ -28,6 +30,16 @@ export function Omnibox({ isLive, isConnecting, error, transcript, suggestions, 
       {above}
       {firstRunHint && !isLive && (
         <p className="text-center text-[11px] font-mono text-[var(--text-secondary)]">Point at things and ask — or type.</p>
+      )}
+      {busy && modelCaption?.final !== false && (
+        <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)]/90 backdrop-blur shadow-lg px-3 py-2 flex items-center gap-2" aria-label="Assistant is working">
+          <span className="text-[9px] font-mono uppercase tracking-widest text-[var(--text-secondary)]">assistant</span>
+          <span className="flex gap-1" aria-hidden>
+            <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent-color)] animate-bounce" />
+            <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent-color)] animate-bounce [animation-delay:150ms]" />
+            <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent-color)] animate-bounce [animation-delay:300ms]" />
+          </span>
+        </div>
       )}
       {modelCaption?.text && (
         <div className="rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)]/90 backdrop-blur shadow-lg px-3 py-2">
