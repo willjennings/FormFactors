@@ -13,6 +13,10 @@ export interface VoiceSessionConfig {
   tools: VoiceTool[];
   /** Provider-specific voice name (e.g. Gemini 'Zephyr', OpenAI 'marin'). */
   voice?: string;
+  /** Voice-activity-detection tuning (Gemini only today; other providers ignore it).
+   *  silenceDurationMs = how much silence ends the user's turn — ramble shortens it so
+   *  mid-ramble pauses conclude turns and the scribe can act (human smoke 2026-07-16). */
+  vad?: { silenceDurationMs?: number; prefixPaddingMs?: number };
 }
 
 export interface VoiceCallbacks {

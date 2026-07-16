@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { Type } from '@google/genai';
-import { toGeminiParams } from './gemini';
+import { toGeminiParams, toRealtimeInputConfig } from './gemini';
 
 // Live smoke 2026-07-16: wb_beautify's marks[] reached the model with NO item schema —
 // toGeminiParams flattened object array items to a bare type, dropping nested properties,
@@ -41,5 +41,23 @@ describe('toGeminiParams', () => {
     });
     expect(out.properties.strokeIds.items.type).toBe(Type.STRING);
     expect(out.properties.strokeIds.description).toBe('ids');
+  });
+});
+
+// Ramble VAD tuning (human smoke 2026-07-16, Test 2): continuous rambling produced ZERO
+// fills — Gemini's default end-of-speech silence is long, so mid-ramble pauses never
+// concluded a turn. VoiceSessionConfig.vad lets a surface shorten it.
+describe('toRealtimeInputConfig', () => {
+  it('maps vad options into automaticActivityDetection', () => {
+    expect(toRealtimeInputConfig({ silenceDurationMs: 500 })).toEqual({
+      realtimeInputConfig: { automaticActivityDetection: { silenceDurationMs: 500 } },
+    });
+    expect(toRealtimeInputConfig({ silenceDurationMs: 400, prefixPaddingMs: 100 })).toEqual({
+      realtimeInputConfig: { automaticActivityDetection: { silenceDurationMs: 400, prefixPaddingMs: 100 } },
+    });
+  });
+  it('is empty when no vad is requested (server defaults untouched)', () => {
+    expect(toRealtimeInputConfig(undefined)).toEqual({});
+    expect(toRealtimeInputConfig({})).toEqual({});
   });
 });

@@ -29,6 +29,17 @@ export function toGeminiParams(schema: Record<string, any>): any {
   return out;
 }
 
+/** VAD tuning → live connect config fragment. Empty when unset so server defaults stand.
+ *  Exported for tests. */
+export function toRealtimeInputConfig(vad?: { silenceDurationMs?: number; prefixPaddingMs?: number }): Record<string, any> {
+  if (!vad) return {};
+  const aad: Record<string, number> = {};
+  if (vad.silenceDurationMs != null) aad.silenceDurationMs = vad.silenceDurationMs;
+  if (vad.prefixPaddingMs != null) aad.prefixPaddingMs = vad.prefixPaddingMs;
+  if (!Object.keys(aad).length) return {};
+  return { realtimeInputConfig: { automaticActivityDetection: aad } };
+}
+
 const toGeminiTools = (tools: VoiceTool[]) =>
   [{ functionDeclarations: tools.map(t => ({ name: t.name, description: t.description, parameters: toGeminiParams(t.parameters) })) }];
 
@@ -113,6 +124,7 @@ export function createGeminiProvider(apiKey: string, onSessionReady?: (session: 
           speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: config.voice ?? 'Zephyr' } } },
           tools: toGeminiTools(config.tools),
           systemInstruction: config.instructions,
+          ...toRealtimeInputConfig(config.vad),
         },
       });
       session = await sessionPromise;

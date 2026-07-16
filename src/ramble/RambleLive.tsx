@@ -17,6 +17,10 @@ import { Button } from '../ui/Button';
 
 const label = (id: string) => RFI_SCHEMA.slots.find((s) => s.id === id)?.label ?? id;
 
+// End-of-speech silence for the scribe: short enough that a breath between ramble clauses
+// lets the model fill, long enough not to chop mid-sentence. Tune against live feel.
+const RAMBLE_SILENCE_MS = 500;
+
 /** Live ramble-fill: the scribe on a real VoiceProvider driving the glanceable Monitor. */
 export function RambleLive() {
   const [state, setState] = useState<SessionState>(() => initialSessionState(RFI_SCHEMA, new Date().toLocaleDateString(), Date.now()));
@@ -135,6 +139,9 @@ export function RambleLive() {
           instructions: buildScribeInstructions(RFI_SCHEMA, new Date().toLocaleDateString()),
           tools: SCRIBE_TOOLS,
           voice: backend === 'gemini' ? 'Zephyr' : backend === 'azure' ? 'alloy' : 'marin',
+          // Ramble turns must end on NATURAL mid-ramble pauses, or the scribe never gets to
+          // act (Test 2: continuous speech → zero fills with the server default).
+          vad: { silenceDurationMs: RAMBLE_SILENCE_MS },
         },
         {
           // Stale-callback guards: gemini's WS fires onclose unconditionally, so a delayed
