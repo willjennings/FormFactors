@@ -199,7 +199,16 @@ export function createAzureRealtimeProvider(
         };
 
         ws.onerror = () => { console.log('[azure] ws error'); if (!closed) cb.onError('Azure Realtime WebSocket error'); };
-        ws.onclose = (e) => { console.log('[azure] ws closed', e.code, e.reason); if (!closed) cb.onClose(); };
+        ws.onclose = (e) => {
+          console.log('[azure] ws closed', e.code, e.reason);
+          // SERVER-initiated close must release the mic too (same leak as gemini.ts:
+          // only app-initiated close() tore down the pipeline — hot mic + dead-socket pump).
+          try { processor?.disconnect(); } catch { /* noop */ }
+          try { inputCtx?.close(); } catch { /* noop */ }
+          try { micStream?.getTracks().forEach(t => t.stop()); } catch { /* noop */ }
+          processor = null; inputCtx = null; micStream = null;
+          if (!closed) cb.onClose();
+        };
       } catch (err: any) {
         cb.onError(err?.message ?? 'failed to connect to Azure Realtime');
       }

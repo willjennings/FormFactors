@@ -537,7 +537,7 @@ export default function App() {
     }
     return best;
   };
-  const [pendingAction, setPendingAction] = useState<{ verb: string; label: string; target: string; detail?: string; confirmed: boolean; note?: string; charStart?: number; charEnd?: number; newText?: string } | null>(null);
+  const [pendingAction, setPendingAction] = useState<{ verb: string; label: string; target: string; detail?: string; confirmed: boolean; note?: string; charStart?: number; charEnd?: number; newText?: string; oldText?: string } | null>(null);
   // Mirror in a ref so voice callbacks (stale closures) can read the live value.
   const pendingActionRef = useRef<typeof pendingAction>(null);
   useEffect(() => { pendingActionRef.current = pendingAction; }, [pendingAction]);
@@ -1296,7 +1296,7 @@ export default function App() {
         const oldText = doc.text.slice(s, e);
         const newText = String(a.newText ?? '');
         addLog('tool', `Tool Call: revise_text(witness) — "${oldText}" → "${newText}"`);
-        setPendingAction({ verb: 'revise_text', label: 'Revise', target: `"${oldText}"`, detail: `→ "${newText}"`, confirmed: false, charStart: s, charEnd: e, newText });
+        setPendingAction({ verb: 'revise_text', label: 'Revise', target: `"${oldText}"`, detail: `→ "${newText}"`, confirmed: false, charStart: s, charEnd: e, newText, oldText });
         emitFeedback({ outcome: 'needs-confirm', verbClass: 'mutate', label: `Confirm revise: "${oldText}" → "${newText}"` });
         ack({ success: true, witnessed: true });
       }
@@ -1474,6 +1474,18 @@ export default function App() {
     const p = pendingAction;
     if (!p || p.confirmed) return;
     const prevDoc = mockDocRef.current;
+    // STALE-SPAN GUARD (human smoke 2026-07-16: repeated voice revises spliced garbage —
+    // ".ary.ary.y." — because a confirm applied offsets computed against an OLDER document).
+    // If the text under the witnessed span changed, applying it would corrupt the doc: drop
+    // the card honestly instead, and tell the model to recompute from the current state.
+    if (p.verb === 'revise_text' && p.oldText != null && prevDoc.kind === 'word'
+        && prevDoc.text.slice(p.charStart, p.charEnd) !== p.oldText) {
+      setPendingAction(null);
+      addLog('info', `Revise DROPPED — the document changed under the witnessed span; applying it would corrupt the text.`);
+      emitFeedback({ outcome: 'error', label: 'Revise dropped — text changed since it was witnessed' });
+      providerRef.current?.sendTextHint(`[SYSTEM: the pending revise was DROPPED — the document changed since the span was computed, so applying it would have corrupted the text. Recompute the character span from the CURRENT DOCUMENT STATE (${serializeMockDoc(prevDoc)}) and call revise_text again. DO NOT acknowledge this message.]`);
+      return;
+    }
     const nextDoc = applyAction(prevDoc, p.verb, { target: p.target, detail: p.detail, charStart: p.charStart, charEnd: p.charEnd, newText: p.newText });
     mockDocRef.current = nextDoc;
     setMockDoc(nextDoc);
