@@ -24,7 +24,9 @@ export function toGeminiParams(schema: Record<string, any>): any {
     out.properties = {};
     for (const [k, v] of Object.entries<any>(schema.properties)) out.properties[k] = toGeminiParams(v);
   }
-  if (schema.items) out.items = toGeminiParams(schema.items);
+  // Tuple-form items (array of schemas) has no Gemini equivalent — take the first schema
+  // rather than silently dropping everything (probe 2026-07-16; no live tool uses tuples).
+  if (schema.items) out.items = toGeminiParams(Array.isArray(schema.items) ? (schema.items[0] ?? {}) : schema.items);
   if (schema.required) out.required = schema.required;
   return out;
 }
@@ -34,8 +36,8 @@ export function toGeminiParams(schema: Record<string, any>): any {
 export function toRealtimeInputConfig(vad?: { silenceDurationMs?: number; prefixPaddingMs?: number }): Record<string, any> {
   if (!vad) return {};
   const aad: Record<string, number> = {};
-  if (vad.silenceDurationMs != null) aad.silenceDurationMs = vad.silenceDurationMs;
-  if (vad.prefixPaddingMs != null) aad.prefixPaddingMs = vad.prefixPaddingMs;
+  if (vad.silenceDurationMs != null) aad.silenceDurationMs = Math.max(0, vad.silenceDurationMs);
+  if (vad.prefixPaddingMs != null) aad.prefixPaddingMs = Math.max(0, vad.prefixPaddingMs);
   if (!Object.keys(aad).length) return {};
   return { realtimeInputConfig: { automaticActivityDetection: aad } };
 }

@@ -34,6 +34,10 @@ export const TEACH_TOOLS: VoiceTool[] = [
 ];
 
 // Errors are data the model recovers from: name the visible candidates so its retry can succeed.
+// Consistency with the capped teaching scaffolds (MAX_HIGHLIGHTS/MAX_RELATIONS): a sequence
+// is a guided walkthrough, not a manual — an unbounded one is model runaway (probe 2026-07-16).
+export const MAX_SEQUENCE_STEPS = 12;
+
 const unresolved = (target: string, entities: SceneEntity[]) => ({
   error: `Could not resolve target "${target}" to an on-screen element. Visible elements: ${entities.filter(e => !e.sub).map(e => displayName(e)).join(', ')}.`,
 });
@@ -54,6 +58,9 @@ export function teachCallToEvent(
       return { type: 'teach.highlight', entityId: id, note: a.note ? String(a.note) : undefined };
     }
     case 'teach_sequence': {
+      if ((a.steps ?? []).length > MAX_SEQUENCE_STEPS) {
+        return { error: `teach_sequence accepts at most ${MAX_SEQUENCE_STEPS} steps (got ${(a.steps ?? []).length}) — split the task or teach the key steps only.` };
+      }
       const steps: { entityId: EntityId; subgoal: string; instruction: string }[] = [];
       let n = 0;
       for (const s of a.steps ?? []) {

@@ -62,6 +62,17 @@ export function scribeCallToEvents(
   switch (call.name) {
     case 'fill_slot': {
       if (!known(slotId)) return badSlot(slotId, schema);
+      // Enum constraints are honest boundaries, not decoration (probe 2026-07-16: "banana"
+      // landed as an unmarked high-confidence discipline). Case-insensitive match, canonical
+      // casing on the way in; a miss fails the call naming the allowed values.
+      const slot = schema.slots.find((sl) => sl.id === slotId)!;
+      let value = String(a.value ?? '');
+      if (slot.type === 'enum' && slot.constraint) {
+        const options = slot.constraint.split('|');
+        const match = options.find((o) => o.toLowerCase() === value.trim().toLowerCase());
+        if (!match) return { error: `"${value}" is not a valid ${slot.id} — must be one of: ${slot.constraint}.` };
+        value = match;
+      }
       // An unparseable confidence (e.g. the model sends "high") must fall back to a
       // neutral 0.5, not leak NaN into state — NaN also fails the `< 0.6` uncertainty
       // check, which would render an unparseable confidence as UNMARKED (inverting
@@ -71,7 +82,7 @@ export function scribeCallToEvents(
       const source = (AGENT_SOURCES.includes(a.source) ? a.source : 'heard') as SlotSource;
       return [
         { type: 'slot.fillingStart', slotId },
-        { type: 'slot.draft', slotId, value: String(a.value ?? ''), confidence, source },
+        { type: 'slot.draft', slotId, value, confidence, source },
       ];
     }
     case 'ask_gap':

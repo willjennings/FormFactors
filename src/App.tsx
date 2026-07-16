@@ -625,6 +625,8 @@ export default function App() {
   useEffect(() => { pendingBeautifyRef.current = pendingBeautify; }, [pendingBeautify]);
   const sketchSnapshotRef = useRef(sketch);
   useEffect(() => { sketchSnapshotRef.current = sketch; }, [sketch]);
+  const whiteboardSnapshotRef = useRef(whiteboard);
+  useEffect(() => { whiteboardSnapshotRef.current = whiteboard; }, [whiteboard]);
   const [confirmGoals, setConfirmGoals] = useState(false); // C3 eval toggle: On = Approach A (confirm set_goal)
   const confirmGoalsRef = useRef(confirmGoals);
   useEffect(() => { confirmGoalsRef.current = confirmGoals; }, [confirmGoals]);
@@ -1363,7 +1365,7 @@ export default function App() {
         ack({ success: false, error: 'The whiteboard is in overlay mode — the sketch board (and its confirmation card) is not visible. Do not retry until the user switches to board mode.' });
         return;
       }
-      const v = validateBeautifyCall(fc.args, sketchSnapshotRef.current);
+      const v = validateBeautifyCall(fc.args, sketchSnapshotRef.current, whiteboardSnapshotRef.current);
       if ('error' in v) {
         addLog('tool', `Tool Call: wb_beautify REJECTED — ${v.error}`);
         ack({ success: false, error: v.error });

@@ -3,7 +3,7 @@ import type { WhiteboardState, WbEvent, WbMark } from './types';
 export const MAX_MARKS = 32;
 
 export function initialWhiteboardState(): WhiteboardState {
-  return { marks: [], nextId: 1 };
+  return { marks: [], nextId: 1, droppedAtCap: 0 };
 }
 
 export function reduce(state: WhiteboardState, event: WbEvent): WhiteboardState {
@@ -17,16 +17,19 @@ export function reduce(state: WhiteboardState, event: WbEvent): WhiteboardState 
           const marks = state.marks.map((m, i) => (i === idx ? spec : m));
           return { ...state, marks };
         }
-        const marks = [...state.marks, spec].slice(-MAX_MARKS);
-        return { ...state, marks };
+        const grown = [...state.marks, spec];
+        const marks = grown.slice(-MAX_MARKS);
+        // No silent truncation (probe 2026-07-16): count evictions so [WHITEBOARD] can say so.
+        return { ...state, marks, droppedAtCap: state.droppedAtCap + (grown.length - marks.length) };
       }
       // connector | label: stamp a deterministic id.
       const mark = { ...spec, id: String(state.nextId) } as WbMark;
-      const marks = [...state.marks, mark].slice(-MAX_MARKS);
-      return { marks, nextId: state.nextId + 1 };
+      const grown = [...state.marks, mark];
+      const marks = grown.slice(-MAX_MARKS);
+      return { marks, nextId: state.nextId + 1, droppedAtCap: state.droppedAtCap + (grown.length - marks.length) };
     }
     case 'wb.clear':
-      return { marks: [], nextId: state.nextId };
+      return { marks: [], nextId: state.nextId, droppedAtCap: 0 };
     default:
       return state;
   }

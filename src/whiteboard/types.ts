@@ -16,4 +16,4 @@ export type WbEvent =
   | { type: 'wb.add'; spec: WbSpec }
   | { type: 'wb.clear' };
 
-export interface WhiteboardState { marks: WbMark[]; nextId: number }
+export interface WhiteboardState { marks: WbMark[]; nextId: number; droppedAtCap: number }

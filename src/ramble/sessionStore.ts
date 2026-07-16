@@ -49,7 +49,10 @@ export function reduce(state: SessionState, event: RambleEvent, now: number): Se
     case 'user.editStart': {
       const cur = state.fills.find((f) => f.slotId === event.slotId);
       if (!cur) return state;
-      const s = patchSlot(state, event.slotId, { owner: 'user', prior: { ...cur } }, now);
+      // Mid-edit re-entry must NOT overwrite the original snapshot (probe 2026-07-16:
+      // double editStart then cancel restored an intermediate state, and after a commit
+      // the fresh snapshot correctly carries owner='user' so cancel keeps yield sticky).
+      const s = patchSlot(state, event.slotId, { owner: 'user', prior: cur.prior ?? { ...cur } }, now);
       const activeSlotId = state.activeSlotId === event.slotId ? null : state.activeSlotId;
       return { ...s, activeSlotId };
     }
@@ -60,7 +63,10 @@ export function reduce(state: SessionState, event: RambleEvent, now: number): Se
       const cur = state.fills.find((f) => f.slotId === event.slotId);
       if (!cur || !cur.prior) return state;
       const prior = cur.prior;
-      return { ...state, fills: state.fills.map((f) => (f.slotId === event.slotId ? { ...prior, owner: 'agent', prior: null } : f)) };
+      // Restore the snapshot VERBATIM including its owner: if the slot was already
+      // user-owned before this edit (re-editing a committed value), cancel must NOT
+      // hand it back to the agent (probe 2026-07-16: hardcoded 'agent' broke yield).
+      return { ...state, fills: state.fills.map((f) => (f.slotId === event.slotId ? { ...prior, prior: null } : f)) };
     }
     case 'user.openFullEditor':
       return state; // navigation handled by the app shell

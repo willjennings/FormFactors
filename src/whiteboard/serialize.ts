@@ -12,5 +12,6 @@ export function serializeWhiteboard(state: WhiteboardState): string | null {
   if (nodes.length) parts.push(`nodes: ${nodes.join(', ')}`);
   if (conns.length) parts.push(`connectors: ${conns.join('; ')}`);
   if (labels.length) parts.push(`labels: ${labels.join(', ')}`);
-  return `[WHITEBOARD: ${parts.join('. ')}. DO NOT acknowledge this message.]`;
+  const capNote = state.droppedAtCap > 0 ? ` ${state.droppedAtCap} oldest marks were dropped at the board's mark cap.` : '';
+  return `[WHITEBOARD: ${parts.join('. ')}.${capNote} DO NOT acknowledge this message.]`;
 }

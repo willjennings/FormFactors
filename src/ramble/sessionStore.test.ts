@@ -104,3 +104,21 @@ describe('yield guards — agent events cannot touch a user-owned slot (Plan 2)'
     expect(slot(after, 'drawingRef')).toMatchObject({ status: 'draft', owner: 'user' });
   });
 });
+
+describe('yield stays sticky through cancel (probe 2026-07-16)', () => {
+  it('re-editing a committed slot then cancelling keeps it USER-owned', () => {
+    let st = reduce(start(), { type: 'user.editStart', slotId: 'location' }, 1000);
+    st = reduce(st, { type: 'user.editCommit', slotId: 'location', value: 'C-9' }, 1100);
+    st = reduce(st, { type: 'user.editStart', slotId: 'location' }, 1200);   // re-open
+    st = reduce(st, { type: 'user.editCancel', slotId: 'location' }, 1300);  // change of heart
+    expect(slot(st, 'location')).toMatchObject({ value: 'C-9', owner: 'user', status: 'confirmed' });
+    const after = reduce(st, { type: 'slot.draft', slotId: 'location', value: 'X', confidence: 1, source: 'heard' }, 1400);
+    expect(slot(after, 'location').value).toBe('C-9'); // agent still locked out
+  });
+  it('first-time edit cancel still returns ownership to the agent', () => {
+    let st = reduce(start(), { type: 'slot.draft', slotId: 'drawingRef', value: 'S-301', confidence: 0.9, source: 'heard' }, 1000);
+    st = reduce(st, { type: 'user.editStart', slotId: 'drawingRef' }, 1100);
+    st = reduce(st, { type: 'user.editCancel', slotId: 'drawingRef' }, 1200);
+    expect(slot(st, 'drawingRef')).toMatchObject({ value: 'S-301', owner: 'agent', status: 'draft' });
+  });
+});

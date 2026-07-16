@@ -42,3 +42,20 @@ describe('scribeCallToEvents', () => {
     expect(scribeCallToEvents({ name: 'nope', args: {} }, RFI_SCHEMA)).toEqual({ error: 'Unknown scribe tool "nope".' });
   });
 });
+
+describe('enum constraint validation (probe 2026-07-16: "banana" landed as an unmarked high-confidence discipline)', () => {
+  it('rejects a fill violating an enum constraint, naming the allowed values', () => {
+    const r = scribeCallToEvents({ name: 'fill_slot', args: { slotId: 'discipline', value: 'banana', confidence: 0.95, source: 'heard' } }, RFI_SCHEMA) as { error: string };
+    expect(r.error).toContain('discipline');
+    expect(r.error).toContain('Architectural|Structural|Mechanical|Electrical');
+  });
+  it('accepts a case-insensitive match and normalizes to the canonical casing', () => {
+    const evs = scribeCallToEvents({ name: 'fill_slot', args: { slotId: 'discipline', value: 'structural', confidence: 0.9, source: 'heard' } }, RFI_SCHEMA) as any[];
+    const draft = evs.find((e: any) => e.type === 'slot.draft');
+    expect(draft.value).toBe('Structural');
+  });
+  it('non-enum slots accept any value as before', () => {
+    const evs = scribeCallToEvents({ name: 'fill_slot', args: { slotId: 'location', value: 'wherever', confidence: 0.5, source: 'heard' } }, RFI_SCHEMA);
+    expect(Array.isArray(evs)).toBe(true);
+  });
+});

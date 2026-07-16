@@ -13,7 +13,11 @@ export function SketchLayer({ strokes, onStroke }: { strokes: Stroke[]; onStroke
 
   const toPlane = (e: React.PointerEvent): XY => {
     const r = svgRef.current!.getBoundingClientRect();
-    return { x: ((e.clientX - r.left) / r.width) * 1000, y: ((e.clientY - r.top) / r.height) * 1000 };
+    // Clamp to the documented 0-1000 plane: pointer capture keeps streaming while the
+    // pointer is OUTSIDE the panel, and out-of-range coords would flow verbatim into
+    // the [SKETCH] hint (probe 2026-07-16).
+    const clamp = (v: number) => Math.max(0, Math.min(1000, v));
+    return { x: clamp(((e.clientX - r.left) / r.width) * 1000), y: clamp(((e.clientY - r.top) / r.height) * 1000) };
   };
 
   const down = (e: React.PointerEvent) => {
