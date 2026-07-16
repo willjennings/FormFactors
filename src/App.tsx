@@ -849,6 +849,11 @@ export default function App() {
   // their DOM bboxes picked up immediately without requiring a window resize.
   useEffect(() => { updateLayout(); }, [updateLayout, windowRect, windowOpen, mockDoc]);
 
+  // Re-measure when an artifact window mounts/unmounts — effects run post-commit, so the new
+  // ArtifactWindow's data-entity-id region is in the DOM and measurable. Without this a fresh
+  // artifact stays zero-bbox (unpointable) until an unrelated layout pass happens to run.
+  useEffect(() => { updateLayout(); }, [artifactState.artifacts.length, updateLayout]);
+
   // Mount/reattach observers — re-runs when windowOpen flips so the new .program-window
   // element (which the old observer never saw) gets observed immediately on reopen.
   useEffect(() => {
@@ -2438,10 +2443,13 @@ export default function App() {
       x: e.clientX - rect.left,
       y: e.clientY - rect.top
     });
-    // Shell surfaces (omnibox/chips/cards, menu bar, dock, whiteboard panel) are NOT the
+    // Shell CHROME (omnibox/chips/cards, menu bar, dock, whiteboard panel frame) is NOT the
     // plane: skip deixis there — no cursor anchor, no hover, no markers landing on the
-    // compose box when the user types "this".
-    if ((e.target as HTMLElement)?.closest?.('[data-shell]')) {
+    // compose box when the user types "this". But entity CONTENT inside shell surfaces
+    // (artifact windows carry data-entity-id regions) IS the plane — carve it back in, or
+    // artifacts would be measurable yet unpointable.
+    const moveTarget = e.target as HTMLElement | null;
+    if (moveTarget?.closest?.('[data-shell]') && !moveTarget?.closest?.('[data-entity-id]')) {
       if (hoveredIdRef.current !== null) { setHoveredId(null); hoveredIdRef.current = null; }
       if (hoveredWordRef.current !== null) { hoveredWordRef.current = null; setHoveredWord(null); hoveredWordBoxRef.current = null; }
       return;
@@ -2522,9 +2530,12 @@ export default function App() {
   
   const handlePointerDown = (e: React.PointerEvent) => {
     lastActivityRef.current = Date.now();
-    // Shell clicks are not pointing (most shell roots stopPropagation already; this covers
-    // any that bubble, e.g. future surfaces): no touch-deixis registration, no paint.
-    if ((e.target as HTMLElement)?.closest?.('[data-shell]')) return;
+    // Shell CHROME clicks are not pointing (most shell roots stopPropagation already; this
+    // covers any that bubble): no touch-deixis registration, no paint. Entity CONTENT inside
+    // shell surfaces (artifact windows' data-entity-id regions) stays pointable — same
+    // carve-out as handlePointerMove.
+    const downTarget = e.target as HTMLElement | null;
+    if (downTarget?.closest?.('[data-shell]') && !downTarget?.closest?.('[data-entity-id]')) return;
     // Pointer visuals work with or without a session (gap 8): painting, hover, and markers
     // are local. Everything that costs tokens stays behind providerRef (null offline).
 

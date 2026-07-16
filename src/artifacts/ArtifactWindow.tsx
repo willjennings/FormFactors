@@ -9,12 +9,14 @@ import type { Artifact } from './types';
 export function ArtifactWindow({ artifact, index, onClose }: {
   artifact: Artifact; index: number; onClose: () => void;
 }) {
+  // No root stopPropagation (unlike WhiteboardPanel): pointer events must reach <main> so the
+  // plane's data-entity-id carve-out can make the CONTENT region pointable. data-shell still
+  // marks the chrome (title bar, provenance line, ×) as not-the-plane via that same carve-out.
   return (
     <div
       className="artifact-window absolute z-30 flex flex-col w-[min(360px,42vw)] max-h-[min(420px,60vh)] rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)]/95 backdrop-blur shadow-lg overflow-hidden"
       style={{ top: `calc(5rem + ${index * 24}px)`, left: `calc(55% + ${index * 16}px)` }}
       data-shell
-      onPointerDown={(e) => e.stopPropagation()}
     >
       <div className="flex items-center justify-between gap-2 px-3 h-8 border-b border-[var(--card-border)]">
         <div className="flex items-center gap-2 min-w-0">
