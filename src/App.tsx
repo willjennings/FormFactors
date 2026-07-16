@@ -3059,42 +3059,9 @@ export default function App() {
           )}
 
           <Omnibox
-            isLive={isLive} isConnecting={isConnecting}
-            error={lastError} transcript={liveTranscription || null}
-            suggestions={suggestions} firstRunHint={firstRunHint}
-            restoredDraft={restoredDraft}
-            modelCaption={modelCaption}
-            grounding={grounding}
-            onRemoveGrounding={(id) => setGrounding(g => g.filter(c => c.id !== id))}
-            onSubmit={(text) => {
-              lastActivityRef.current = Date.now();
-              setFirstRunHint(false); setFocusTitle(undefined);
-              // Grounding travels with the query: silent hints when live; appended visibly
-              // when the session must auto-start (hints would be lost pre-connect).
-              if (grounding.length && providerRef.current) {
-                grounding.forEach(c => providerRef.current?.sendTextHint(
-                  `[USER SELECTED: ${c.title}. Their next message is grounded on it — "this", "here", or "it" refers to ${c.title}. DO NOT respond to this note.]`));
-                sendTypedInput(text);
-              } else if (grounding.length) {
-                sendTypedInput(`${text} (pointing at: ${grounding.map(c => c.title).join(' and ')})`);
-              } else {
-                sendTypedInput(text);
-              }
-              setGrounding([]);
-            }}
-            onMicToggle={() => { setFirstRunHint(false); isLive ? providerRef.current?.close() : startLiveSession(); }}
-            onChipTap={(s) => setFocusTitle(TASKS.find(t => t.key === s.key)?.targetElement)}
-          />
-
-          <RailPanel
-            state={railState}
-            teachingRail={teachingSnapshot ? projectTeaching(teachingSnapshot) : null}
-            onEvent={railDispatch}
-            onShowMe={(id) => { telemetry.guidance('show_me', { taskKey: railState.rail?.seq }); teachingDispatchRef.current?.({ type: 'teach.highlight', entityId: id as EntityId }); }}
-          />
-
-          {/* Witness cards — confirm/cancel by button or voice. */}
-          <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-30 w-[min(560px,88vw)] flex flex-col gap-2" onPointerDown={(e) => e.stopPropagation()}>
+            above={<>
+          {/* Witness cards — stacked ABOVE the caption/chips in one column so they never overlap (human smoke 2026-07-16). */}
+          <div className="flex flex-col gap-2" onPointerDown={(e) => e.stopPropagation()}>
             {shareRequest && (
               <section className={`shrink-0 bg-[var(--card-bg)] border rounded-2xl p-6 animate-in fade-in slide-in-from-top-2 duration-300 ${shareRequest.confirmed ? 'border-green-500/50' : 'border-amber-500/40'}`}>
                 <div className="flex items-center gap-2 mb-3">
@@ -3229,6 +3196,41 @@ export default function App() {
               </section>
             )}
           </div>
+            </>}
+            isLive={isLive} isConnecting={isConnecting}
+            error={lastError} transcript={liveTranscription || null}
+            suggestions={suggestions} firstRunHint={firstRunHint}
+            restoredDraft={restoredDraft}
+            modelCaption={modelCaption}
+            grounding={grounding}
+            onRemoveGrounding={(id) => setGrounding(g => g.filter(c => c.id !== id))}
+            onSubmit={(text) => {
+              lastActivityRef.current = Date.now();
+              setFirstRunHint(false); setFocusTitle(undefined);
+              // Grounding travels with the query: silent hints when live; appended visibly
+              // when the session must auto-start (hints would be lost pre-connect).
+              if (grounding.length && providerRef.current) {
+                grounding.forEach(c => providerRef.current?.sendTextHint(
+                  `[USER SELECTED: ${c.title}. Their next message is grounded on it — "this", "here", or "it" refers to ${c.title}. DO NOT respond to this note.]`));
+                sendTypedInput(text);
+              } else if (grounding.length) {
+                sendTypedInput(`${text} (pointing at: ${grounding.map(c => c.title).join(' and ')})`);
+              } else {
+                sendTypedInput(text);
+              }
+              setGrounding([]);
+            }}
+            onMicToggle={() => { setFirstRunHint(false); isLive ? providerRef.current?.close() : startLiveSession(); }}
+            onChipTap={(s) => setFocusTitle(TASKS.find(t => t.key === s.key)?.targetElement)}
+          />
+
+          <RailPanel
+            state={railState}
+            teachingRail={teachingSnapshot ? projectTeaching(teachingSnapshot) : null}
+            onEvent={railDispatch}
+            onShowMe={(id) => { telemetry.guidance('show_me', { taskKey: railState.rail?.seq }); teachingDispatchRef.current?.({ type: 'teach.highlight', entityId: id as EntityId }); }}
+          />
+
 
         </main>
 

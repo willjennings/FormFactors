@@ -14,7 +14,7 @@ export function WhiteboardPanel({ state, preview, sketch, open, onClear, onClear
 }) {
   if (!open && !state.marks.length && !sketch.strokes.length && !preview) return null;
   return (
-    <div className="absolute top-16 left-1/2 -translate-x-1/2 z-40 w-[min(680px,88vw)] h-[min(420px,60vh)] rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)]/95 backdrop-blur shadow-lg overflow-hidden" onPointerDown={(e) => e.stopPropagation()}>
+    <div className="absolute top-16 left-1/2 -translate-x-1/2 z-40 w-[min(680px,88vw)] h-[min(420px,60vh)] rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)]/95 backdrop-blur shadow-lg overflow-hidden" onPointerDown={(e) => e.stopPropagation()} onPointerMove={(e) => e.stopPropagation()}>
       <div className="flex items-center justify-between px-3 h-8 border-b border-[var(--card-border)]">
         <span className="text-[10px] font-mono uppercase tracking-widest text-[var(--text-secondary)]">Whiteboard</span>
         <div className="flex items-center gap-2">
