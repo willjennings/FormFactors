@@ -113,7 +113,9 @@ hint. Voice perception + card + decline/re-propose all worked in the user's run.
 
 Pass: the post-reconnect session describes existing state without you re-creating it.
 
-Result: ☐
+Result: ✅ 2026-07-16 — post-reconnect session answered "You currently have a diagram"
+about a board it never created (gate reset e293445 verified live). Session dropped
+mid-answer afterward — the known Gemini link-drop pattern, logged, not a regression.
 
 ---
 
@@ -122,3 +124,8 @@ Result: ☐
 - 2026-07-16: checklist created. Automated smokes already cover: teach typed flow
   (guide/teach/fade/Contract A), ramble typed flow (fills/consent/yield/stall UI),
   sketch typed flow (perception/beautify round-trip incl. decline+confirm).
+
+- 2026-07-16 CAMPAIGN COMPLETE: 5/5 run. T1 ✅ teach-by-voice · T2 〜 voice fills need
+  pauses (VAD follow-up) + first-ever ask_gap · T3 ✅ earcons · T4 〜 two findings fixed
+  cbcb619 (faint proposed preview, wb_clear forbidden post-confirm) · T5 ✅ reconnect
+  perception. Still unobserved by voice: ramble read-back→confirm loop.
