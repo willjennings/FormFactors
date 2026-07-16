@@ -605,6 +605,7 @@ export default function App() {
   const [whiteboard, whiteboardDispatch] = useReducer(wbReduce, undefined, initialWhiteboardState);
   const [whiteboardMode, setWhiteboardMode] = useState<'board' | 'overlay'>('board');
   const wbHintGateRef = useRef(makeChangeGate());
+  const sketchHintGateRef = useRef(makeChangeGate());
   const [sketch, sketchDispatch] = useReducer(sketchReduce, undefined, initialSketchState);
   const [boardOpen, setBoardOpen] = useState(sketchDemoMode);
   const [confirmGoals, setConfirmGoals] = useState(false); // C3 eval toggle: On = Approach A (confirm set_goal)
@@ -2709,6 +2710,15 @@ export default function App() {
       providerRef.current?.sendTextHint(hint);
     }
   }, [isLive, whiteboard, whiteboardMode]);
+
+  // Sketch perception: the user's strokes, measured — the model's only view of the sketch.
+  useEffect(() => {
+    if (!isLive || whiteboardMode !== 'board') return;
+    const hint = serializeSketch(sketch);
+    if (sketchHintGateRef.current(hint) && hint) {
+      providerRef.current?.sendTextHint(hint);
+    }
+  }, [isLive, sketch, whiteboardMode]);
 
   // Whiteboard demo driver: StrictMode-safe, fires once, re-arms if nothing fired.
   const wbDemoScheduled = useRef(false);

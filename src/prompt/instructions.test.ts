@@ -61,6 +61,10 @@ describe('buildInstructions — honest desktop assistant', () => {
       // emitted target:"" steps like "type a name" and the whole sequence failed):
       expect(s).toMatch(/EVERY STEP TARGETS A CONTROL/);
       expect(s).toMatch(/fold it into the previous step/i);
+      // Sketch surface: the model's only view is [SKETCH]; user ink is user-owned.
+      expect(s).toMatch(/\[SKETCH/);
+      expect(s).toMatch(/cannot read (drawn )?words/i);
+      expect(s).toMatch(/never (clear|erase|delete).*(sketch|strokes)/i);
     }
   });
 });
