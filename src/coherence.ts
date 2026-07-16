@@ -89,6 +89,13 @@ export class CallDeduper {
     return false;
   }
 
+  /** Un-record one call — used when a call is REJECTED: it never executed, so deduping
+   *  its retry as a success would lie to the model (errors are data; retries deserve
+   *  the honest error again, not a fake ack). */
+  forget(name: string, argsKey: string): void {
+    this.entries.delete(`${name}${argsKey}`);
+  }
+
   /** Drop the internal record of all prior calls. */
   reset(): void {
     this.entries.clear();

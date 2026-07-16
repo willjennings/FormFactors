@@ -1147,11 +1147,18 @@ export default function App() {
     // teach_step_done keys on the ACTIVE STEP (zero-arg + non-idempotent): consecutive
     // advances of different steps pass; only a replay of the same step's advance dedupes.
     const dedupeKey = dedupeKeyFor(fc.name, fc.args, teachingSnapshotRef.current?.sequence?.activeIndex ?? null);
+    // Errors are data AND retryable: a REJECTED call never executed, so un-record it from
+    // the deduper — an identical retry is re-processed (and honestly re-errored), never
+    // acked as a fake deduped success. Every ack in this handler flows through here.
+    const ack = (result: Record<string, any>) => {
+      if (result.success === false) callDeduperRef.current.forget(fc.name, dedupeKey);
+      providerRef.current?.sendToolResponse(fc.id, fc.name, result);
+    };
     if (fc.name !== 'respond' && callDeduperRef.current.seen(fc.name, dedupeKey, Date.now())) {
       addLog('info', `Duplicate tool call skipped: ${fc.name}`);
       // wb_beautify is witnessed: the deduped original has NOT executed (the card is still
       // awaiting the user's click) — the generic ack would let the model narrate "done".
-      providerRef.current?.sendToolResponse(fc.id, fc.name, fc.name === 'wb_beautify'
+      ack(fc.name === 'wb_beautify'
         ? { success: true, deduped: true, witnessed: true, note: 'Duplicate call — the earlier one is shown to the user for confirmation and is NOT applied yet. Do not claim it happened.' }
         : { success: true, deduped: true });
       return;
@@ -1168,16 +1175,16 @@ export default function App() {
       ] }, entitiesRef.current, mockDocRef.current, Date.now());
       if (!('error' in mapped)) railDispatchRef.current?.({ type: 'rail.set', rail: { ...mapped.rail, guideLine: undefined } });
       addLog('tool', `Tool Call: explain(${subject}) - verbal only, changes nothing`);
-      providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true });
+      ack({ success: true });
     } else if (fc.name === 'respond') {
       const mapped = respondCallToRail(fc.args, entitiesRef.current, mockDocRef.current, Date.now());
       if ('error' in mapped) {
         addLog('tool', `Tool Call: respond REJECTED — ${mapped.error}`);
-        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: false, error: mapped.error });
+        ack({ success: false, error: mapped.error });
       } else {
         railDispatchRef.current?.({ type: 'rail.set', rail: mapped.rail });
         addLog('tool', `Tool Call: respond(${mapped.rail.seq}) — ${mapped.rail.cards.length} cards`);
-        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true, rendered: mapped.rail.cards.length });
+        ack({ success: true, rendered: mapped.rail.cards.length });
       }
     } else if (fc.name === 'share') {
       // PHASE G: outward action. Witness recipient + payload before sending; commit only
@@ -1195,7 +1202,7 @@ export default function App() {
         setShareRequest({ recipient, payload, confirmed: true });
         emitFeedback({ outcome: 'committed', verbClass: 'share', label: `Shared with ${recipient}` });
       }
-      providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true, sent: confirmed });
+      ack({ success: true, sent: confirmed });
     } else if (ACTION_VERB_NAMES.includes(fc.name)) {
       // ACTION VERBS (save/edit/format/insert/photo). The Policy layer (DIAL A: autonomy ×
       // verb class) decides commit-vs-witness; the Feedback layer (DIAL B) signals the
@@ -1211,7 +1218,7 @@ export default function App() {
       if (confirmed) {
         const pa = pendingActionRef.current;
         if (pa?.confirmed === true && pa.verb === fc.name && pa.target === (args.target ?? pa.target)) {
-          providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true, deduped: true, note: 'already applied via button confirm' });
+          ack({ success: true, deduped: true, note: 'already applied via button confirm' });
           return;
         }
       }
@@ -1242,7 +1249,7 @@ export default function App() {
         addLog('tool', `Tool Call: ${fc.name}(witness${disagreement ? ', grounding mismatch' : ''}) — ${phrase}`);
         setPendingAction({ verb: fc.name, label, target, detail, confirmed: false, note });
         emitFeedback({ outcome: 'needs-confirm', verbClass, label: disagreement ? `Mismatch: ${displayName(appReferentEntity)} vs ${displayName(resolved?.entity)}` : `Confirm: ${phrase}` });
-        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true, witnessed: true, grounding_mismatch: disagreement, app_referent: displayName(appReferentEntity) || null, model_target: resolved ? displayName(resolved.entity) : null });
+        ack({ success: true, witnessed: true, grounding_mismatch: disagreement, app_referent: displayName(appReferentEntity) || null, model_target: resolved ? displayName(resolved.entity) : null });
       } else {
         const prevDoc = mockDocRef.current;
         const nextDoc = applyAction(prevDoc, fc.name, args);
@@ -1262,7 +1269,7 @@ export default function App() {
         // G2: feed the new document state back so the model can SEE the result of its edit
         // (closes the action→result loop for multi-step work). Also drawn into the vision frame.
         providerRef.current?.sendTextHint(`[DOCUMENT STATE after your edit: ${serializeMockDoc(nextDoc)}. DO NOT acknowledge this message.]`);
-        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true, done: true });
+        ack({ success: true, done: true });
       }
     } else if (fc.name === 'revise_text') {
       // C2b Part B: witnessed, reversible span edit. Always witness-render the before→after diff;
@@ -1282,7 +1289,7 @@ export default function App() {
       const cs = Number(a.charStart), ce = Number(a.charEnd);
       if (doc.kind !== 'word' || !Number.isFinite(cs) || !Number.isFinite(ce)) {
         addLog('tool', `Tool Call: revise_text REJECTED — needs a valid span in the Word document`);
-        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: false, error: 'revise_text needs a valid character span in the Word document.' });
+        ack({ success: false, error: 'revise_text needs a valid character span in the Word document.' });
       } else {
         const s = Math.max(0, Math.min(cs, doc.text.length));
         const e = Math.max(s, Math.min(ce, doc.text.length));
@@ -1291,7 +1298,7 @@ export default function App() {
         addLog('tool', `Tool Call: revise_text(witness) — "${oldText}" → "${newText}"`);
         setPendingAction({ verb: 'revise_text', label: 'Revise', target: `"${oldText}"`, detail: `→ "${newText}"`, confirmed: false, charStart: s, charEnd: e, newText });
         emitFeedback({ outcome: 'needs-confirm', verbClass: 'mutate', label: `Confirm revise: "${oldText}" → "${newText}"` });
-        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true, witnessed: true });
+        ack({ success: true, witnessed: true });
       }
     } else if (fc.name === 'act_on') {
       // C2b Part C: outward action on what a word names (reserve, call, look up). SIMULATED like
@@ -1302,17 +1309,17 @@ export default function App() {
       const details = typeof args.details === 'string' ? args.details : undefined;
       const confirmed = args.confirm === true;
       if (!target || !intent) {
-        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: false, error: 'act_on needs a target and an intent.' });
+        ack({ success: false, error: 'act_on needs a target and an intent.' });
       } else if (!confirmed) {
         addLog('tool', `Tool Call: act_on(witness) — ${intent} → ${target}${details ? `: ${details}` : ''}`);
         setActRequest({ target, intent, details, confirmed: false });
         emitFeedback({ outcome: 'needs-confirm', verbClass: 'share', label: `Confirm: ${intent} → ${target}` });
-        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true, witnessed: true });
+        ack({ success: true, witnessed: true });
       } else {
         addLog('event', `Simulated: ${intent} → ${target}${details ? `: ${details}` : ''}`);
         setActRequest({ target, intent, details, confirmed: true });
         emitFeedback({ outcome: 'committed', verbClass: 'share', label: `${intent} → ${target} (simulated)` });
-        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true, simulated: true });
+        ack({ success: true, simulated: true });
         providerRef.current?.sendTextHint('[SYSTEM: that was SIMULATED — nothing was really sent, booked, or dialed. Do not claim a real action happened.]');
       }
     } else if (fc.name === 'set_goal' || fc.name === 'suggest_next') {
@@ -1320,7 +1327,7 @@ export default function App() {
       // suggest_next must pass validateSuggestion before it can surface as an offer.
       const mapped = goalCallToEvent(fc);
       if ('error' in mapped) {
-        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: false, error: mapped.error });
+        ack({ success: false, error: mapped.error });
       } else if (mapped.kind === 'set') {
         const ev = mapped.event as Extract<import('./goal/goalStore').GoalEvent, { type: 'goal.set' }>;
         if (confirmGoalsRef.current) {
@@ -1330,17 +1337,17 @@ export default function App() {
           goalDispatch(ev); // Approach B: track directly (tentative chip)
           addLog('tool', `Tool Call: set_goal — "${ev.objective}"`);
         }
-        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true });
+        ack({ success: true });
       } else {
         const proposal = mapped.proposal as Extract<GoalProposal, { kind: 'suggest' }>;
         const reason = validateSuggestion(goalStateRef.current, proposal);
         if (reason) {
           addLog('tool', `Tool Call: suggest_next REJECTED — ${reason}`);
-          providerRef.current?.sendToolResponse(fc.id, fc.name, { success: false, error: reason });
+          ack({ success: false, error: reason });
         } else {
           setPendingSuggestion(proposal);
           addLog('tool', `Tool Call: suggest_next — "${proposal.label}"`);
-          providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true, offered: true });
+          ack({ success: true, offered: true });
         }
       }
     } else if (fc.name === 'wb_beautify') {
@@ -1350,17 +1357,17 @@ export default function App() {
       // "shown to the user" ack would be false — reject before validation.
       if (whiteboardModeRef.current !== 'board') {
         addLog('tool', 'Tool Call: wb_beautify REJECTED — whiteboard is in overlay mode');
-        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: false, error: 'The whiteboard is in overlay mode — the sketch board (and its confirmation card) is not visible. Do not retry until the user switches to board mode.' });
+        ack({ success: false, error: 'The whiteboard is in overlay mode — the sketch board (and its confirmation card) is not visible. Do not retry until the user switches to board mode.' });
         return;
       }
       const v = validateBeautifyCall(fc.args, sketchSnapshotRef.current);
       if ('error' in v) {
         addLog('tool', `Tool Call: wb_beautify REJECTED — ${v.error}`);
-        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: false, error: v.error });
+        ack({ success: false, error: v.error });
       } else {
         setPendingBeautify(v);
         addLog('tool', 'Tool Call: wb_beautify — awaiting user consent');
-        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true, witnessed: true, note: 'Shown to the user for confirmation — NOT applied yet. Do not claim it happened.' });
+        ack({ success: true, witnessed: true, note: 'Shown to the user for confirmation — NOT applied yet. Do not claim it happened.' });
       }
     } else if (fc.name.startsWith('wb_')) {
       // Whiteboard: free-coordinate diagram marks. Unresolved connector keys simply render nothing
@@ -1368,11 +1375,11 @@ export default function App() {
       const mapped = wbCallToEvent(fc);
       if ('error' in mapped) {
         addLog('tool', `Tool Call: ${fc.name} REJECTED — ${mapped.error}`);
-        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: false, error: mapped.error });
+        ack({ success: false, error: mapped.error });
       } else {
         whiteboardDispatch(mapped);
         addLog('tool', `Tool Call: ${fc.name}`);
-        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true });
+        ack({ success: true });
       }
     } else if (fc.name.startsWith('teach_')) {
       // Plan 2: the live model drives teaching posture through the foundation's pure mapper.
@@ -1381,11 +1388,11 @@ export default function App() {
       const mapped = teachCallToEvent(fc, entitiesRef.current);
       if ('error' in mapped) {
         addLog('tool', `Tool Call: ${fc.name} REJECTED — ${mapped.error}`);
-        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: false, error: mapped.error });
+        ack({ success: false, error: mapped.error });
       } else {
         teachingDispatchRef.current?.(mapped);
         addLog('tool', `Tool Call: ${fc.name}`);
-        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true });
+        ack({ success: true });
       }
     } else if (fc.name.startsWith('annotate_')) {
       // C2a-illustrate: entity-anchored illustration. The pure mapper resolves target names;
@@ -1393,11 +1400,11 @@ export default function App() {
       const mapped = annotateCallToEvent(fc, entitiesRef.current);
       if ('error' in mapped) {
         addLog('tool', `Tool Call: ${fc.name} REJECTED — ${mapped.error}`);
-        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: false, error: mapped.error });
+        ack({ success: false, error: mapped.error });
       } else {
         annotationDispatchRef.current?.(mapped);
         addLog('tool', `Tool Call: ${fc.name}`);
-        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true });
+        ack({ success: true });
       }
     }
   };

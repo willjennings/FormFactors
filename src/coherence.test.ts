@@ -31,3 +31,24 @@ describe('dedupeKeyFor', () => {
     expect(dedupeKeyFor('tap', args, null)).toBe(argsKey(args));
   });
 });
+
+// A REJECTED call was never executed — deduping its retry as {success:true} is a lie
+// (watched live: teach_sequence and wb_beautify retry loops after honest errors).
+describe('CallDeduper.forget', () => {
+  it('a forgotten call is not a duplicate — the retry gets re-processed (and re-errored honestly)', () => {
+    const d = new CallDeduper();
+    const key = argsKey({ target: '' });
+    expect(d.seen('teach_sequence', key, 1000)).toBe(false);
+    d.forget('teach_sequence', key);                       // the call was rejected
+    expect(d.seen('teach_sequence', key, 1200)).toBe(false); // retry within the window: NOT deduped
+    expect(d.seen('teach_sequence', key, 1400)).toBe(true);  // an actual replay of the retry still dedupes
+  });
+  it('forget is scoped to one (name, argsKey) — other entries keep their protection', () => {
+    const d = new CallDeduper();
+    d.seen('tap', argsKey({ id: 'a' }), 1000);
+    d.seen('tap', argsKey({ id: 'b' }), 1000);
+    d.forget('tap', argsKey({ id: 'a' }));
+    expect(d.seen('tap', argsKey({ id: 'a' }), 1200)).toBe(false);
+    expect(d.seen('tap', argsKey({ id: 'b' }), 1200)).toBe(true);
+  });
+});
