@@ -397,7 +397,7 @@ export type MockDoc =
   | { kind: 'word'; text: string; bold: boolean; heading?: string; saved: boolean; savedAs?: string }
   | { kind: 'excel'; cells: Record<string, string>; currency: string[]; chart: boolean; saved: boolean }
   | { kind: 'powerpoint'; slides: string[]; transition?: string; saved: boolean }
-  | { kind: 'photo'; cropped: boolean; resized: boolean; brightness: number; bgRemoved: boolean; saved: boolean };
+  | { kind: 'photo'; cropped: boolean; resized: boolean; brightness: number; bgRemoved: boolean; saved: boolean; caption?: string };
 
 export function initialMockDoc(programId: ProgramId): MockDoc {
   switch (programId) {
@@ -571,7 +571,7 @@ export function serializeMockDoc(doc: MockDoc): string {
     case 'powerpoint':
       return `PowerPoint — slides:[${doc.slides.join(', ')}]${doc.transition ? `, transition:${doc.transition}` : ''}, saved:${doc.saved ? 'yes' : 'no'}`;
     case 'photo':
-      return `Photo — ${doc.cropped ? 'cropped, ' : ''}${doc.resized ? 'resized, ' : ''}brightness:+${doc.brightness}${doc.bgRemoved ? ', background removed' : ''}, saved:${doc.saved ? 'yes' : 'no'}`;
+      return `Photo — ${doc.cropped ? 'cropped, ' : ''}${doc.resized ? 'resized, ' : ''}brightness:+${doc.brightness}${doc.bgRemoved ? ', background removed' : ''}${doc.caption ? `, caption:"${doc.caption}"` : ''}, saved:${doc.saved ? 'yes' : 'no'}`;
   }
 }
 
