@@ -12,16 +12,19 @@ const JS_TO_GEMINI: Record<string, any> = {
   string: Type.STRING, number: Type.NUMBER, boolean: Type.BOOLEAN, object: Type.OBJECT, array: Type.ARRAY,
 };
 
-function toGeminiParams(schema: Record<string, any>): any {
+/** Full-recursion JSON-Schema → Gemini Schema. The old shallow mapping flattened object
+ *  array items to a bare type — nested properties/required and ALL enums were silently
+ *  dropped, so tools like wb_beautify reached the model schemaless (live smoke 2026-07-16:
+ *  marks arrived without `kind`, twice rejected). Exported for tests. */
+export function toGeminiParams(schema: Record<string, any>): any {
   const out: any = { type: JS_TO_GEMINI[schema.type] ?? Type.OBJECT };
+  if (schema.description) out.description = schema.description;
+  if (schema.enum) out.enum = schema.enum;
   if (schema.properties) {
     out.properties = {};
-    for (const [k, v] of Object.entries<any>(schema.properties)) {
-      out.properties[k] = v.type === 'array'
-        ? { type: Type.ARRAY, items: { type: JS_TO_GEMINI[v.items?.type] ?? Type.STRING }, description: v.description }
-        : { type: JS_TO_GEMINI[v.type] ?? Type.STRING, description: v.description };
-    }
+    for (const [k, v] of Object.entries<any>(schema.properties)) out.properties[k] = toGeminiParams(v);
   }
+  if (schema.items) out.items = toGeminiParams(schema.items);
   if (schema.required) out.required = schema.required;
   return out;
 }
