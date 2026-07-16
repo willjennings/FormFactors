@@ -129,3 +129,12 @@ mid-answer afterward — the known Gemini link-drop pattern, logged, not a regre
   pauses (VAD follow-up) + first-ever ask_gap · T3 ✅ earcons · T4 〜 two findings fixed
   cbcb619 (faint proposed preview, wb_clear forbidden post-confirm) · T5 ✅ reconnect
   perception. Still unobserved by voice: ramble read-back→confirm loop.
+
+- 2026-07-16 post-campaign console-log findings (user-supplied): (1) MIC LEAK — after a
+  SERVER-initiated session close, the ScriptProcessorNode kept pumping into the dead
+  socket (~4x/s "WebSocket is already in CLOSING or CLOSED state") and the mic stayed
+  captured; gemini + azure both fixed (7ef84cf, 6ad3643). (2) VOICE REVISE MANGLING —
+  repeated confirms applied stale char spans ("summary.ary.ary.y."); confirm now verifies
+  the witnessed text is unchanged, drops honestly otherwise (6ad3643). Follow-up logged:
+  migrate ScriptProcessorNode → AudioWorkletNode (deprecation). Noise identified: _next
+  font preloads are the Kausap app's, extension runtime.lastError is Chrome's.
