@@ -145,3 +145,8 @@ mid-answer afterward — the known Gemini link-drop pattern, logged, not a regre
   landed on the compose box — shell surfaces (Omnibox/MenuBar/WhiteboardPanel) only stopped
   pointer-DOWN, so hover over them still moved the plane cursor; pointer-move now stopped
   too (verified: marker lands on the document plane).
+
+- 2026-07-16 (cont.): the pointer-move stop hid the custom cursor over the shell (native
+  cursor is display:none app-wide) — reworked in 25f2f11: shell roots carry data-shell;
+  the move handler always tracks the visual cursor and skips only the deixis half over
+  shell. Verified: cursor renders on the chips; typed-"this" markers still can't land there.
