@@ -1145,7 +1145,11 @@ export default function App() {
     const dedupeKey = dedupeKeyFor(fc.name, fc.args, teachingSnapshotRef.current?.sequence?.activeIndex ?? null);
     if (fc.name !== 'respond' && callDeduperRef.current.seen(fc.name, dedupeKey, Date.now())) {
       addLog('info', `Duplicate tool call skipped: ${fc.name}`);
-      providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true, deduped: true });
+      // wb_beautify is witnessed: the deduped original has NOT executed (the card is still
+      // awaiting the user's click) — the generic ack would let the model narrate "done".
+      providerRef.current?.sendToolResponse(fc.id, fc.name, fc.name === 'wb_beautify'
+        ? { success: true, deduped: true, witnessed: true, note: 'Duplicate call — the earlier one is shown to the user for confirmation and is NOT applied yet. Do not claim it happened.' }
+        : { success: true, deduped: true });
       return;
     }
     if (fc.name === 'explain') {
@@ -2921,7 +2925,15 @@ export default function App() {
             <WhiteboardPanel
               state={wbWithPreview} sketch={sketch} open={boardOpen}
               onClear={() => whiteboardDispatch({ type: 'wb.clear' })}
-              onClearSketch={() => sketchDispatch({ type: 'sketch.clear' })}
+              onClearSketch={() => {
+                // Clearing the sketch while a beautify card is pending is an implicit decline:
+                // the proposal's removeIds are about to be dead — drop the card first.
+                if (pendingBeautifyRef.current) {
+                  providerRef.current?.sendTextHint('[SYSTEM: the user DECLINED the beautify — their sketch is unchanged. Do not re-call the tool unless they ask.]');
+                  setPendingBeautify(null);
+                }
+                sketchDispatch({ type: 'sketch.clear' });
+              }}
               onStroke={(points) => sketchDispatch({ type: 'sketch.strokeAdd', points })}
               demoCaption={sketchDemoMode ? serializeSketch(sketch) : null}
             />
