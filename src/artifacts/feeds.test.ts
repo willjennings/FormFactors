@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { FEEDS, FeedUnavailable } from './feeds';
+import { FEEDS, FeedUnavailable, feedsSummary } from './feeds';
 
 describe('feeds registry (spec §8)', () => {
   it('declares exactly clock, weather, stock', () => {
@@ -59,6 +59,17 @@ describe('feeds registry (spec §8)', () => {
       expect(descriptor.refreshMs).toBeGreaterThan(0);
       expect(typeof descriptor.read).toBe('function');
     }
+  });
+
+  it('feedsSummary names each bound feed with its provenance, deduped, in field order; null when none', () => {
+    expect(feedsSummary([
+      { label: 'Project', value: 'Riverside Tower' },
+      { label: 'Time', feed: 'clock' },
+      { label: 'MERI', feed: 'stock' },
+      { label: 'Also time', feed: 'clock' }, // duplicate binding → named once
+    ])).toBe('clock LIVE, stock SIMULATED');
+    expect(feedsSummary([{ label: 'Project', value: 'x' }])).toBeNull();
+    expect(feedsSummary(undefined)).toBeNull();
   });
 
   it('FeedUnavailable is a typed, named error the renderer can catch', () => {

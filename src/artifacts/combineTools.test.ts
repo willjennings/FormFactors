@@ -78,6 +78,11 @@ describe('widget validation (spec §8 — M2 real support)', () => {
     const r = validateCombineCall({ sources: ['word', 'excel'], kind: 'widget', title: 'T', fields: [{ label: 'x' }] }, corpus, initialArtifactState(), now) as { error: string };
     expect(r.error).toMatch(/value|feed/i);
   });
+  it('a field with BOTH a feed and a static value is rejected honestly, never silently dropped', () => {
+    const r = validateCombineCall({ sources: ['word', 'excel'], kind: 'widget', title: 'T', fields: [{ label: 'Time', feed: 'clock', value: '9:00 AM' }] }, corpus, initialArtifactState(), now) as { error: string };
+    expect(r.error).toContain('Time');
+    expect(r.error).toMatch(/both.*feed.*value|both.*value.*feed/i);
+  });
   it('unknown feed id fails naming valid registry ids', () => {
     const r = validateCombineCall({ sources: ['word', 'excel'], kind: 'widget', title: 'T', fields: [{ label: 'x', feed: 'bitcoin' }] }, corpus, initialArtifactState(), now) as { error: string };
     expect(r.error).toContain('bitcoin');

@@ -3,7 +3,7 @@
 // so tests never depend on wall-clock time. weather.read is the ONLY impure descriptor (does a
 // real fetch); its failure mode is a typed FeedUnavailable the renderer maps to "feed
 // unavailable", never a stale value silently passed off as fresh.
-import type { FeedId } from './types';
+import type { FeedId, WidgetField } from './types';
 
 export interface FeedDescriptor {
   id: FeedId;
@@ -54,3 +54,15 @@ export const FEEDS: Record<FeedId, FeedDescriptor> = {
   weather: { id: 'weather', label: 'Weather', provenance: 'live', refreshMs: 600000, read: readWeather },
   stock: { id: 'stock', label: 'MERI', provenance: 'simulated', refreshMs: 5000, read: readStock },
 };
+
+/**
+ * One-line provenance summary of a widget's bound feeds, e.g. "clock LIVE, stock SIMULATED" —
+ * null when no field is bound. Used verbatim by BOTH the [ARTIFACTS] hint and the combine ack
+ * (spec §8): the model's view of a widget always carries the same per-feed provenance the chips
+ * render, so it can never claim simulated data is real.
+ */
+export function feedsSummary(fields: WidgetField[] | undefined): string | null {
+  const bound = [...new Set((fields ?? []).map((f) => f.feed).filter((id): id is FeedId => !!id && id in FEEDS))];
+  if (!bound.length) return null;
+  return bound.map((id) => `${id} ${FEEDS[id].provenance.toUpperCase()}`).join(', ');
+}

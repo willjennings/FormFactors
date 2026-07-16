@@ -101,6 +101,7 @@ import { saveAndLoad } from './artifacts/corpus';
 import { serializeCorpus, serializeArtifacts } from './artifacts/serialize';
 import { initialArtifactState, reduce as artifactReduce } from './artifacts/artifactStore';
 import { COMBINE_TOOL, READ_SOURCES_TOOL, validateCombineCall, sourceDetail } from './artifacts/combineTools';
+import { feedsSummary } from './artifacts/feeds';
 import { artifactEntities } from './artifacts/entities';
 import { ArtifactWindow } from './artifacts/ArtifactWindow';
 import { ARTIFACT_DEMO_ARGS, ARTIFACT_DEMO_EXCEL_SOURCE, ARTIFACT_DEMO_WIDGET_ARGS } from './artifacts/demo';
@@ -1262,9 +1263,13 @@ export default function App() {
         ack({ success: false, error: v.error });
       } else {
         artifactDispatch(v.event);
-        addLog('tool', `Tool Call: combine — "${(v.event as Extract<ArtifactEvent, { type: 'artifact.create' }>).artifact.title}" ${v.provenance}`);
-        emitFeedback({ outcome: 'committed', verbClass: 'create', label: `Created: ${(v.event as Extract<ArtifactEvent, { type: 'artifact.create' }>).artifact.title}` });
-        ack({ success: true, provenance: v.provenance, note: 'The artifact window is on screen showing its sources.' });
+        const createdArtifact = (v.event as Extract<ArtifactEvent, { type: 'artifact.create' }>).artifact;
+        addLog('tool', `Tool Call: combine — "${createdArtifact.title}" ${v.provenance}`);
+        emitFeedback({ outcome: 'committed', verbClass: 'create', label: `Created: ${createdArtifact.title}` });
+        // Widget acks carry the same per-feed provenance as the [ARTIFACTS] hint and the chips
+        // (spec §8) — the model never sees simulated data without its SIMULATED label.
+        const ackFeeds = createdArtifact.kind === 'widget' ? feedsSummary(createdArtifact.fields) : null;
+        ack({ success: true, provenance: v.provenance, ...(ackFeeds ? { feeds: ackFeeds } : {}), note: 'The artifact window is on screen showing its sources.' });
       }
     } else if (fc.name === 'read_sources') {
       // The model must ask for full content before combining — the standing [CORPUS] hint is

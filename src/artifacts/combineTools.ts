@@ -96,7 +96,11 @@ function validateWidgetFields(raw: unknown): { fields: WidgetField[] } | { error
     const label = String((entry as { label?: unknown })?.label ?? '').trim();
     if (!label) return { error: 'combine kind "widget" fields need a non-empty label.' };
     const rawFeed = (entry as { feed?: unknown })?.feed;
+    const rawValue = (entry as { value?: unknown })?.value;
+    const hasValue = rawValue !== undefined && rawValue !== null && String(rawValue).trim() !== '';
     if (rawFeed !== undefined && rawFeed !== null && rawFeed !== '') {
+      // Reject the ambiguity honestly — never silently drop the value in favor of the feed.
+      if (hasValue) return { error: `field "${label}" has both a feed and a static value — choose one.` };
       const feedId = String(rawFeed);
       if (!(feedId in FEEDS)) {
         return { error: `Unknown feed "${feedId}". Valid feeds: ${Object.keys(FEEDS).join(', ')}.` };
@@ -104,7 +108,7 @@ function validateWidgetFields(raw: unknown): { fields: WidgetField[] } | { error
       fields.push({ label, feed: feedId as FeedId });
       continue;
     }
-    const value = String((entry as { value?: unknown })?.value ?? '').trim();
+    const value = String(rawValue ?? '').trim();
     if (!value) return { error: `combine kind "widget" field "${label}" needs a value or a feed.` };
     fields.push({ label, value });
   }

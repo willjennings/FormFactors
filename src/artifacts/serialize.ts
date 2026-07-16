@@ -2,6 +2,7 @@
 import type { MockDoc, ProgramId } from '../scenarios';
 import type { ArtifactState } from './types';
 import { MAX_ARTIFACTS } from './artifactStore';
+import { feedsSummary } from './feeds';
 
 function gist(id: string, doc: MockDoc): string {
   switch (doc.kind) {
@@ -20,7 +21,12 @@ export function serializeCorpus(corpus: Partial<Record<ProgramId, MockDoc>>): st
 
 export function serializeArtifacts(state: ArtifactState): string | null {
   if (!state.artifacts.length && state.rejectedAtCap === 0) return null;
-  const items = state.artifacts.map((a) => `${a.id} "${a.title}" (${a.kind}, from: ${a.sources.join(' + ')})`);
+  // Widget entries append per-field feed provenance (spec §8): the hint carries the same
+  // LIVE/SIMULATED labels the chips render, so the model never claims simulated data is real.
+  const items = state.artifacts.map((a) => {
+    const feeds = a.kind === 'widget' ? feedsSummary(a.fields) : null;
+    return `${a.id} "${a.title}" (${a.kind}, from: ${a.sources.join(' + ')}${feeds ? `; feeds: ${feeds}` : ''})`;
+  });
   const capNote = state.rejectedAtCap > 0 ? ` ${state.rejectedAtCap} creations were rejected at the ${MAX_ARTIFACTS}-artifact cap — the user must close one first.` : '';
   return `[ARTIFACTS: ${items.join('; ') || 'none'}.${capNote} Artifacts are valid combine sources. DO NOT acknowledge this update.]`;
 }

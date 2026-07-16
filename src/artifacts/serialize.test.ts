@@ -29,4 +29,21 @@ describe('serializeArtifacts', () => {
     const rejected = { ...st, rejectedAtCap: 2 };
     expect(serializeArtifacts(rejected)).toContain('2 creations were rejected at the 6-artifact cap');
   });
+  it('widget entries carry per-field feed provenance (spec §8 — the hint never lets simulated pass as real)', () => {
+    const st = reduce(initialArtifactState(), { type: 'artifact.create', artifact: {
+      kind: 'widget', title: 'Status Board', sources: ['a1', 'excel'], createdAt: 1,
+      fields: [{ label: 'Lead project', value: 'Riverside Tower' }, { label: 'Local time', feed: 'clock' }, { label: 'MERI', feed: 'stock' }],
+    } });
+    const s = serializeArtifacts(st)!;
+    expect(s).toContain('a1 "Status Board" (widget, from: a1 + excel; feeds: clock LIVE, stock SIMULATED)');
+  });
+  it('a widget with only static fields gets no feeds clause', () => {
+    const st = reduce(initialArtifactState(), { type: 'artifact.create', artifact: {
+      kind: 'widget', title: 'Static Board', sources: ['word', 'excel'], createdAt: 1,
+      fields: [{ label: 'Project', value: 'Riverside Tower' }],
+    } });
+    const s = serializeArtifacts(st)!;
+    expect(s).toContain('a1 "Static Board" (widget, from: word + excel)');
+    expect(s).not.toContain('feeds:');
+  });
 });
