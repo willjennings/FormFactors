@@ -150,3 +150,9 @@ mid-answer afterward — the known Gemini link-drop pattern, logged, not a regre
   cursor is display:none app-wide) — reworked in 25f2f11: shell roots carry data-shell;
   the move handler always tracks the visual cursor and skips only the deixis half over
   shell. Verified: cursor renders on the chips; typed-"this" markers still can't land there.
+
+- 2026-07-16 (cont.): slow model turns read as hangs (no in-progress signal — audit gap #10
+  resurfacing) → omnibox now shows an honest "assistant …" pulse from onResponseStart until
+  the first caption streams; program swap now dismisses the response rail (Excel's "Cell A3"
+  ANSWER card had survived into PowerPoint). Both in the same push. Stacking fix confirmed
+  working in the user's screenshot (card→caption→chips in one column).
