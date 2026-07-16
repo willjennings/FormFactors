@@ -76,12 +76,15 @@ import { GOAL_TOOLS, goalCallToEvent, validateSuggestion, type GoalProposal } fr
 import { initialGoalState, reduce as goalReduce, type GoalState } from './goal/goalStore';
 import { serializeGoalState } from './goal/serialize';
 import { WB_TOOLS, wbCallToEvent } from './whiteboard/tools';
+import type { WbEvent } from './whiteboard/types';
 import { initialWhiteboardState, reduce as wbReduce } from './whiteboard/store';
 import { serializeWhiteboard } from './whiteboard/serialize';
 import { buildWhiteboardDemo } from './whiteboard/demo';
 import { initialSketchState, reduce as sketchReduce } from './sketch/sketchStore';
 import { serializeSketch } from './sketch/serialize';
 import { buildSketchDemo } from './sketch/demo';
+import { BEAUTIFY_TOOL, validateBeautifyCall } from './sketch/beautify';
+import { BeautifyCard } from './sketch/BeautifyCard';
 import { initialRailState, reduceRail, railComplete, type RailEvent, type RailState } from './rail/railStore';
 import { respondCallToRail } from './rail/respondCallToRail';
 import { buildRailDemo } from './rail/demoRail';
@@ -321,7 +324,7 @@ export default function App() {
   // Tools offered to the voice model = the kept verbs (explain, share) + the action verbs this
   // program exposes. Read at connect time; program swap reconnects (see handleProgramChange).
   const voiceTools = React.useMemo(
-    () => [...VOICE_TOOLS, ...buildActionTools(activeProgram), ...ANNOTATE_TOOLS, ...(activeProgram === 'word' ? [REVISE_TOOL] : []), ACT_TOOL, ...GOAL_TOOLS, ...WB_TOOLS, ...TEACH_TOOLS],
+    () => [...VOICE_TOOLS, ...buildActionTools(activeProgram), ...ANNOTATE_TOOLS, ...(activeProgram === 'word' ? [REVISE_TOOL] : []), ACT_TOOL, ...GOAL_TOOLS, ...WB_TOOLS, BEAUTIFY_TOOL, ...TEACH_TOOLS],
     [activeProgram],
   );
   const CONFUSABLE_PAIRS = React.useMemo(() => {
@@ -608,6 +611,13 @@ export default function App() {
   const sketchHintGateRef = useRef(makeChangeGate());
   const [sketch, sketchDispatch] = useReducer(sketchReduce, undefined, initialSketchState);
   const [boardOpen, setBoardOpen] = useState(sketchDemoMode);
+  // Witnessed wb_beautify (Task 5): pending proposal awaiting the card's yes/no, and a
+  // stale-closure-free snapshot of the sketch for the tool-call callback to validate against.
+  const [pendingBeautify, setPendingBeautify] = useState<{ removeIds: string[]; events: WbEvent[]; summary: string } | null>(null);
+  const pendingBeautifyRef = useRef<typeof pendingBeautify>(null);
+  useEffect(() => { pendingBeautifyRef.current = pendingBeautify; }, [pendingBeautify]);
+  const sketchSnapshotRef = useRef(sketch);
+  useEffect(() => { sketchSnapshotRef.current = sketch; }, [sketch]);
   const [confirmGoals, setConfirmGoals] = useState(false); // C3 eval toggle: On = Approach A (confirm set_goal)
   const confirmGoalsRef = useRef(confirmGoals);
   useEffect(() => { confirmGoalsRef.current = confirmGoals; }, [confirmGoals]);
@@ -1325,6 +1335,18 @@ export default function App() {
           providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true, offered: true });
         }
       }
+    } else if (fc.name === 'wb_beautify') {
+      // Witnessed sketch→diagram swap: validate everything up front (errors are data,
+      // nothing partial), then show the card — the swap NEVER happens without the user's yes.
+      const v = validateBeautifyCall(fc.args, sketchSnapshotRef.current);
+      if ('error' in v) {
+        addLog('tool', `Tool Call: wb_beautify REJECTED — ${v.error}`);
+        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: false, error: v.error });
+      } else {
+        setPendingBeautify(v);
+        addLog('tool', 'Tool Call: wb_beautify — awaiting user consent');
+        providerRef.current?.sendToolResponse(fc.id, fc.name, { success: true, witnessed: true, note: 'Shown to the user for confirmation — NOT applied yet. Do not claim it happened.' });
+      }
     } else if (fc.name.startsWith('wb_')) {
       // Whiteboard: free-coordinate diagram marks. Unresolved connector keys simply render nothing
       // (fail-soft); the model learns live node keys from [WHITEBOARD].
@@ -2006,6 +2028,7 @@ export default function App() {
         if (pendingActionRef.current && !pendingActionRef.current.confirmed) { cancelPendingAction(); return; }
         if (shareRequestRef.current && !shareRequestRef.current.confirmed) { cancelShare(); return; }
         if (actRequestRef.current && !actRequestRef.current.confirmed) { cancelAct(); return; }
+        if (pendingBeautifyRef.current) { providerRef.current?.sendTextHint('[SYSTEM: the user DECLINED the beautify — their sketch is unchanged. Do not re-call the tool unless they ask.]'); setPendingBeautify(null); return; }
         if (pendingGoalRef.current) { setPendingGoal(null); return; }
         if (pendingSuggestionRef.current) { setPendingSuggestion(null); return; }
       }
@@ -2841,6 +2864,13 @@ export default function App() {
     );
   }
 
+  // Witnessed wb_beautify preview: while a proposal is pending, render the proposed marks
+  // provisionally alongside the still-present strokes (that juxtaposition IS the before/after).
+  // Nothing is committed to the real whiteboard state until the card's Confirm.
+  const wbWithPreview = pendingBeautify
+    ? pendingBeautify.events.reduce((s, ev) => wbReduce(s, ev), whiteboard)
+    : whiteboard;
+
   return (
     <div className={`flex flex-col h-screen bg-[var(--bg-color)] bg-dots text-[var(--text-primary)] overflow-hidden font-sans selection:bg-indigo-500/30 custom-cursor-active`}>
       <div className="flex-1 overflow-hidden">
@@ -2889,11 +2919,26 @@ export default function App() {
           )}
           {whiteboardMode === 'board' && (
             <WhiteboardPanel
-              state={whiteboard} sketch={sketch} open={boardOpen}
+              state={wbWithPreview} sketch={sketch} open={boardOpen}
               onClear={() => whiteboardDispatch({ type: 'wb.clear' })}
               onClearSketch={() => sketchDispatch({ type: 'sketch.clear' })}
               onStroke={(points) => sketchDispatch({ type: 'sketch.strokeAdd', points })}
               demoCaption={sketchDemoMode ? serializeSketch(sketch) : null}
+            />
+          )}
+          {whiteboardMode === 'board' && pendingBeautify && (
+            <BeautifyCard
+              summary={pendingBeautify.summary}
+              onConfirm={() => {
+                sketchDispatch({ type: 'sketch.replace', removeIds: pendingBeautify.removeIds });
+                pendingBeautify.events.forEach((ev) => whiteboardDispatch(ev));
+                providerRef.current?.sendTextHint('[SYSTEM: the user CONFIRMED the beautify — their strokes were replaced with your marks. Do not re-call the tool; do not acknowledge.]');
+                setPendingBeautify(null);
+              }}
+              onCancel={() => {
+                providerRef.current?.sendTextHint('[SYSTEM: the user DECLINED the beautify — their sketch is unchanged. Do not re-call the tool unless they ask.]');
+                setPendingBeautify(null);
+              }}
             />
           )}
           {/* C3: Tentative goal chip — shows active goal + step progress + clear button */}

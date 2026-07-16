@@ -65,6 +65,7 @@ describe('buildInstructions — honest desktop assistant', () => {
       expect(s).toMatch(/\[SKETCH/);
       expect(s).toMatch(/cannot read (drawn )?words/i);
       expect(s).toMatch(/never (clear|erase|delete).*(sketch|strokes)/i);
+      expect(s).toContain('wb_beautify');
     }
   });
 });
