@@ -30,7 +30,7 @@ have only ever been observed with a silent stubbed mic and typed input.*
 
 Pass: sequence renders + agent paces it; no deixis chatter mid-sequence; session stable.
 
-Result: ☐
+Result: ✅ 2026-07-16 — user: "it told me to save this document, push the save button"; sequence + voice pacing worked on a real mic.
 
 ## Test 2 — Ramble by voice (gap question + read-back) ~5 min
 
