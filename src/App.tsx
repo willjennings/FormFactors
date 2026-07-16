@@ -2897,11 +2897,12 @@ export default function App() {
   }
 
   // Witnessed wb_beautify preview: while a proposal is pending, render the proposed marks
-  // provisionally alongside the still-present strokes (that juxtaposition IS the before/after).
-  // Nothing is committed to the real whiteboard state until the card's Confirm.
-  const wbWithPreview = pendingBeautify
-    ? pendingBeautify.events.reduce((s, ev) => wbReduce(s, ev), whiteboard)
-    : whiteboard;
+  // The beautify PREVIEW renders as its own faint layer (human smoke 2026-07-16: full-ink
+  // preview read as a committed diagram, so declining felt like deletion). Nothing is
+  // committed to the real whiteboard state until the card's Confirm.
+  const beautifyPreview = pendingBeautify
+    ? pendingBeautify.events.reduce((s, ev) => wbReduce(s, ev), initialWhiteboardState())
+    : null;
 
   return (
     <div className={`flex flex-col h-screen bg-[var(--bg-color)] bg-dots text-[var(--text-primary)] overflow-hidden font-sans selection:bg-indigo-500/30 custom-cursor-active`}>
@@ -2951,7 +2952,7 @@ export default function App() {
           )}
           {whiteboardMode === 'board' && (
             <WhiteboardPanel
-              state={wbWithPreview} sketch={sketch} open={boardOpen}
+              state={whiteboard} preview={beautifyPreview} sketch={sketch} open={boardOpen}
               onClear={() => whiteboardDispatch({ type: 'wb.clear' })}
               onClearSketch={() => {
                 // Clearing the sketch while a beautify card is pending is an implicit decline:
@@ -2972,7 +2973,7 @@ export default function App() {
               onConfirm={() => {
                 sketchDispatch({ type: 'sketch.replace', removeIds: pendingBeautify.removeIds });
                 pendingBeautify.events.forEach((ev) => whiteboardDispatch(ev));
-                providerRef.current?.sendTextHint('[SYSTEM: the user CONFIRMED the beautify — their strokes were replaced with your marks. Do not re-call the tool; do not acknowledge.]');
+                providerRef.current?.sendTextHint('[SYSTEM: the user CONFIRMED the beautify — their strokes were replaced with your marks, which are NOW ON THE BOARD as the delivered result. Do not re-call the tool; do NOT call wb_clear (it would erase the result); do not acknowledge.]');
                 setPendingBeautify(null);
               }}
               onCancel={() => {
