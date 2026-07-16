@@ -138,3 +138,10 @@ mid-answer afterward — the known Gemini link-drop pattern, logged, not a regre
   the witnessed text is unchanged, drops honestly otherwise (6ad3643). Follow-up logged:
   migrate ScriptProcessorNode → AudioWorkletNode (deprecation). Noise identified: _next
   font preloads are the Kausap app's, extension runtime.lastError is Chrome's.
+
+- 2026-07-16 (cont.): two more user-reported UI bugs, fixed in 5292422: (1) witness/DONE
+  cards overlapped the assistant caption + chips (two independent absolute stacks) — cards
+  now render through Omnibox's `above` slot in one flex column; (2) typed "this" markers
+  landed on the compose box — shell surfaces (Omnibox/MenuBar/WhiteboardPanel) only stopped
+  pointer-DOWN, so hover over them still moved the plane cursor; pointer-move now stopped
+  too (verified: marker lands on the document plane).
