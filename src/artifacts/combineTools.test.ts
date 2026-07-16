@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { validateCombineCall, sourceDetail, COMBINE_TOOL, READ_SOURCES_TOOL } from './combineTools';
+import { validateCombineCall, validSourceIds, sourceDetail, COMBINE_TOOL, READ_SOURCES_TOOL } from './combineTools';
 import { initialArtifactState, reduce, MAX_ARTIFACTS } from './artifactStore';
+import { serializeArtifacts } from './serialize';
 import { seedCorpus } from './seeds';
 
 const corpus = seedCorpus();
@@ -44,6 +45,42 @@ describe('combine validation (spec §4/§5/§7)', () => {
   });
   it('doc kind requires non-empty content', () => {
     expect(validateCombineCall({ sources: ['word', 'excel'], kind: 'doc', title: 'T', content: '' }, corpus, initialArtifactState(), now)).toHaveProperty('error');
+  });
+  it('a live-path cap rejection carries atCap + the event so the caller can dispatch it — the reducer counts it and [ARTIFACTS] surfaces the note (spec §7)', () => {
+    let arts = initialArtifactState();
+    for (let i = 0; i < MAX_ARTIFACTS; i++) arts = reduce(arts, { type: 'artifact.create', artifact: { kind: 'doc', title: `A${i}`, sources: ['word', 'excel'], content: 'x', createdAt: 1 } });
+    const r = validateCombineCall({ sources: ['word', 'excel'], kind: 'doc', title: 'T', content: 'x' }, corpus, arts, now);
+    expect(r).toHaveProperty('error');
+    if ('error' in r) {
+      expect(r.atCap).toBe(true);
+      expect(r.event?.type).toBe('artifact.create');
+      // The App dispatches the refused event on atCap: reducer refuses, counter increments, nothing evicted.
+      const after = reduce(arts, r.event!);
+      expect(after.artifacts).toHaveLength(MAX_ARTIFACTS);
+      expect(after.rejectedAtCap).toBe(arts.rejectedAtCap + 1);
+      expect(serializeArtifacts(after)).toContain(`1 creations were rejected at the ${MAX_ARTIFACTS}-artifact cap`);
+    }
+  });
+  it('non-cap validation failures carry NO atCap/event — nothing to dispatch', () => {
+    const r = validateCombineCall({ sources: ['word', 'excel'], kind: 'doc', title: 'T', content: '' }, corpus, initialArtifactState(), now);
+    if ('error' in r) {
+      expect(r.atCap).toBeUndefined();
+      expect(r.event).toBeUndefined();
+    } else {
+      expect.fail('expected an error result');
+    }
+  });
+});
+
+describe('validSourceIds — validity is DERIVED from corpus presence, never asserted (final review C1)', () => {
+  it('names only corpus-present programs plus live artifact ids', () => {
+    const partial = { word: seedCorpus().word, excel: seedCorpus().excel }; // powerpoint/photo never visited
+    const arts = reduce(initialArtifactState(), { type: 'artifact.create', artifact: { kind: 'doc', title: 'Prev', sources: ['word', 'excel'], content: 'p', createdAt: 1 } });
+    expect(validSourceIds(partial, arts)).toEqual(['word', 'excel', 'a1']);
+  });
+  it('agrees with what resolveSources accepts and what the rejection message must name', () => {
+    const partial = { word: seedCorpus().word };
+    expect(validSourceIds(partial, initialArtifactState())).toEqual(['word']);
   });
 });
 

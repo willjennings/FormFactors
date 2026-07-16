@@ -100,11 +100,11 @@ import { seedCorpus } from './artifacts/seeds';
 import { saveAndLoad } from './artifacts/corpus';
 import { serializeCorpus, serializeArtifacts } from './artifacts/serialize';
 import { initialArtifactState, reduce as artifactReduce } from './artifacts/artifactStore';
-import { COMBINE_TOOL, READ_SOURCES_TOOL, validateCombineCall, sourceDetail } from './artifacts/combineTools';
+import { COMBINE_TOOL, READ_SOURCES_TOOL, validateCombineCall, sourceDetail, validSourceIds } from './artifacts/combineTools';
 import { feedsSummary } from './artifacts/feeds';
 import { artifactEntities } from './artifacts/entities';
 import { ArtifactWindow } from './artifacts/ArtifactWindow';
-import { ARTIFACT_DEMO_ARGS, ARTIFACT_DEMO_EXCEL_SOURCE, ARTIFACT_DEMO_WIDGET_ARGS } from './artifacts/demo';
+import { ARTIFACT_DEMO_ARGS, ARTIFACT_DEMO_WIDGET_ARGS } from './artifacts/demo';
 import type { ArtifactEvent } from './artifacts/types';
 
 // --- Types ---
@@ -527,8 +527,11 @@ export default function App() {
   useEffect(() => { mockDocRef.current = mockDoc; }, [mockDoc]);
   // Combinatory artifacts (spec §3): the corpus holds every OTHER program's doc (the active
   // program's doc lives in mockDoc above); saveAndLoad moves docs between the two on program
-  // swap. corpusRef mirrors it for the tool-call closure, same pattern as mockDocRef.
-  const [corpus, setCorpus] = useState<Partial<Record<ProgramId, MockDoc>>>({});
+  // swap. It BOOTS with the full Meridian seed set — the corpus "ships with a seed set" (spec
+  // §3.1), so "take the report and the numbers" is expressible on the first turn with no
+  // program tour first. fullCorpus overrides the active entry with the live mockDoc wherever
+  // it's consumed. corpusRef mirrors it for the tool-call closure, same pattern as mockDocRef.
+  const [corpus, setCorpus] = useState<Partial<Record<ProgramId, MockDoc>>>(seedCorpus);
   const corpusRef = useRef(corpus);
   useEffect(() => { corpusRef.current = corpus; }, [corpus]);
   const [artifactState, artifactDispatch] = useReducer(artifactReduce, undefined, initialArtifactState);
@@ -1259,6 +1262,10 @@ export default function App() {
       // checked by SIMULATING the real reducer (never partial, never a silent eviction).
       const v = validateCombineCall(fc.args, { ...corpusRef.current, [activeProgram]: mockDocRef.current }, artifactStateRef.current, Date.now());
       if ('error' in v) {
+        // Cap rejections still dispatch the refused event: the reducer refuses it (nothing is
+        // evicted, state otherwise unchanged) and increments rejectedAtCap, so the [ARTIFACTS]
+        // cap note is reachable from the live path as spec §7 promises.
+        if (v.atCap && v.event) artifactDispatch(v.event);
         addLog('tool', `Tool Call: combine REJECTED — ${v.error}`);
         ack({ success: false, error: v.error });
       } else {
@@ -1275,10 +1282,13 @@ export default function App() {
       // The model must ask for full content before combining — the standing [CORPUS] hint is
       // gists only (spec §5). Unknown ids fail the WHOLE call (honest — no partial detail dump).
       const ids: string[] = Array.isArray(fc.args?.sources) ? fc.args.sources.map(String) : [];
-      const details = ids.map((id) => sourceDetail(id, { ...corpusRef.current, [activeProgram]: mockDocRef.current }, artifactStateRef.current));
+      const fullCorpus = { ...corpusRef.current, [activeProgram]: mockDocRef.current };
+      const details = ids.map((id) => sourceDetail(id, fullCorpus, artifactStateRef.current));
       if (details.some((d) => d === null)) {
         addLog('tool', `Tool Call: read_sources REJECTED — unknown source(s)`);
-        ack({ success: false, error: `Unknown source(s). Valid: word, excel, powerpoint, photo${artifactStateRef.current.artifacts.length ? ', ' + artifactStateRef.current.artifacts.map(a => a.id).join(', ') : ''}.` });
+        // Validity is DERIVED from the same corpus sourceDetail consulted — never a hardcoded
+        // list that could name an id that would fail (final review C1: never lie to the model).
+        ack({ success: false, error: `Unknown source(s). Valid: ${validSourceIds(fullCorpus, artifactStateRef.current).join(', ')}.` });
       } else {
         providerRef.current?.sendTextHint(`[CORPUS DETAIL: ${details.join(' ||| ')}. Author your synthesis from THIS content only. DO NOT acknowledge.]`);
         addLog('tool', `Tool Call: read_sources(${ids.join(', ')})`);
@@ -2943,10 +2953,9 @@ export default function App() {
     artifactsDemoScheduled.current = true;
     const timer = setTimeout(() => {
       artifactsDemoPlayed.current = true;
-      // Seed excel into the corpus as if the user had visited it earlier (the normal saveAndLoad
-      // path) — combine needs 2+ REAL sources, not just the active doc.
-      setCorpus((c) => { const next = { ...c, excel: ARTIFACT_DEMO_EXCEL_SOURCE }; corpusRef.current = next; return next; });
-      const demoCorpus = { ...corpusRef.current, excel: ARTIFACT_DEMO_EXCEL_SOURCE, [activeProgram]: mockDocRef.current };
+      // The corpus boots with the full seed set (spec §3.1), so the demo replays against the
+      // same corpus a real first turn would see — no hand-injected sources.
+      const demoCorpus = { ...corpusRef.current, [activeProgram]: mockDocRef.current };
       const v = validateCombineCall(ARTIFACT_DEMO_ARGS, demoCorpus, artifactStateRef.current, Date.now());
       if ('error' in v) {
         addLog('tool', `Tool Call: combine (demo) REJECTED — ${v.error}`);
@@ -2965,7 +2974,7 @@ export default function App() {
       // (closure under composition) — clock/stock always tick offline; weather may fail in CI
       // and renders "feed unavailable" without breaking anything else about the demo.
       setTimeout(() => {
-        const widgetCorpus = { ...corpusRef.current, excel: ARTIFACT_DEMO_EXCEL_SOURCE, [activeProgram]: mockDocRef.current };
+        const widgetCorpus = { ...corpusRef.current, [activeProgram]: mockDocRef.current };
         const vw = validateCombineCall(ARTIFACT_DEMO_WIDGET_ARGS, widgetCorpus, artifactStateRef.current, Date.now());
         if ('error' in vw) {
           addLog('tool', `Tool Call: combine (demo widget) REJECTED — ${vw.error}`);

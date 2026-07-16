@@ -1,12 +1,10 @@
 // ?artifacts=1 demo: two scripted combine calls (word + excel → a synthesized doc artifact,
-// then that doc + powerpoint → a widget artifact with live/simulated feeds), replayed through
+// then that doc + excel → a widget artifact with live/simulated feeds), replayed through
 // the REAL validateCombineCall + artifactStore — no model involved (spec §9, mirrors
-// sketch/demo.ts and whiteboard/demo.ts). The Meridian seed corpus is untouched; this demo
-// assumes excel is present as a source alongside whatever the active program's doc is.
-import { MERIDIAN, seedCorpus } from './seeds';
-
-/** The excel doc the demo needs present as a combine source (the app seeds it into corpus). */
-export const ARTIFACT_DEMO_EXCEL_SOURCE = seedCorpus().excel;
+// sketch/demo.ts and whiteboard/demo.ts). The corpus boots with the full Meridian seed set
+// (spec §3.1), so the demo needs no hand-injected sources — it runs against exactly the
+// corpus a real first turn would see.
+import { MERIDIAN } from './seeds';
 
 /** Tool-call args for the scripted combine — the same shape the live `combine` tool takes. */
 export const ARTIFACT_DEMO_ARGS = {
@@ -18,7 +16,7 @@ export const ARTIFACT_DEMO_ARGS = {
 
 /**
  * The M2 widget demo (spec §8/§10): combines the doc artifact from ARTIFACT_DEMO_ARGS (id 'a1'
- * — closure under composition, spec §5) with excel (already seeded into corpus for the doc demo)
+ * — closure under composition, spec §5) with excel (present in the boot seed corpus)
  * into a status-board widget. clock and stock are always driveable offline/in CI; weather is
  * included to show LIVE provenance but the demo's success never depends on its fetch succeeding
  * — a failed weather feed renders "feed unavailable" and nothing else about the demo breaks

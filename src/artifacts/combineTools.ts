@@ -31,12 +31,21 @@ export const READ_SOURCES_TOOL: VoiceTool = {
 
 const PROGRAM_IDS: ProgramId[] = ['word', 'excel', 'powerpoint', 'photo'];
 
+/**
+ * The ids that would actually resolve right now: corpus-present programs + live artifact ids.
+ * Every "valid sources" message must be DERIVED from this, never asserted from a hardcoded
+ * list — naming a source that would fail is a lie to the model (final review C1).
+ */
+export function validSourceIds(
+  corpus: Partial<Record<ProgramId, MockDoc>>, artifacts: ArtifactState,
+): string[] {
+  return [...PROGRAM_IDS.filter((p) => corpus[p]), ...artifacts.artifacts.map((a) => a.id)];
+}
+
 export function resolveSources(
   sources: string[], corpus: Partial<Record<ProgramId, MockDoc>>, artifacts: ArtifactState,
 ): string[] | { error: string } {
-  const validPrograms = PROGRAM_IDS.filter((p) => corpus[p]);
-  const validArtifacts = artifacts.artifacts.map((a) => a.id);
-  const valid = new Set<string>([...validPrograms, ...validArtifacts]);
+  const valid = new Set<string>(validSourceIds(corpus, artifacts));
   const unknown = sources.filter((s) => !valid.has(s));
   if (unknown.length) {
     return { error: `Unknown source(s): ${unknown.join(', ')}. Valid sources: ${[...valid].join(', ')}.` };
@@ -56,7 +65,8 @@ export function sourceDetail(
 
 export function validateCombineCall(
   args: any, corpus: Partial<Record<ProgramId, MockDoc>>, artifacts: ArtifactState, now: number,
-): { event: ArtifactEvent; provenance: string } | { error: string } {
+): { event: ArtifactEvent; provenance: string }
+ | { error: string; atCap?: true; event?: ArtifactEvent } {
   const sources: string[] = Array.isArray(args?.sources) ? [...new Set<string>(args.sources.map(String))] : [];
   if (sources.length < 2) return { error: 'combine needs at least 2 sources — for a single target use the ordinary editing/creation verbs instead.' };
   const resolved = resolveSources(sources, corpus, artifacts);
@@ -77,10 +87,13 @@ export function validateCombineCall(
   }
 
   const event: ArtifactEvent = { type: 'artifact.create', artifact };
-  // Capacity by SIMULATION through the real reducer (spec §7).
+  // Capacity by SIMULATION through the real reducer (spec §7). The rejection carries atCap +
+  // the refused event so the caller can still dispatch it: the reducer refuses (nothing is
+  // evicted) and increments rejectedAtCap, which [ARTIFACTS] surfaces — the counter the spec
+  // promises must be reachable from the live path, not only from a caller bypassing validation.
   const simulated = artifactReduce(artifacts, event);
   if (simulated.rejectedAtCap > artifacts.rejectedAtCap) {
-    return { error: `The desk already holds ${MAX_ARTIFACTS} artifacts — ask the user to close one first. Nothing may be evicted without their say.` };
+    return { error: `The desk already holds ${MAX_ARTIFACTS} artifacts — ask the user to close one first. Nothing may be evicted without their say.`, atCap: true, event };
   }
   return { event, provenance: `from: ${sources.join(' + ')}` };
 }
