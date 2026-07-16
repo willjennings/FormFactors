@@ -51,7 +51,14 @@ have NEVER been observed live (typed input made the model answer instead of ask)
 
 Pass: ≥1 spoken gap question; read-back → confirm settles a row; glance answers all four.
 
-Result: ☐
+Result: 〜 2026-07-16 — FINDING: continuous rambling produces ZERO fills (transcriptions
+flow — "listening" stays green — but Gemini's VAD never concludes a turn, so the scribe
+never acts). Pause-punctuated speech works: user's retry filled Location ("C10, C3" with
+the honest ✓? marker) + Drawing ref (S-301) by voice. Typed path fully healthy: one line
+→ 4 fills + the FIRST-EVER observed ask_gap (Needed-by row: asking… "When is it needed
+by?"). FOLLOW-UP: expose Gemini VAD tuning (realtimeInputConfig silenceDurationMs) in
+createGeminiProvider so ramble turns end on shorter pauses; consider a prompt line about
+extracting at every pause. Read-back/confirm not yet observed by voice.
 
 ## Test 3 — Earcons ~2 min
 
