@@ -97,6 +97,10 @@ import { buildInstructions } from './prompt/instructions';
 import { withTrafficCount } from './shell/traffic';
 import type { Traffic } from './shell/traffic';
 import { idleExceeded } from './shell/idle';
+import { seedCorpus } from './artifacts/seeds';
+import { saveAndLoad } from './artifacts/corpus';
+import { serializeCorpus, serializeArtifacts } from './artifacts/serialize';
+import { initialArtifactState, reduce as artifactReduce } from './artifacts/artifactStore';
 
 // --- Types ---
 interface Marker {
@@ -511,10 +515,19 @@ export default function App() {
   useEffect(() => { actRequestRef.current = actRequest; }, [actRequest]);
   // Action verbs (save/edit/format/insert/photo) mutate this mock document; a pending action
   // is witness-rendered before it commits — the same grammar as `share`.
-  const [mockDoc, setMockDoc] = useState<MockDoc>(() => initialMockDoc(DEFAULT_PROGRAM));
+  const [mockDoc, setMockDoc] = useState<MockDoc>(() => seedCorpus()[DEFAULT_PROGRAM]);
   // Live mirror so the tool-call closure can read the current doc without stale-closure risk.
   const mockDocRef = useRef(mockDoc);
   useEffect(() => { mockDocRef.current = mockDoc; }, [mockDoc]);
+  // Combinatory artifacts (spec §3): the corpus holds every OTHER program's doc (the active
+  // program's doc lives in mockDoc above); saveAndLoad moves docs between the two on program
+  // swap. corpusRef mirrors it for the tool-call closure, same pattern as mockDocRef.
+  const [corpus, setCorpus] = useState<Partial<Record<ProgramId, MockDoc>>>({});
+  const corpusRef = useRef(corpus);
+  useEffect(() => { corpusRef.current = corpus; }, [corpus]);
+  const [artifactState, artifactDispatch] = useReducer(artifactReduce, undefined, initialArtifactState);
+  const artifactStateRef = useRef(artifactState);
+  useEffect(() => { artifactStateRef.current = artifactState; }, [artifactState]);
   // Undo stack: pre-commit document snapshots (mementos). applyAction is pure, so undo = restore.
   const [undoStack, setUndoStack] = useState<{ doc: MockDoc; label: string }[]>([]);
   // G9: dedup duplicate tool calls. G7: a layout version stamped onto deixis hints so the
@@ -616,6 +629,8 @@ export default function App() {
   useEffect(() => { whiteboardModeRef.current = whiteboardMode; }, [whiteboardMode]);
   const wbHintGateRef = useRef(makeChangeGate());
   const sketchHintGateRef = useRef(makeChangeGate());
+  const corpusHintGateRef = useRef(makeChangeGate());
+  const artifactsHintGateRef = useRef(makeChangeGate());
   const [sketch, sketchDispatch] = useReducer(sketchReduce, undefined, initialSketchState);
   const [boardOpen, setBoardOpen] = useState(sketchDemoMode);
   // Witnessed wb_beautify (Task 5): pending proposal awaiting the card's yes/no, and a
@@ -1968,6 +1983,8 @@ export default function App() {
             goalHintGateRef.current = makeChangeGate();
             wbHintGateRef.current = makeChangeGate();
             sketchHintGateRef.current = makeChangeGate();
+            corpusHintGateRef.current = makeChangeGate();
+            artifactsHintGateRef.current = makeChangeGate();
             // TESTBED: snapshot the config + device so this session's metrics are attributable.
             telemetry.start({
               backend: voiceBackendRef.current,
@@ -2807,6 +2824,28 @@ export default function App() {
     }
   }, [isLive, sketch, whiteboardMode]);
 
+  // Combinatory artifacts (spec §3): the FULL corpus for hints/validation includes the ACTIVE
+  // doc (which lives in mockDoc, not corpus, until the next program swap saves it in).
+  const fullCorpus = React.useMemo(() => ({ ...corpus, [activeProgram]: mockDoc }), [corpus, activeProgram, mockDoc]);
+
+  // [CORPUS] hint: the model's standing view of what's combinable. Deduped via the change-gate.
+  useEffect(() => {
+    if (!isLive) return;
+    const hint = serializeCorpus(fullCorpus);
+    if (corpusHintGateRef.current(hint) && hint) {
+      providerRef.current?.sendTextHint(hint);
+    }
+  }, [isLive, fullCorpus]);
+
+  // [ARTIFACTS] hint: synthesized artifacts the model made, valid as further combine sources.
+  useEffect(() => {
+    if (!isLive) return;
+    const hint = serializeArtifacts(artifactState);
+    if (artifactsHintGateRef.current(hint) && hint) {
+      providerRef.current?.sendTextHint(hint);
+    }
+  }, [isLive, artifactState]);
+
   // Whiteboard demo driver: StrictMode-safe, fires once, re-arms if nothing fired.
   const wbDemoScheduled = useRef(false);
   const wbDemoPlayed = useRef(false);
@@ -2869,9 +2908,13 @@ export default function App() {
     setPendingAction(null);
     setPendingBeautify(null); // the post-swap session never made this proposal — drop it, don't let a confirm hint a session about a card it didn't propose
     railDispatch({ type: 'rail.dismiss' }); // answers about the OLD program are stale context in the new one (human smoke: Excel's "Cell A3" card survived into PowerPoint)
-    const fresh = initialMockDoc(id);
-    setMockDoc(fresh);
-    mockDocRef.current = fresh;
+    // Corpus persistence (spec §3): the outgoing doc is SAVED, the incoming restored (or
+    // seeded on first visit) — cross-program combination needs all docs to exist.
+    const swapped = saveAndLoad(corpusRef.current, activeProgram, mockDocRef.current, id);
+    setCorpus(swapped.corpus);
+    corpusRef.current = swapped.corpus;
+    setMockDoc(swapped.doc);
+    mockDocRef.current = swapped.doc;
     setUndoStack([]);
     referents.clear();
     callDeduperRef.current.reset();

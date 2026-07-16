@@ -66,6 +66,11 @@ describe('buildInstructions — honest desktop assistant', () => {
       expect(s).toMatch(/cannot read (drawn )?words/i);
       expect(s).toMatch(/never (clear|erase|delete).*(sketch|strokes)/i);
       expect(s).toContain('wb_beautify');
+      // Combinatory artifacts: combine ≥2 sources, read before combining, provenance honesty.
+      expect(s).toContain('combine');
+      expect(s).toContain('read_sources');
+      expect(s).toMatch(/two or more sources|at least 2 sources/i);
+      expect(s).toMatch(/\[CORPUS/);
     }
   });
 });
