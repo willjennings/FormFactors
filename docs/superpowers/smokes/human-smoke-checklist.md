@@ -74,7 +74,7 @@ extracting at every pause. Read-back/confirm not yet observed by voice.
 
 Pass: cues fire at the right moments, once each, distinguishable.
 
-Result: ☐
+Result: ✅ 2026-07-16 — user: "it bolded the document and the earcon was fine" (context cue fired with the action; confident mode commits directly). Stall-cue repeat check not explicitly run — acceptable.
 
 ## Test 4 — Sketch by voice + beautify feel ~4 min
 
