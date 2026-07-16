@@ -1,0 +1,26 @@
+// The model's standing view of the combinable world: gists only (full text via read_sources).
+import type { MockDoc, ProgramId } from '../scenarios';
+import type { ArtifactState } from './types';
+import { MAX_ARTIFACTS } from './artifactStore';
+
+function gist(id: string, doc: MockDoc): string {
+  switch (doc.kind) {
+    case 'word': return `${id}: "${doc.text.slice(0, 40)}${doc.text.length > 40 ? '…' : ''}" (${doc.text.split(/\s+/).length} words)`;
+    case 'excel': return `${id}: ${Object.keys(doc.cells).length} filled cells`;
+    case 'powerpoint': return `${id}: ${doc.slides.length} slides ("${doc.slides[0]}")`;
+    case 'photo': return `${id}: photo${doc.caption ? ` — caption "${doc.caption}"` : ''}`;
+  }
+}
+
+export function serializeCorpus(corpus: Partial<Record<ProgramId, MockDoc>>): string | null {
+  const entries = (Object.entries(corpus) as [ProgramId, MockDoc][]).filter(([, d]) => d);
+  if (!entries.length) return null;
+  return `[CORPUS: sources available to combine — ${entries.map(([id, d]) => gist(id, d)).join(' · ')}. Call read_sources for full content before combining. DO NOT acknowledge this update.]`;
+}
+
+export function serializeArtifacts(state: ArtifactState): string | null {
+  if (!state.artifacts.length && state.rejectedAtCap === 0) return null;
+  const items = state.artifacts.map((a) => `${a.id} "${a.title}" (${a.kind}, from: ${a.sources.join(' + ')})`);
+  const capNote = state.rejectedAtCap > 0 ? ` ${state.rejectedAtCap} creations were rejected at the ${MAX_ARTIFACTS}-artifact cap — the user must close one first.` : '';
+  return `[ARTIFACTS: ${items.join('; ') || 'none'}.${capNote} Artifacts are valid combine sources. DO NOT acknowledge this update.]`;
+}
