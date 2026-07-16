@@ -22,7 +22,9 @@ describe('serializeSketch', () => {
     st = reduce(st, { type: 'sketch.strokeAdd', points: zig() });
     st = reduce(st, { type: 'sketch.strokeAdd', points: zig().map((p) => ({ x: p.x, y: p.y + 200 })) });
     const s = serializeSketch(st)!;
-    expect(s).toMatch(/^\[SKETCH\]/);
+    expect(s).toMatch(/^\[SKETCH: /);
+    expect(s.endsWith(']')).toBe(true);
+    expect(s.slice(1, -1)).not.toContain(']');
     expect(s).toContain('a box at (300,350) ~200×100 (s1)');
     expect(s).toContain('2 scribbles (s2, s3)');
     expect(s).toContain('You see measured geometry only — you cannot read drawn words.');

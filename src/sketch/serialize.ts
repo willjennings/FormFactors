@@ -28,5 +28,5 @@ export function serializeSketch(state: SketchState): string | null {
   if (scribbles.length > 1) parts.push(`${scribbles.length} scribbles (${scribbles.map((s) => s.id).join(', ')})`);
   const capNote = state.droppedAtCap > 0
     ? ` ${state.droppedAtCap} oldest strokes were dropped at the ${MAX_STROKES}-stroke cap.` : '';
-  return `[SKETCH] The user has drawn on the whiteboard: ${parts.join('; ')}.${capNote} You see measured geometry only — you cannot read drawn words. DO NOT acknowledge this update.]`;
+  return `[SKETCH: The user has drawn on the whiteboard: ${parts.join('; ')}.${capNote} You see measured geometry only — you cannot read drawn words. DO NOT acknowledge this update.]`;
 }
