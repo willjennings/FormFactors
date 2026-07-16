@@ -43,6 +43,19 @@ export function createGeminiProvider(apiKey: string, onSessionReady?: (session: 
   let inputCtx: AudioContext | null = null;
   let micStream: MediaStream | null = null;
   let processor: ScriptProcessorNode | null = null;
+  let ended = false;
+
+  // Release the mic capture pipeline. MUST run on SERVER-initiated closes too (live smoke
+  // 2026-07-16 console: after the server dropped the session, the ScriptProcessorNode kept
+  // pumping ~4x/s into the dead socket — endless "WebSocket is already in CLOSING or CLOSED
+  // state" spam AND a hot microphone the user never turned off).
+  function teardownAudio() {
+    ended = true;
+    try { processor?.disconnect(); } catch {}
+    try { inputCtx?.close(); } catch {}
+    try { micStream?.getTracks().forEach(t => t.stop()); } catch {}
+    processor = null; inputCtx = null; micStream = null;
+  }
 
   return {
     async connect(config: VoiceSessionConfig, cb: VoiceCallbacks) {
@@ -60,11 +73,12 @@ export function createGeminiProvider(apiKey: string, onSessionReady?: (session: 
             const silentGain = inputCtx.createGain();
             silentGain.gain.value = 0;
             processor.onaudioprocess = (e) => {
+              if (ended) return; // belt-and-braces: disconnect() can race one last tick
               const inputData = e.inputBuffer.getChannelData(0);
               const int16 = new Int16Array(inputData.length);
               for (let i = 0; i < inputData.length; i++) int16[i] = inputData[i] * 32768;
               const binary = String.fromCharCode(...new Uint8Array(int16.buffer));
-              sessionPromise?.then(s => s.sendRealtimeInput({ audio: { data: btoa(binary), mimeType: 'audio/pcm;rate=16000' } }));
+              sessionPromise?.then(s => { if (!ended) s.sendRealtimeInput({ audio: { data: btoa(binary), mimeType: 'audio/pcm;rate=16000' } }); });
             };
             source.connect(processor);
             processor.connect(silentGain);
@@ -89,7 +103,7 @@ export function createGeminiProvider(apiKey: string, onSessionReady?: (session: 
               cb.onInputTranscript(msg.serverContent.inputTranscription.text, !!msg.serverContent?.turnComplete);
             }
           },
-          onclose: () => cb.onClose(),
+          onclose: () => { teardownAudio(); cb.onClose(); },
           onerror: (e: any) => cb.onError(e?.message ?? String(e)),
         },
         config: {
@@ -112,9 +126,7 @@ export function createGeminiProvider(apiKey: string, onSessionReady?: (session: 
       session?.sendToolResponse({ functionResponses: [{ id, name, response: result }] });
     },
     close() {
-      try { processor?.disconnect(); } catch {}
-      try { inputCtx?.close(); } catch {}
-      try { micStream?.getTracks().forEach(t => t.stop()); } catch {}
+      teardownAudio();
       try { session?.close(); } catch {}
       session = null;
       onSessionReady?.(null);
