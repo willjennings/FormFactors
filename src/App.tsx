@@ -100,6 +100,11 @@ import { seedCorpus } from './artifacts/seeds';
 import { saveAndLoad } from './artifacts/corpus';
 import { serializeCorpus, serializeArtifacts } from './artifacts/serialize';
 import { initialArtifactState, reduce as artifactReduce } from './artifacts/artifactStore';
+import { COMBINE_TOOL, READ_SOURCES_TOOL, validateCombineCall, sourceDetail } from './artifacts/combineTools';
+import { artifactEntities } from './artifacts/entities';
+import { ArtifactWindow } from './artifacts/ArtifactWindow';
+import { ARTIFACT_DEMO_ARGS, ARTIFACT_DEMO_EXCEL_SOURCE } from './artifacts/demo';
+import type { ArtifactEvent } from './artifacts/types';
 
 // --- Types ---
 interface Marker {
@@ -327,7 +332,7 @@ export default function App() {
   // Tools offered to the voice model = the kept verbs (explain, share) + the action verbs this
   // program exposes. Read at connect time; program swap reconnects (see handleProgramChange).
   const voiceTools = React.useMemo(
-    () => [...VOICE_TOOLS, ...buildActionTools(activeProgram), ...ANNOTATE_TOOLS, ...(activeProgram === 'word' ? [REVISE_TOOL] : []), ACT_TOOL, ...GOAL_TOOLS, ...WB_TOOLS, BEAUTIFY_TOOL, ...TEACH_TOOLS],
+    () => [...VOICE_TOOLS, ...buildActionTools(activeProgram), ...ANNOTATE_TOOLS, ...(activeProgram === 'word' ? [REVISE_TOOL] : []), ACT_TOOL, ...GOAL_TOOLS, ...WB_TOOLS, BEAUTIFY_TOOL, ...TEACH_TOOLS, COMBINE_TOOL, READ_SOURCES_TOOL],
     [activeProgram],
   );
   const CONFUSABLE_PAIRS = React.useMemo(() => {
@@ -433,6 +438,7 @@ export default function App() {
   const railMode = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('rail');
   const whiteboardDemoMode = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('whiteboard');
   const sketchDemoMode = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('sketch');
+  const artifactsDemoMode = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('artifacts');
   const hoveredIdRef = useRef<EntityId | null>(null);
   // Throttle state for proactive hover grounding (non-Gemini backends).
   const lastHoverHintRef = useRef<string | null>(null);
@@ -527,6 +533,13 @@ export default function App() {
   const [artifactState, artifactDispatch] = useReducer(artifactReduce, undefined, initialArtifactState);
   const artifactStateRef = useRef(artifactState);
   useEffect(() => { artifactStateRef.current = artifactState; }, [artifactState]);
+  // Measured bboxes of mounted ArtifactWindow content regions, keyed by `artifact-${id}` —
+  // updateLayout fills this in (below) so artifactEntities() can produce real, pointable bboxes.
+  const artifactLayoutRef = useRef<Record<string, [number, number, number, number]>>({});
+  // Every buildEntities( call site composes through here — kept in one place deliberately so
+  // artifact entities (pointable windows) never drift out of sync with the program's own scene.
+  const composeEntities = (built: SceneEntity[]): SceneEntity[] =>
+    [...built, ...artifactEntities(artifactStateRef.current, artifactLayoutRef.current)];
   // Undo stack: pre-commit document snapshots (mementos). applyAction is pure, so undo = restore.
   const [undoStack, setUndoStack] = useState<{ doc: MockDoc; label: string }[]>([]);
   // G9: dedup duplicate tool calls. G7: a layout version stamped onto deixis hints so the
@@ -775,12 +788,25 @@ export default function App() {
       xmax: ((r.right - mainRect.left) / mainRect.width) * 1000,
     });
 
+    // Combinatory artifacts: ArtifactWindow floats independently of the program window, so it's
+    // measured unconditionally (even with the program window closed) — composeEntities() folds
+    // these onto whatever buildEntities() produces below, both branches.
+    const artifactEls = Array.from(main.querySelectorAll<HTMLElement>('.artifact-window [data-entity-id]'));
+    const artifactLayout: Record<string, [number, number, number, number]> = {};
+    for (const el of artifactEls) {
+      const htmlEl = el as HTMLElement;
+      const r = htmlEl.getBoundingClientRect();
+      const b = toBBox(r);
+      artifactLayout[htmlEl.dataset.entityId!] = [b.ymin, b.xmin, b.ymax, b.xmax];
+    }
+    artifactLayoutRef.current = artifactLayout;
+
     if (!winEl) {
       // Window is closed — zero-bbox degradation so entities/overlays render nothing honestly.
       setMainSize({ width: mainRect.width, height: mainRect.height });
       const zeroWindow = { ymin: 0, xmin: 0, ymax: 0, xmax: 0 };
       setLayoutBounds({ window: zeroWindow, photoItems: [], surface: undefined });
-      const es = buildEntities(program, mockDocRef.current, perceivedLabelsRef.current, { items: [] });
+      const es = composeEntities(buildEntities(program, mockDocRef.current, perceivedLabelsRef.current, { items: [] }));
       setEntities(es);
       entitiesRef.current = es;
       return;
@@ -804,9 +830,9 @@ export default function App() {
     });
 
     // Update the scene entities for Gemini (single source of truth).
-    const es = buildEntities(program, mockDocRef.current, perceivedLabelsRef.current, {
+    const es = composeEntities(buildEntities(program, mockDocRef.current, perceivedLabelsRef.current, {
       items: photoItems.map(it => ({ id: it.id, bbox: it.bbox })),
-    });
+    }));
     setEntities(es);
     entitiesRef.current = es;
 
@@ -1222,6 +1248,32 @@ export default function App() {
         emitFeedback({ outcome: 'committed', verbClass: 'share', label: `Shared with ${recipient}` });
       }
       ack({ success: true, sent: confirmed });
+    } else if (fc.name === 'combine') {
+      // Combinatory artifacts (spec §4): create-only — validation is all-or-error, capacity is
+      // checked by SIMULATING the real reducer (never partial, never a silent eviction).
+      const v = validateCombineCall(fc.args, { ...corpusRef.current, [activeProgram]: mockDocRef.current }, artifactStateRef.current, Date.now());
+      if ('error' in v) {
+        addLog('tool', `Tool Call: combine REJECTED — ${v.error}`);
+        ack({ success: false, error: v.error });
+      } else {
+        artifactDispatch(v.event);
+        addLog('tool', `Tool Call: combine — "${(v.event as Extract<ArtifactEvent, { type: 'artifact.create' }>).artifact.title}" ${v.provenance}`);
+        emitFeedback({ outcome: 'committed', verbClass: 'create', label: `Created: ${(v.event as Extract<ArtifactEvent, { type: 'artifact.create' }>).artifact.title}` });
+        ack({ success: true, provenance: v.provenance, note: 'The artifact window is on screen showing its sources.' });
+      }
+    } else if (fc.name === 'read_sources') {
+      // The model must ask for full content before combining — the standing [CORPUS] hint is
+      // gists only (spec §5). Unknown ids fail the WHOLE call (honest — no partial detail dump).
+      const ids: string[] = Array.isArray(fc.args?.sources) ? fc.args.sources.map(String) : [];
+      const details = ids.map((id) => sourceDetail(id, { ...corpusRef.current, [activeProgram]: mockDocRef.current }, artifactStateRef.current));
+      if (details.some((d) => d === null)) {
+        addLog('tool', `Tool Call: read_sources REJECTED — unknown source(s)`);
+        ack({ success: false, error: `Unknown source(s). Valid: word, excel, powerpoint, photo${artifactStateRef.current.artifacts.length ? ', ' + artifactStateRef.current.artifacts.map(a => a.id).join(', ') : ''}.` });
+      } else {
+        providerRef.current?.sendTextHint(`[CORPUS DETAIL: ${details.join(' ||| ')}. Author your synthesis from THIS content only. DO NOT acknowledge.]`);
+        addLog('tool', `Tool Call: read_sources(${ids.join(', ')})`);
+        ack({ success: true, note: 'Full content sent as a [CORPUS DETAIL] update.' });
+      }
     } else if (ACTION_VERB_NAMES.includes(fc.name)) {
       // ACTION VERBS (save/edit/format/insert/photo). The Policy layer (DIAL A: autonomy ×
       // verb class) decides commit-vs-witness; the Feedback layer (DIAL B) signals the
@@ -2864,6 +2916,36 @@ export default function App() {
     strokes.forEach((points, i) => setTimeout(() => sketchDispatch({ type: 'sketch.strokeAdd', points }), 600 + i * 900));
   }, []);
 
+  // Combinatory artifacts demo driver ?artifacts=1: replays a combine call (word+excel → doc)
+  // through the REAL validateCombineCall + artifactStore — no model involved (spec §9).
+  // StrictMode-safe: mirrors the whiteboard demo's scheduled/played-ref pattern (`played` is
+  // set when the dispatch FIRES, not when scheduled; cleanup re-arms only if nothing fired yet).
+  const artifactsDemoScheduled = useRef(false);
+  const artifactsDemoPlayed = useRef(false);
+  useEffect(() => {
+    if (!artifactsDemoMode || artifactsDemoScheduled.current) return;
+    artifactsDemoScheduled.current = true;
+    const timer = setTimeout(() => {
+      artifactsDemoPlayed.current = true;
+      // Seed excel into the corpus as if the user had visited it earlier (the normal saveAndLoad
+      // path) — combine needs 2+ REAL sources, not just the active doc.
+      setCorpus((c) => { const next = { ...c, excel: ARTIFACT_DEMO_EXCEL_SOURCE }; corpusRef.current = next; return next; });
+      const demoCorpus = { ...corpusRef.current, excel: ARTIFACT_DEMO_EXCEL_SOURCE, [activeProgram]: mockDocRef.current };
+      const v = validateCombineCall(ARTIFACT_DEMO_ARGS, demoCorpus, artifactStateRef.current, Date.now());
+      if ('error' in v) {
+        addLog('tool', `Tool Call: combine (demo) REJECTED — ${v.error}`);
+        return;
+      }
+      artifactDispatch(v.event);
+      const created = (v.event as Extract<ArtifactEvent, { type: 'artifact.create' }>).artifact;
+      addLog('tool', `Tool Call: combine (demo) — "${created.title}" ${v.provenance}`);
+      emitFeedback({ outcome: 'committed', verbClass: 'create', label: `Created: ${created.title}` });
+      const hint = serializeArtifacts(artifactReduce(artifactStateRef.current, v.event));
+      if (hint) addLog('info', hint); // the [ARTIFACTS] hint the model would receive next turn
+    }, 900);
+    return () => { clearTimeout(timer); if (!artifactsDemoPlayed.current) artifactsDemoScheduled.current = false; };
+  }, [artifactsDemoMode]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // C2b Part A: keep wordBoxesRef in sync with the Word textarea's live layout. Cleared for
   // non-word programs so stale word boxes never leak. Fail-soft: measureWords returns [] on error.
   useEffect(() => {
@@ -2926,7 +3008,18 @@ export default function App() {
 
   // Undo the most recent committed document mutation (restore the memento).
   const handleUndo = () => {
-    if (undoStack.length === 0) return;
+    if (undoStack.length === 0) {
+      // Combinatory artifacts have no doc-memento (create-only, no agent close path) — the
+      // simplest honest ⌘Z form: with nothing else to undo, it closes the newest artifact.
+      // This is a USER action (the × path), never something a tool call can trigger.
+      const artifacts = artifactStateRef.current.artifacts;
+      if (artifacts.length === 0) return;
+      const newest = artifacts[artifacts.length - 1];
+      artifactDispatch({ type: 'artifact.close', id: newest.id });
+      telemetry.correction();
+      emitFeedback({ outcome: 'undo', label: `Closed ${newest.title}` });
+      return;
+    }
     const last = undoStack[undoStack.length - 1];
     setMockDoc(last.doc);
     mockDocRef.current = last.doc;
@@ -2939,7 +3032,7 @@ export default function App() {
   const handleReset = () => {
     setPersistentPaths([]);
     setPointerPath([]);
-    const baseEntities = buildEntities(program, mockDocRef.current, perceivedLabelsRef.current, null);
+    const baseEntities = composeEntities(buildEntities(program, mockDocRef.current, perceivedLabelsRef.current, null));
     setEntities(baseEntities);
     entitiesRef.current = baseEntities;
     setShareRequest(null);
@@ -3048,6 +3141,11 @@ export default function App() {
               demoCaption={sketchDemoMode ? serializeSketch(sketch) : null}
             />
           )}
+          {/* Combinatory artifacts (spec §3/§7): synthesized windows on the desktop plane, one
+              per artifact — create-only, the × below is the sole close path. */}
+          {artifactState.artifacts.map((a, i) => (
+            <ArtifactWindow key={a.id} artifact={a} index={i} onClose={() => artifactDispatch({ type: 'artifact.close', id: a.id })} />
+          ))}
           {whiteboardMode === 'board' && pendingBeautify && (
             <BeautifyCard
               summary={pendingBeautify.summary}

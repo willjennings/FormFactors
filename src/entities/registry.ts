@@ -7,7 +7,7 @@ import { SUB_ENTITY_DERIVERS } from './subEntities';
 
 /** Branded so tsc flags any raw title string flowing into an id slot during the rekey. */
 export type EntityId = string & { __brand: 'EntityId' };
-const asId = (s: string): EntityId => s as EntityId;
+export const asId = (s: string): EntityId => s as EntityId;
 
 export interface SceneEntity {
   id: EntityId;
@@ -20,7 +20,7 @@ export interface SceneEntity {
   sub?: boolean;                              // true for sub-elements (cells, slides, etc.)
 }
 
-const normText = (s: string): string =>
+export const normText = (s: string): string =>
   s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
 
 type LayoutBox = { ymin: number; xmin: number; ymax: number; xmax: number };
