@@ -58,6 +58,28 @@ program reads/writes its entry; swap no longer re-initializes an entry that exis
 numbers (4×6 grid) · ppt: 1 slide") WITHOUT full content — full text flows to the model only in
 the combine flow (§5), keeping the standing token cost flat.
 
+### 3.1 The seed corpus — ground truth for judging synthesis liberties
+
+The current mock documents are one-liners; synthesis quality over them is unjudgeable. The
+corpus ships with a SEED SET that tells one coherent fictional story — "Meridian Structural,
+Q3 2026" — with facts deliberately cross-referenced between programs so liberties are
+detectable against ground truth:
+
+- **Word** — the Q3 narrative report: several short paragraphs citing specific figures
+  (revenue, two named projects, a risk note) that MUST match the Excel numbers.
+- **Excel** — the Q3 numbers behind the report, within the existing 4×6 pointable grid:
+  a header row + rows for revenue, costs, and the two named projects.
+- **PowerPoint** — a 3-slide board deck: title slide, highlights slide (subset of the same
+  figures), outlook slide (one claim NOT in the other docs — a planted unique fact).
+- **Photo** — the site photo with a caption/metadata line ("Riverside tower — steel topping
+  out, Sept 2026") that names one of the projects.
+
+The **liberty audit** this enables: every claim in a synthesized artifact should trace to a
+seed fact; a number that appears in no seed, a contradiction between merged sources, or a
+confident claim sourced from the photo's pixels (which the model cannot read — only the
+caption) is a detected liberty. A pure test asserts the seeds' cross-references actually
+hold (the report's figures equal the spreadsheet's), so the ground truth itself can't drift.
+
 ## 4. The source-reference grammar
 
 A source is any of:
@@ -157,13 +179,17 @@ for tests.
 - **Scripted demo (`?artifacts=1`, no key):** replays a combine (word+excel → summary doc) and
   an M2 widget with ticking clock + simulated stock through the real store; footer shows the
   exact `[ARTIFACTS]` hint.
+- **Seed integrity (vitest):** the cross-referenced facts hold (report figures == spreadsheet
+  figures; deck highlights ⊂ report; photo caption names a seeded project).
 - **Live smoke (owed):** point at two things → "make a summary" → window appears with
   provenance; "take that summary and the photo, make a slide-style widget with the weather" →
-  closure + feeds; cap rejection at 6; close is user-only.
+  closure + feeds; cap rejection at 6; close is user-only. **Liberty audit**: read the
+  synthesized artifact against the seed facts — flag invented numbers, contradictions, and
+  photo-content claims beyond the caption.
 
 ## 11. Build order (informs the plan)
 
-1. Corpus persistence (`Record<ProgramId, MockDoc>` + `[CORPUS]` gists) — foundation, testable.
+1. Corpus persistence (`Record<ProgramId, MockDoc>` + `[CORPUS]` gists) + the Meridian seed set with its cross-reference integrity test — foundation, testable.
 2. `types` + `artifactStore` (TDD — cap-reject semantics first).
 3. `combineTools` (`COMBINE_TOOL`, `read_sources`, `validateCombineCall`) + `serialize` (TDD).
 4. `ArtifactWindow` + entity registration + App wiring + `?artifacts=1` demo (M1 complete).
