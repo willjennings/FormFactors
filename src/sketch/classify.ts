@@ -49,10 +49,10 @@ function straightEnough(points: XY[]): boolean {
 }
 
 export function classify(points: XY[]): Classified {
+  if (!points.length) return { kind: 'scribble', bbox: [0, 0, 0, 0] };
   const bbox = bboxOf(points);
-  if (points.length < MIN_POINTS) return { kind: 'scribble', bbox };
   const len = pathLength(points);
-  if (len === 0) return { kind: 'scribble', bbox };
+  if (points.length < MIN_POINTS || len < MIN_PATH_LEN) return { kind: 'scribble', bbox };
   const first = points[0], last = points[points.length - 1];
 
   // 1. Closed → box vs ellipse vs scribble by perimeter fit (spec §4.2).

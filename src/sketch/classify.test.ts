@@ -61,4 +61,13 @@ describe('classify — five kinds, scribble is the honest default', () => {
     const dup = Array.from({ length: 10 }, () => ({ x: 400, y: 400 }));
     expect(classify(dup).kind).toBe('scribble');
   });
+  it('a tremor stroke (tiny path length) is a scribble, never a confident shape', () => {
+    const tiny = [ {x:400,y:400},{x:401,y:400},{x:401,y:400.01},{x:400,y:400.01},{x:400,y:400} ];
+    expect(classify(tiny).kind).toBe('scribble');
+  });
+  it('empty input yields a finite zero bbox, not Infinity', () => {
+    const c = classify([]);
+    expect(c.kind).toBe('scribble');
+    expect(c.bbox).toEqual([0, 0, 0, 0]);
+  });
 });
