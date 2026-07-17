@@ -43,11 +43,20 @@ describe('rough ink — deterministic hand-drawn paths (spec §3)', () => {
     const [lx, ly] = [ns[ns.length - 2], ns[ns.length - 1]];
     expect(Math.hypot(lx - fx, ly - fy)).toBeLessThan(1.5);
   });
+  it('ellipse closure is organic, not byte-exact (hand-drawn, not snapped)', () => {
+    const d = roughEllipse(50, 50, 20, 10, seedFrom('e1'));
+    const ns = nums(d);
+    const [fx, fy] = [ns[0], ns[1]];
+    const [lx, ly] = [ns[ns.length - 2], ns[ns.length - 1]];
+    expect(Math.hypot(lx - fx, ly - fy)).toBeGreaterThan(0);
+  });
   it('arc keeps its endpoints within jitter+overshoot of the given ones', () => {
     const d = roughArc(10, 30, 35, 10, 60, 30, seedFrom('a1'));
     const ns = nums(d);
     expect(Math.hypot(ns[0] - 10, ns[1] - 30)).toBeLessThan(BUDGET);
     expect(Math.hypot(ns[ns.length - 2] - 60, ns[ns.length - 1] - 30)).toBeLessThan(BUDGET);
+    // control point stays within the displacement budget of the given (cx, cy)
+    expect(Math.hypot(ns[2] - 35, ns[3] - 10)).toBeLessThan(BUDGET);
   });
   it('arrowhead: two flicks, each ending at the tip (± jitter)', () => {
     const d = roughArrowhead(50, 50, 0, seedFrom('h1'));

@@ -67,7 +67,8 @@ export function roughEllipse(cx: number, cy: number, rx: number, ry: number, see
     const N = 12;
     const start = rnd() * Math.PI * 2;
     const pts: [number, number][] = [];
-    // overlap the loop slightly past 2π so the ends visibly cross (hand-drawn close)
+    // the loop returns to within jitter of its start; the final control point is the
+    // natural overlap point past 2π (hand-drawn close, not a snapped Z)
     for (let i = 0; i <= N + 1; i++) {
       const a = start + (i / N) * Math.PI * 2;
       pts.push([cx + Math.cos(a) * rx + j(rnd, o.jitter), cy + Math.sin(a) * ry + j(rnd, o.jitter)]);
@@ -77,8 +78,9 @@ export function roughEllipse(cx: number, cy: number, rx: number, ry: number, see
       const mx = (pts[i][0] + pts[i + 1][0]) / 2, my = (pts[i][1] + pts[i + 1][1]) / 2;
       d += ` Q ${f(pts[i][0])} ${f(pts[i][1])} ${f(mx)} ${f(my)}`;
     }
-    // Explicitly close the loop back to the start
-    d += ` Q ${f(pts[pts.length - 1][0])} ${f(pts[pts.length - 1][1])} ${f(pts[0][0])} ${f(pts[0][1])}`;
+    // Close the loop near-but-not-exactly at the start (organic closure)
+    const last = pts[pts.length - 1];
+    d += ` Q ${f(last[0])} ${f(last[1])} ${f(pts[0][0] + j(rnd, o.jitter))} ${f(pts[0][1] + j(rnd, o.jitter))}`;
     return d;
   }, seed, o);
 }
@@ -87,7 +89,7 @@ export function roughArc(x1: number, y1: number, cx: number, cy: number, x2: num
   return withPasses((rnd) => {
     const sx = x1 + j(rnd, o.jitter), sy = y1 + j(rnd, o.jitter);
     const ex = x2 + j(rnd, o.jitter), ey = y2 + j(rnd, o.jitter);
-    const qx = cx + j(rnd, o.bow * 3), qy = cy + j(rnd, o.bow * 3);
+    const qx = cx + j(rnd, o.bow * 2), qy = cy + j(rnd, o.bow * 2);
     return `M ${f(sx)} ${f(sy)} Q ${f(qx)} ${f(qy)} ${f(ex)} ${f(ey)}`;
   }, seed, o);
 }
