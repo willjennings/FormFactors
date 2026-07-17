@@ -14,7 +14,7 @@
 // realtime audio is 24 kHz PCM16 mono, which is exactly what handleLiveAudio expects.
 
 import type { VoiceProvider, VoiceSessionConfig, VoiceCallbacks } from './types';
-import { userTextItemFrame, responseCreateFrame } from './frames';
+import { userTextItemFrame, responseCreateFrame, imageItemFrame } from './frames';
 import { azureRealtimeUrl } from './azureUrl';
 import { Float32Chunker, floatToPcm16Base64, createPcmCaptureNode } from './pcmCapture';
 
@@ -55,14 +55,7 @@ export function createAzureRealtimeProvider(
   };
 
   const sendImage = (jpegBase64: string) => {
-    send({
-      type: 'conversation.item.create',
-      item: {
-        type: 'message',
-        role: 'user',
-        content: [{ type: 'input_image', image_url: `data:image/jpeg;base64,${jpegBase64}` }],
-      },
-    });
+    send(imageItemFrame(jpegBase64));
   };
 
   const maybeDispatchToolCall = (cb: VoiceCallbacks, item: any) => {
@@ -210,10 +203,7 @@ export function createAzureRealtimeProvider(
 
     sendTextHint(text: string) {
       if (latestFrame) { sendImage(latestFrame); lastFrameSentAt = Date.now(); }
-      send({
-        type: 'conversation.item.create',
-        item: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] },
-      });
+      send(userTextItemFrame(text));
     },
 
     sendUserText(text: string) {

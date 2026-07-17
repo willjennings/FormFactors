@@ -116,7 +116,7 @@ class Telemetry {
       return { n: g.length, correct: g.filter(d => d.correct).length };
     };
     const byMod = (mod: InputModality) => {
-      const g = graded.filter(d => (d as any).modality === mod);
+      const g = graded.filter(d => d.modality === mod);
       return { n: g.length, correct: g.filter(d => d.correct).length };
     };
     const actions = this.events.filter(e => e.type === 'action') as Extract<TelemetryEvent, { type: 'action' }>[];
@@ -130,7 +130,7 @@ class Telemetry {
       return { total: g.length, agree: g.filter(e => e.agree).length };
     };
     const actByMod = (mod: InputModality) => {
-      const a = actions.filter(x => (x as any).modality === mod);
+      const a = actions.filter(x => x.modality === mod);
       return { total: a.length, commits: a.filter(x => x.decision === 'commit').length, witnesses: a.filter(x => x.decision === 'witness').length };
     };
     const guid = this.events.filter(e => e.type === 'guidance') as Extract<TelemetryEvent, { type: 'guidance' }>[];

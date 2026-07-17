@@ -19,7 +19,7 @@
 //   not a safe single source for routing the call.
 
 import type { VoiceProvider, VoiceSessionConfig, VoiceCallbacks } from './types';
-import { userTextItemFrame, responseCreateFrame } from './frames';
+import { userTextItemFrame, responseCreateFrame, imageItemFrame } from './frames';
 
 const FRAME_HEARTBEAT_MS = 1500; // sparse vision: at most one image per this interval
 
@@ -40,14 +40,7 @@ export function createOpenAIRealtimeProvider(): VoiceProvider {
   };
 
   const sendImage = (jpegBase64: string) => {
-    send({
-      type: 'conversation.item.create',
-      item: {
-        type: 'message',
-        role: 'user',
-        content: [{ type: 'input_image', image_url: `data:image/jpeg;base64,${jpegBase64}` }],
-      },
-    });
+    send(imageItemFrame(jpegBase64));
   };
 
   const maybeDispatchToolCall = (cb: VoiceCallbacks, item: any) => {
@@ -212,14 +205,7 @@ export function createOpenAIRealtimeProvider(): VoiceProvider {
         sendImage(latestFrame);
         lastFrameSentAt = Date.now();
       }
-      send({
-        type: 'conversation.item.create',
-        item: {
-          type: 'message',
-          role: 'user',
-          content: [{ type: 'input_text', text }],
-        },
-      });
+      send(userTextItemFrame(text));
     },
 
     sendUserText(text: string) {

@@ -12,6 +12,13 @@ export function responseCreateFrame() {
   return { type: 'response.create' };
 }
 
+export function imageItemFrame(jpegBase64: string) {
+  return {
+    type: 'conversation.item.create',
+    item: { type: 'message', role: 'user', content: [{ type: 'input_image', image_url: `data:image/jpeg;base64,${jpegBase64}` }] },
+  };
+}
+
 export function geminiUserTurns(text: string) {
   return { turns: [{ role: 'user', parts: [{ text }] }], turnComplete: true };
 }

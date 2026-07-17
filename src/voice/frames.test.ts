@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { userTextItemFrame, responseCreateFrame, geminiUserTurns } from './frames';
+import { userTextItemFrame, responseCreateFrame, geminiUserTurns, imageItemFrame } from './frames';
 
 describe('realtime frames', () => {
   it('builds the user input_text item frame (openai/azure protocol)', () => {
@@ -15,6 +15,16 @@ describe('realtime frames', () => {
     expect(geminiUserTurns('undo that')).toEqual({
       turns: [{ role: 'user', parts: [{ text: 'undo that' }] }],
       turnComplete: true,
+    });
+  });
+});
+
+describe('imageItemFrame (R1 #3 — one builder for the openai/azure vision frame)', () => {
+  it('wraps the jpeg as a data-url input_image user item', () => {
+    const f = imageItemFrame('QUJD');
+    expect(f).toEqual({
+      type: 'conversation.item.create',
+      item: { type: 'message', role: 'user', content: [{ type: 'input_image', image_url: 'data:image/jpeg;base64,QUJD' }] },
     });
   });
 });
