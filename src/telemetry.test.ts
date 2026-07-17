@@ -45,3 +45,18 @@ describe('ramble telemetry (spec §7)', () => {
     expect(events.find(e => e.type === 'session_complete')).toMatchObject({ timeToCompleteMs: 42_000, slotsFilled: 6, inferredCount: 1 });
   });
 });
+
+describe('mission telemetry (spec §7)', () => {
+  beforeEach(() => telemetry.start(cfg));
+  it('records the four mission events with their payloads', () => {
+    telemetry.missionStart('ship-brief', 0);
+    telemetry.missionStepDone('ship-brief', 'fix-sheet');
+    telemetry.missionComplete('ship-brief', 0, 102000, 3);
+    telemetry.missionAbandoned('fix-deck', 0);
+    const events = JSON.parse(telemetry.exportJSON()).events as any[];
+    expect(events.find(e => e.type === 'mission_start')).toMatchObject({ key: 'ship-brief', run: 0 });
+    expect(events.find(e => e.type === 'mission_step_done')).toMatchObject({ key: 'ship-brief', stepKey: 'fix-sheet' });
+    expect(events.find(e => e.type === 'mission_complete')).toMatchObject({ key: 'ship-brief', run: 0, durationMs: 102000, steps: 3 });
+    expect(events.find(e => e.type === 'mission_abandoned')).toMatchObject({ key: 'fix-deck', stepIndex: 0 });
+  });
+});
