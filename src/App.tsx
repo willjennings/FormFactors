@@ -72,7 +72,7 @@ import { docStatusLabel } from './widgets/surfaceModels';
 import type { TeachingEvent, TeachingState } from './teaching/types';
 import { serializeTeachingState, makeChangeGate } from './teaching/teachingState';
 import { GOAL_TOOLS, goalCallToEvent, validateSuggestion, type GoalProposal } from './goal/goalTools';
-import { initialGoalState, reduce as goalReduce, type GoalState } from './goal/goalStore';
+import { initialGoalState, reduce as goalReduce, isStepDone, type GoalState } from './goal/goalStore';
 import { serializeGoalState } from './goal/serialize';
 import { WB_TOOLS, wbCallToEvent } from './whiteboard/tools';
 import type { WbEvent } from './whiteboard/types';
@@ -660,6 +660,10 @@ export default function App() {
   // pristine seed or the live corpus, so a re-run (or prior free play) that already satisfies a
   // predicate does not auto-complete. Set in startMissionRun; read by the advance effect below.
   const missionBaselineRef = useRef<{ docs: Partial<Record<ProgramId, MockDoc>>; artifactIds: string[] }>({ docs: {}, artifactIds: [] });
+  // The ids of the goal steps THIS mission created (captured on the first advance after
+  // goal.set lands). Ownership by recorded ids is airtight where the brief-string check was
+  // spoofable: an agent set_goal — even with identical text — mints fresh step ids.
+  const missionGoalIdsRef = useRef<string[] | null>(null);
   const [missionTick, setMissionTick] = useState(0);
   const recordMissionCommit = (verb: string, verbClass: string) => {
     missionCommitsRef.current = [...missionCommitsRef.current, { verb, verbClass, program: activeProgramRef.current }];
@@ -669,6 +673,9 @@ export default function App() {
   // the prior snapshot ref before handing the new one to TeachingLayer's own state setter.
   const handleTeachingStateChange = (next: TeachingState) => {
     const prev = teachingSnapshotRef.current;
+    // Sync the ref NOW, not in an effect: two rapid onStateChange calls would otherwise both
+    // compare against the same stale prev and double-record one completion.
+    teachingSnapshotRef.current = next;
     if (prev?.sequence && prev.sequence.activeIndex !== null && next.sequence && next.sequence.activeIndex === null) {
       missionTeachDoneRef.current = [...missionTeachDoneRef.current, { taskKey: prev.sequence.taskKey, program: activeProgramRef.current }];
       setMissionTick((n) => n + 1);
@@ -2968,21 +2975,29 @@ export default function App() {
       sharesCommitted: missionSharesRef.current,
       teachingCompleted: missionTeachDoneRef.current,
     };
+    // Capture the goal-step ids this mission created, once, as soon as goal.set has landed.
+    if (missionGoalIdsRef.current === null && goalStateRef.current.objective === missionDef.brief
+        && goalStateRef.current.steps.length === missionDef.steps.length) {
+      missionGoalIdsRef.current = goalStateRef.current.steps.map((s) => s.id);
+    }
     const { run, stepsDone, completed } = advanceMission(missionDef, missionRun, obs, Date.now());
     if (!stepsDone.length) return;
     // The goal channel is the agent's honest view — the mission must never overwrite a goal it
-    // does not own (final review I3). The agent can replace the goal mid-mission (set_goal); if
-    // the live goal is no longer this mission's brief, the run still advances (telemetry, rail
-    // card on completion) but stops touching goal state.
-    const ownsGoal = goalStateRef.current.objective === missionDef.brief;
+    // does not own (final review I3). Ownership = the CURRENT goal's step ids are exactly the
+    // ids this mission's goal.set minted; an agent set_goal mid-mission (even with identical
+    // text) mints fresh ids, so the run still advances (telemetry, rail card) but stops
+    // touching goal state.
+    const recorded = missionGoalIdsRef.current;
+    const ownsGoal = !!recorded
+      && goalStateRef.current.steps.length === recorded.length
+      && goalStateRef.current.steps.every((s, i) => s.id === recorded[i]);
     for (const i of stepsDone) {
       telemetry.missionStepDone(missionDef.key, missionDef.steps[i].key);
-      if (ownsGoal) {
-        const gs = goalStateRef.current.steps[i];
-        if (gs && !gs.done) goalDispatch({ type: 'goal.stepDone', id: gs.id });
+      if (ownsGoal && recorded && !isStepDone(goalStateRef.current, recorded[i])) {
+        goalDispatch({ type: 'goal.stepDone', id: recorded[i] });
       }
     }
-    setMissionRun(run);
+    if (!completed) setMissionRun(run);
     if (completed) {
       const runN = missionRuns[missionDef.key] ?? 0;
       const durationMs = Date.now() - run.startedAt;
@@ -2999,10 +3014,11 @@ export default function App() {
       if (ownsGoal) goalDispatch({ type: 'goal.clear' });
       // The run is over — the rail card is the record. Clearing missionRun returns the panel
       // to the picker list (Task 4 drive: a completed run left a stale title-only strip).
+      missionGoalIdsRef.current = null;
       setMissionRun(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [missionTick, fullCorpus, artifactState, missionRun, missionDef]);
+  }, [missionTick, fullCorpus, artifactState, missionRun, missionDef, missionRuns]);
 
   // [CORPUS] hint: the model's standing view of what's combinable. Deduped via the change-gate.
   useEffect(() => {
@@ -3160,6 +3176,7 @@ export default function App() {
       telemetry.missionAbandoned(missionRun.key, missionRun.stepIndex);
     }
     missionCommitsRef.current = []; missionSharesRef.current = 0; missionTeachDoneRef.current = [];
+    missionGoalIdsRef.current = null; // fresh goal.set below mints fresh ids; capture on first advance
     // Baseline snapshot (final review I2): the world AS OF right now, before this run's steps
     // can touch it. Same fullCorpus composition (corpus + the live active doc) the advance
     // effect reads; deep-cloned so later mutations to corpus/mockDoc can't leak into it.
@@ -3175,10 +3192,14 @@ export default function App() {
   const abandonMission = () => {
     if (missionRun && missionRun.completedAt === null) {
       telemetry.missionAbandoned(missionRun.key, missionRun.stepIndex);
-      // Guarded the same way as the advance effect's completion branch (final review I3): don't
-      // clear a goal the agent has since replaced.
-      if (missionDef && goalStateRef.current.objective === missionDef.brief) goalDispatch({ type: 'goal.clear' });
+      // Guarded like the advance effect (final review I3, airtight variant): only clear a goal
+      // whose step ids are exactly the ones this mission's goal.set minted.
+      const rec = missionGoalIdsRef.current;
+      const owns = !!rec && goalStateRef.current.steps.length === rec.length
+        && goalStateRef.current.steps.every((s, i) => s.id === rec[i]);
+      if (owns) goalDispatch({ type: 'goal.clear' });
     }
+    missionGoalIdsRef.current = null;
     setMissionRun(null);
   };
 
@@ -3347,7 +3368,7 @@ export default function App() {
               <span className="text-[10px] font-mono uppercase tracking-wide text-[var(--text-secondary)]">Working toward</span>
               <span className="text-[11px] font-mono text-[var(--text-primary)] max-w-[280px] truncate">{goalState.objective}</span>
               <span className="text-[10px] font-mono text-[var(--text-secondary)]">· {goalState.steps.filter((s) => s.done).length}/{goalState.steps.length}</span>
-              <button aria-label="Clear goal" className="text-[var(--text-secondary)] hover:text-[var(--text-primary)]" onClick={() => (missionRun && missionRun.completedAt === null ? abandonMission() : goalDispatch({ type: 'goal.clear' }))}><X size={12} /></button>
+              <button aria-label="Clear goal" className="hit-24 text-[var(--text-secondary)] hover:text-[var(--text-primary)]" onClick={() => (missionRun && missionRun.completedAt === null ? abandonMission() : goalDispatch({ type: 'goal.clear' }))}><X size={12} /></button>
             </div>
           )}
           <MissionPicker missions={MISSIONS} runs={missionRuns} active={missionRun} activeDef={missionDef} open={missionOpen} onStart={startMissionRun} onAbandon={abandonMission} onClose={() => setMissionOpen(false)} />

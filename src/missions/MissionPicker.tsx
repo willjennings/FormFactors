@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { X } from 'lucide-react';
 import { Button } from '../ui/Button';
 import type { MissionDef, MissionRun } from './types';
@@ -21,6 +21,9 @@ export function MissionPicker({ missions, runs, active, activeDef, open, onStart
   onAbandon: () => void;
   onClose: () => void;
 }) {
+  // Focus the list panel when it opens so keyboard users land inside the dialog; Esc closes.
+  const listRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => { if (open && !active) listRef.current?.focus(); }, [open, active]);
   if (!open) return null;
   if (active && activeDef) {
     const step = activeDef.steps[active.stepIndex];
@@ -29,7 +32,7 @@ export function MissionPicker({ missions, runs, active, activeDef, open, onStart
       <div className="absolute top-10 right-4 z-40 w-72 rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] shadow-lg px-4 py-3 pointer-events-auto" role="status" aria-label="Active mission" data-shell>
         <div className="flex items-center justify-between">
           <span className="text-[10px] font-mono uppercase tracking-widest text-[var(--text-secondary)]">{activeDef.title}</span>
-          <button aria-label="Abandon mission" onClick={onAbandon} className="text-[var(--text-secondary)] hover:text-[var(--text-primary)]"><X size={12} /></button>
+          <button aria-label="Abandon mission" onClick={onAbandon} className="hit-24 text-[var(--text-secondary)] hover:text-[var(--text-primary)]"><X size={12} /></button>
         </div>
         {step && (
           <>
@@ -41,10 +44,11 @@ export function MissionPicker({ missions, runs, active, activeDef, open, onStart
     );
   }
   return (
-    <div className="absolute top-10 right-4 z-40 w-80 rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] shadow-lg p-3 pointer-events-auto" role="dialog" aria-label="Missions" data-shell>
+    <div ref={listRef} tabIndex={-1} onKeyDown={(e) => { if (e.key === 'Escape') onClose(); }}
+         className="absolute top-10 right-4 z-40 w-80 rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] shadow-lg p-3 pointer-events-auto outline-none" role="dialog" aria-label="Missions" data-shell>
       <div className="flex items-center justify-between mb-2">
         <span className="text-[10px] font-mono uppercase tracking-widest text-[var(--text-secondary)]">Missions</span>
-        <button aria-label="Close missions" onClick={onClose} className="text-[var(--text-secondary)] hover:text-[var(--text-primary)]"><X size={12} /></button>
+        <button aria-label="Close missions" onClick={onClose} className="hit-24 text-[var(--text-secondary)] hover:text-[var(--text-primary)]"><X size={12} /></button>
       </div>
       <div className="flex flex-col gap-2">
         {missions.map((m) => (

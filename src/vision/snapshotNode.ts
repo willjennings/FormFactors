@@ -12,9 +12,22 @@ import { toCanvas, getFontEmbedCSS } from 'html-to-image';
 //    must cover wherever that primer lives.
 // 2. The cache is shared by BOTH snapshot roots (surface + instruction layer); whichever
 //    ticks first would otherwise poison the session with its subtree's font subset.
+// A transient first-tick failure (fonts still loading, network blip) retries on later
+// snapshots instead of downgrading the whole session to skipFonts; after MAX_FONT_ATTEMPTS
+// consecutive failures the null result is permanent (genuinely offline — stop retrying at
+// the snapshot cadence).
+const MAX_FONT_ATTEMPTS = 3;
 let fontCssPromise: Promise<string | null> | null = null;
+let fontCssAttempts = 0;
 function cachedFontCss(node: HTMLElement): Promise<string | null> {
-  if (!fontCssPromise) fontCssPromise = getFontEmbedCSS(node.ownerDocument?.body ?? node).catch(() => null);
+  if (!fontCssPromise) {
+    if (fontCssAttempts >= MAX_FONT_ATTEMPTS) return Promise.resolve(null);
+    fontCssAttempts++;
+    fontCssPromise = getFontEmbedCSS(node.ownerDocument?.body ?? node).catch(() => {
+      fontCssPromise = null; // next snapshot retries (bounded by MAX_FONT_ATTEMPTS)
+      return null;
+    });
+  }
   return fontCssPromise;
 }
 

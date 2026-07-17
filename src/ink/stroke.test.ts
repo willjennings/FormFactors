@@ -6,8 +6,11 @@ const nums = (d: string) => (d.match(/-?\d+(\.\d+)?/g) ?? []).map(Number);
 const xs = (d: string) => nums(d).filter((_, i) => i % 2 === 0);
 const ys = (d: string) => nums(d).filter((_, i) => i % 2 === 1);
 
-// Envelope: centerline displacement budget (1.5, spec §5.3) + half body width.
-const ENV = 1.5 + STROKE_WIDTH;
+// Envelope: spec §3.1's invariant is centerline displacement + HALF width ≤ 1.5 — so no
+// outline coordinate may leave the input bbox by more than 1.5 units (final review tightened
+// this from the earlier, looser 1.5 + full width).
+const ENV = 1.5;
+void STROKE_WIDTH; // still asserted implicitly: width ≤ ~0.9 keeps the envelope satisfiable
 
 describe('ink v2 — variable-width outline polygons (spec §3.1)', () => {
   it('deterministic: same seed byte-identical, different seeds differ', () => {
