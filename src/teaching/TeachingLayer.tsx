@@ -12,13 +12,28 @@ import { seedFrom, roughRect, roughArc } from '../ink/rough';
 
 const pct = (v: number) => `${v / 10}%`; // 0-1000 space → percentage of the container
 
-/** Rough-ink rectangle drawn just inside its positioned parent div (replaces CSS ring-4).
- *  The parent keeps the glow shadow; this draws the hand stroke. */
+/** Rough-ink rectangle drawn just inside its positioned parent (replaces CSS ring-4).
+ *  Paths are generated in PIXEL space from the measured box — hand wobble is an absolute
+ *  ±px quantity, not a fraction of the element (a percent-space viewBox crushed the
+ *  wobble to sub-pixel on wide-short targets like the ribbon). */
+const RING_OPTS = { bow: 2, jitter: 1.2, overshoot: 5, passes: 1 as const };
 function RoughRing({ seedId, color }: { seedId: string; color: string }) {
+  const ref = useRef<SVGSVGElement | null>(null);
+  const [size, setSize] = useState<{ w: number; h: number } | null>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      const r = el.getBoundingClientRect();
+      setSize((s) => (s && s.w === r.width && s.h === r.height ? s : { w: r.width, h: r.height }));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   return (
-    <svg className="absolute inset-0 w-full h-full overflow-visible" viewBox="0 0 100 100" preserveAspectRatio="none">
-      <path d={roughRect(2, 4, 96, 92, seedFrom(seedId))} fill="none" stroke={color}
-            strokeWidth="3" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+    <svg ref={ref} className="absolute inset-0 w-full h-full overflow-visible">
+      {size && <path d={roughRect(3, 3, Math.max(0, size.w - 6), Math.max(0, size.h - 6), seedFrom(seedId), RING_OPTS)}
+             fill="none" stroke={color} strokeWidth="3" strokeLinecap="round" />}
     </svg>
   );
 }
