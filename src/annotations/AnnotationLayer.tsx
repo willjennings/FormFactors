@@ -5,6 +5,7 @@ import type { AnnotationState, AnnotationEvent } from './types';
 import { initialAnnotationState, reduce } from './annotationStore';
 import { bboxOf, center, unionBbox, placementPoint } from './geometry';
 import { buildIllustrateScript } from './illustrateDemo';
+import { seedFrom, roughLine, roughRect, roughEllipse, roughArc, roughArrowhead } from '../ink/rough';
 
 const pct = (v: number) => v / 10; // 0-1000 → percent (SVG viewBox is 0..100)
 
@@ -47,23 +48,18 @@ export function AnnotationLayer({ entities, program, demo = false, dispatchRef, 
   return (
     <div className="absolute inset-0 z-[55] pointer-events-none" data-annotation-layer>
       <svg className="absolute inset-0 w-full h-full overflow-visible" viewBox="0 0 100 100" preserveAspectRatio="none">
-        <defs>
-          <marker id="ann-arrowhead" markerWidth="6" markerHeight="6" refX="4" refY="2" orient="auto">
-            <path d="M0,0 L4,2 L0,4 Z" fill={INK} />
-          </marker>
-        </defs>
         {state.annotations.map((a) => {
           if (a.kind === 'arrow') {
             const bf = bboxOf(entities, a.from), bt = bboxOf(entities, a.to);
             if (!bf || !bt) return null;
             const p = center(bf), q = center(bt);
             const mx = (pct(p.x) + pct(q.x)) / 2, my = (pct(p.y) + pct(q.y)) / 2 - 6;
+            const angle = Math.atan2(pct(q.y) - my, pct(q.x) - mx); // approach direction from ctrl → tip
             return (
-              <g key={a.id}>
-                <path d={`M ${pct(p.x)} ${pct(p.y)} Q ${mx} ${my} ${pct(q.x)} ${pct(q.y)}`}
-                      fill="none" stroke={INK} strokeWidth="0.4" vectorEffect="non-scaling-stroke"
-                      markerEnd="url(#ann-arrowhead)" />
-                {a.label && <text x={mx} y={my - 1} textAnchor="middle" fontSize={2.5} className="fill-indigo-500 font-mono">{a.label}</text>}
+              <g key={a.id} stroke={INK} fill="none" strokeWidth="0.4" strokeLinecap="round">
+                <path d={roughArc(pct(p.x), pct(p.y), mx, my, pct(q.x), pct(q.y), seedFrom(a.id))} vectorEffect="non-scaling-stroke" />
+                <path d={roughArrowhead(pct(q.x), pct(q.y), angle, seedFrom(a.id + '/head'))} vectorEffect="non-scaling-stroke" />
+                {a.label && <text x={mx} y={my - 1} textAnchor="middle" fontSize={3.2} stroke="none" className="fill-indigo-500 font-ink">{a.label}</text>}
               </g>
             );
           }
@@ -71,15 +67,17 @@ export function AnnotationLayer({ entities, program, demo = false, dispatchRef, 
             const u = unionBbox(a.targets.map((t) => bboxOf(entities, t)).filter((b): b is NonNullable<typeof b> => b !== null));
             if (!u) return null;
             const x = pct(u[1]) - 1, y = pct(u[0]) - 1, w = pct(u[3] - u[1]) + 2, h = pct(u[2] - u[0]) + 2;
-            const common = { fill: 'none', stroke: INK, strokeWidth: 0.4, vectorEffect: 'non-scaling-stroke' as const };
+            const d = a.shape === 'circle'
+              ? roughEllipse(x + w / 2, y + h / 2, w / 2, h / 2, seedFrom(a.id))
+              : a.shape === 'box'
+                ? roughRect(x, y, w, h, seedFrom(a.id))
+                : [roughLine(x, y, x - 1.5, y, seedFrom(a.id)),
+                   roughLine(x - 1.5, y, x - 1.5, y + h, seedFrom(a.id + '/2')),
+                   roughLine(x - 1.5, y + h, x, y + h, seedFrom(a.id + '/3'))].join(' ');
             return (
               <g key={a.id}>
-                {a.shape === 'circle'
-                  ? <ellipse cx={x + w / 2} cy={y + h / 2} rx={w / 2} ry={h / 2} {...common} />
-                  : a.shape === 'box'
-                    ? <rect x={x} y={y} width={w} height={h} rx={1} {...common} />
-                    : <path d={`M ${x} ${y} L ${x - 1.5} ${y} L ${x - 1.5} ${y + h} L ${x} ${y + h}`} {...common} />}
-                {a.label && <text x={x + w / 2} y={y - 1} textAnchor="middle" fontSize={2.5} className="fill-indigo-500 font-mono">{a.label}</text>}
+                <path d={d} fill="none" stroke={INK} strokeWidth="0.4" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+                {a.label && <text x={x + w / 2} y={y - 1} textAnchor="middle" fontSize={3.2} className="fill-indigo-500 font-ink">{a.label}</text>}
               </g>
             );
           }
@@ -92,8 +90,8 @@ export function AnnotationLayer({ entities, program, demo = false, dispatchRef, 
           const lx = pct(anchor.x) + dx, ly = pct(anchor.y) + dy;
           return (
             <g key={a.id}>
-              <line x1={pct(anchor.x)} y1={pct(anchor.y)} x2={lx} y2={ly} stroke={INK} strokeWidth="0.3" vectorEffect="non-scaling-stroke" />
-              <text x={lx} y={ly} textAnchor="middle" fontSize={2.6} className="fill-indigo-500 font-mono">{a.text}</text>
+              <path d={roughLine(pct(anchor.x), pct(anchor.y), lx, ly, seedFrom(a.id))} fill="none" stroke={INK} strokeWidth="0.3" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+              <text x={lx} y={ly} textAnchor="middle" fontSize={3.2} className="fill-indigo-500 font-ink">{a.text}</text>
             </g>
           );
         })}
