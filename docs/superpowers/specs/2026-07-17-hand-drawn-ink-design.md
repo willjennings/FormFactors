@@ -56,6 +56,34 @@ uses today. Teaching highlight rings (currently CSS `ring-4` divs) gain a small 
 rendering `roughRect`/`roughEllipse` in the same accent color; the glow shadow stays on the
 div. Arrowhead `<defs>` blocks are deleted from both WhiteboardMarks and AnnotationLayer.
 
+### 3.1 Ink v2 — variable-width strokes (research addendum, 2026-07-17)
+
+Research pass over Paper by FiftyThree, perfect-freehand/Excalidraw/rough.js internals, and
+Google's ink library (synthesis + per-claim sources:
+`docs/superpowers/research/2026-07-17-ink-rendering-*.md`) established that uniform stroke
+width is the single biggest "vector, not ink" tell. v2 upgrades the SOLID marks to
+variable-width filled outline polygons, statically simulated and still deterministic:
+
+- `inkStroke(points, seed, opts)`: centerline → arc-length resample (~1.5-unit spacing) →
+  phase-coherent normal wobble (matplotlib Sketch: `sin(phase)·amp`, seeded phase steps) →
+  width profile `w(t)` = perfect-freehand radius formula with SIMULATED pressure (taper-in at
+  start, seeded ±10% body drift, slight terminal pooling per the Paper 53 width∝1/speed
+  patents), 3-tap `0.25/0.5/0.25` smoothing → offset both normals → one closed filled path.
+- **Anisotropy compensation**: layers render in a non-uniformly-stretched viewBox, so normal
+  offsets are scaled by `opts.aspect` (container width/height ratio) to keep on-screen width
+  direction-independent. Layers measure aspect via a shared `useAspect` ResizeObserver hook;
+  `aspect = 1` (no-op) until measured.
+- Length-scaled roughness ramp (rough.js): full wobble below ~20 viewBox units of segment
+  length, dampened to 0.4× by ~50.
+- Applies to: wb node outlines + connectors, annotation arrows/shapes/leader-arrowheads.
+  Uniform-stroke v1 stays for: dashed relate arcs (dashes need a stroked path), label leader
+  lines (sub-unit widths), RoughRing (already pixel-space; may adopt inkStroke later).
+- Explicitly rejected: `mix-blend-mode` darkening (unverified in the vision-snapshot
+  rasterizer — same risk class as filters), SVG filters (banned), live-input stroke modeling
+  (nothing live to model).
+- Invariants unchanged: §5 all still binding; displacement budget now reads center-line
+  displacement + half-width ≤ the same 1.5-unit envelope (width ≤ ~0.9 units keeps this).
+
 ## 4. Lettering
 
 Add Caveat (OFL) to the existing Google Fonts `@import` in `index.css` and a
