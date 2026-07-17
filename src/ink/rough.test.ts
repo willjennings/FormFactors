@@ -1,6 +1,6 @@
 // src/ink/rough.test.ts
 import { describe, it, expect } from 'vitest';
-import { seedFrom, roughLine, roughRect, roughEllipse, roughArc, roughArrowhead, INK_OPTS } from './rough';
+import { seedFrom, roughLine, roughRect, roughEllipse, roughArc, roughArrowhead, INK_OPTS, RING_OPTS } from './rough';
 
 // Every number that appears in a d string.
 const nums = (d: string) => (d.match(/-?\d+(\.\d+)?/g) ?? []).map(Number);
@@ -70,11 +70,11 @@ describe('rough ink — deterministic hand-drawn paths (spec §3)', () => {
     }
   });
   it('RING_OPTS (teaching ring, pixel space) keeps coordinates within the box + 8.2 on a wide-short target', () => {
-    // Mirrors TeachingLayer's RING_OPTS: {bow:2, jitter:1.2, overshoot:5, passes:1}. Budget
+    // Pins the ACTUAL exported constant TeachingLayer renders with. Budget
     // = overshoot 5 + jitter 1.2 + bow 2 = 8.2px, measured against a 500×60 ribbon-shaped box
     // (the shape that broke the old percent-space ring — see spec §5.3 pixel-space note).
-    const RING_OPTS = { bow: 2, jitter: 1.2, overshoot: 5, passes: 1 as const };
-    const RING_BUDGET = 8.2;
+    expect(RING_OPTS).toEqual({ bow: 2, jitter: 1.2, overshoot: 5, passes: 1 });
+    const RING_BUDGET = RING_OPTS.overshoot + RING_OPTS.jitter + RING_OPTS.bow;
     const d = roughRect(3, 3, 500, 60, seedFrom('ring1'), RING_OPTS);
     for (const [i, v] of nums(d).entries()) {
       if (i % 2 === 0) { expect(v).toBeGreaterThanOrEqual(3 - RING_BUDGET); expect(v).toBeLessThanOrEqual(503 + RING_BUDGET); }

@@ -7,6 +7,10 @@
 export interface InkOpts { bow: number; jitter: number; overshoot: number; passes: 1 | 2 }
 /** "Confident marker": slight bow, small jitter, corner overshoot, single pass. */
 export const INK_OPTS: InkOpts = { bow: 0.35, jitter: 0.25, overshoot: 0.8, passes: 1 };
+/** Teaching-ring variant, PIXEL space (TeachingLayer's RoughRing measures its element box —
+ *  wobble is an absolute ±px quantity, not a fraction; see spec §5.3 pixel-space carve-out).
+ *  Budget: overshoot 5 + jitter 1.2 + bow 2 = 8.2px worst case, pinned by rough.test.ts. */
+export const RING_OPTS: InkOpts = { bow: 2, jitter: 1.2, overshoot: 5, passes: 1 };
 
 /** FNV-1a string hash → PRNG seed. */
 export function seedFrom(id: string): number {

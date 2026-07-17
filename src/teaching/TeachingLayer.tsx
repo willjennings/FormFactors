@@ -8,15 +8,15 @@ import { buildDemoScript } from './demoScript';
 import { loadCompetence, saveCompetence } from './persistence';
 import { telemetry } from '../telemetry';
 import type { Program } from '../scenarios';
-import { seedFrom, roughRect, roughArc } from '../ink/rough';
+import { seedFrom, roughRect, roughArc, RING_OPTS } from '../ink/rough';
 
 const pct = (v: number) => `${v / 10}%`; // 0-1000 space → percentage of the container
 
 /** Rough-ink rectangle drawn just inside its positioned parent (replaces CSS ring-4).
  *  Paths are generated in PIXEL space from the measured box — hand wobble is an absolute
  *  ±px quantity, not a fraction of the element (a percent-space viewBox crushed the
- *  wobble to sub-pixel on wide-short targets like the ribbon). */
-const RING_OPTS = { bow: 2, jitter: 1.2, overshoot: 5, passes: 1 as const };
+ *  wobble to sub-pixel on wide-short targets like the ribbon). RING_OPTS lives in
+ *  src/ink/rough.ts so the bounds test pins the actual constant. */
 function RoughRing({ seedId, color }: { seedId: string; color: string }) {
   const ref = useRef<SVGSVGElement | null>(null);
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);

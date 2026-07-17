@@ -3154,6 +3154,10 @@ export default function App() {
               z-[60] stacking and plane geometry; it exists so the vision frame can snapshot the
               teaching marks (and, later, the annotation renderer) as one node. */}
           <div ref={instructionLayerRef} className="absolute inset-0 pointer-events-none" data-instruction-layer>
+            {/* Font primer: html-to-image's used-font scan only walks HTMLElements, so SVG-only
+                fonts (Caveat ink labels) would be filtered out of the embed CSS. This invisible
+                HTML span makes the scanner see the ink font (final review C1). */}
+            <span aria-hidden className="font-ink absolute opacity-0 pointer-events-none select-none">.</span>
             <TeachingLayer entities={entities} program={program} demo={teachMode} dispatchRef={teachingDispatchRef} onStateChange={setTeachingSnapshot} />
             <AnnotationLayer entities={entities} program={program} demo={illustrateMode} dispatchRef={annotationDispatchRef} onStateChange={setAnnotationSnapshot} />
             {whiteboardMode === 'overlay' && <WhiteboardMarks state={whiteboard} />}

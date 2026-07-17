@@ -74,10 +74,18 @@ current fonts. The step-label pill and toasts are chrome — mono stays.
    images, nothing that could make the model's vision frame diverge from the user's screen.
    The webfont label switch initially shipped on top of `snapshotNode`'s `skipFonts: true`,
    which meant every label rasterized in a fallback face in the model's frame while the
-   screen showed Caveat (final review, 2026-07-18). Fixed: `snapshotNode` now embeds fonts
-   via a session-cached `getFontEmbedCSS(node)` call (fetched once, reused across snapshot
-   ticks) so frame glyphs match the screen; if embedding ever fails, it falls back to
-   `skipFonts: true` rather than blocking the snapshot (fail-soft, per §6/learnings §6).
+   screen showed Caveat (final review). Fonts are now embedded via a session-cached
+   `getFontEmbedCSS` call (fetched once, reused across snapshot ticks). Two library quirks
+   the seam works around: html-to-image's used-font scan walks only HTML elements, so a
+   font used exclusively on SVG `<text>` (Caveat — every ink label) would be filtered out
+   of the embed CSS; an invisible HTML primer span (`.font-ink`, App.tsx instruction-layer
+   wrapper) declares the ink font to the scanner. And because the cache is shared by both
+   snapshot roots (surface + instruction layer), the scan runs against `document.body` —
+   the embed CSS is independent of which root ticks first and always covers the primer.
+   Fail-soft fallback unchanged: if embedding fails, `skipFonts: true` — never block the
+   snapshot (per §6/learnings §6). Final pixel-level frame verification (drawer/debug
+   vision frame vs on-screen lettering) on a real mic/live session remains on the owed
+   human-smoke list — no jsdom test can exercise the rasterization path.
 3. **Coordinates stay true.** Max total displacement (bow 0.35 + jitter 0.25 + overshoot
    0.8 = 1.4) stays under 1.5 viewBox units so drawn pixels still visually match the
    coordinates declared in
