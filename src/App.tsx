@@ -3470,7 +3470,17 @@ export default function App() {
             confirmGoals={confirmGoals}
             onConfirmGoals={setConfirmGoals}
             whiteboardMode={whiteboardMode}
-            onWhiteboardMode={setWhiteboardMode}
+            onWhiteboardMode={(mode) => {
+              // Leaving the board mid-card is an implicit DECLINE (same contract as Esc and
+              // clear-sketch): the card only renders in board mode, so switching away would
+              // leave an invisible pending consent — the user unable to answer, the model
+              // waiting forever on "awaiting user consent".
+              if (mode !== 'board' && pendingBeautifyRef.current) {
+                providerRef.current?.sendTextHint('[SYSTEM: the user DECLINED the beautify — their sketch is unchanged. Do not re-call the tool unless they ask.]');
+                setPendingBeautify(null);
+              }
+              setWhiteboardMode(mode);
+            }}
             worldState={serializeMockDoc(mockDoc)}
             undoCount={undoStack.length}
             onUndo={handleUndo}
