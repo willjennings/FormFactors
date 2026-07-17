@@ -16,24 +16,13 @@
 import type { VoiceProvider, VoiceSessionConfig, VoiceCallbacks } from './types';
 import { userTextItemFrame, responseCreateFrame } from './frames';
 import { azureRealtimeUrl } from './azureUrl';
+import { Float32Chunker, floatToPcm16Base64, createPcmCaptureNode } from './pcmCapture';
 
 const SAMPLE_RATE = 24000; // Azure/OpenAI realtime PCM16 mono
 const FRAME_HEARTBEAT_MS = 500; // vision cadence: at most one image per this interval.
 // Lowered from 1500ms to narrow the grounding gap vs Gemini's continuous video — fresher
 // frames mean "where is this?" lands on the right element far more often. Each frame is a
 // persistent conversation item, so this trades some context/cost for accuracy.
-
-const floatToPcm16Base64 = (input: Float32Array): string => {
-  const pcm = new Int16Array(input.length);
-  for (let i = 0; i < input.length; i++) {
-    const s = Math.max(-1, Math.min(1, input[i]));
-    pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-  }
-  let binary = '';
-  const bytes = new Uint8Array(pcm.buffer);
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-  return btoa(binary);
-};
 
 /**
  * @param endpoint  Azure resource endpoint, e.g. https://<name>.services.ai.azure.com
@@ -55,7 +44,7 @@ export function createAzureRealtimeProvider(
   let ws: WebSocket | null = null;
   let micStream: MediaStream | null = null;
   let inputCtx: AudioContext | null = null;
-  let processor: ScriptProcessorNode | null = null;
+  let captureNode: AudioWorkletNode | null = null;
   let closed = false;
   let latestFrame: string | null = null;
   let lastFrameSentAt = 0;
@@ -127,22 +116,26 @@ export function createAzureRealtimeProvider(
             cb.onError('Azure: no transcription deployment set (AZURE_TRANSCRIBE_DEPLOYMENT) — voice works but deixis "this/here" hints are disabled.');
           }
 
-          // Start streaming mic audio as PCM16 @ 24kHz.
-          navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+          // Start streaming mic audio as PCM16 @ 24kHz (AudioWorklet capture — the worklet
+          // posts 128-frame quanta; the chunker rebuilds the old 4096-sample cadence).
+          navigator.mediaDevices.getUserMedia({ audio: true }).then(async stream => {
             if (closed) { stream.getTracks().forEach(t => t.stop()); return; }
             micStream = stream;
             inputCtx = new AudioContext({ sampleRate: SAMPLE_RATE });
-            const source = inputCtx.createMediaStreamSource(stream);
-            processor = inputCtx.createScriptProcessor(4096, 1, 1);
-            const silentGain = inputCtx.createGain();
+            const ctx = inputCtx;
+            const source = ctx.createMediaStreamSource(stream);
+            const chunker = new Float32Chunker((chunk) => {
+              send({ type: 'input_audio_buffer.append', audio: floatToPcm16Base64(chunk) });
+            });
+            const node = await createPcmCaptureNode(ctx, (q) => { if (!closed) chunker.push(q); });
+            // close()/ws.onclose may have run while addModule was in flight.
+            if (closed || inputCtx !== ctx) { try { node.disconnect(); } catch { /* noop */ } return; }
+            captureNode = node;
+            const silentGain = ctx.createGain();
             silentGain.gain.value = 0;
-            processor.onaudioprocess = (e) => {
-              const audio = floatToPcm16Base64(e.inputBuffer.getChannelData(0));
-              send({ type: 'input_audio_buffer.append', audio });
-            };
-            source.connect(processor);
-            processor.connect(silentGain);
-            silentGain.connect(inputCtx.destination);
+            source.connect(node);
+            node.connect(silentGain);
+            silentGain.connect(ctx.destination);
           }).catch(err => cb.onError(err?.message ?? 'microphone access failed'));
 
           cb.onOpen();
@@ -203,10 +196,11 @@ export function createAzureRealtimeProvider(
           console.log('[azure] ws closed', e.code, e.reason);
           // SERVER-initiated close must release the mic too (same leak as gemini.ts:
           // only app-initiated close() tore down the pipeline — hot mic + dead-socket pump).
-          try { processor?.disconnect(); } catch { /* noop */ }
+          try { if (captureNode) captureNode.port.onmessage = null; } catch { /* noop */ }
+          try { captureNode?.disconnect(); } catch { /* noop */ }
           try { inputCtx?.close(); } catch { /* noop */ }
           try { micStream?.getTracks().forEach(t => t.stop()); } catch { /* noop */ }
-          processor = null; inputCtx = null; micStream = null;
+          captureNode = null; inputCtx = null; micStream = null;
           if (!closed) cb.onClose();
         };
       } catch (err: any) {
@@ -244,11 +238,12 @@ export function createAzureRealtimeProvider(
 
     close() {
       closed = true;
-      try { processor?.disconnect(); } catch { /* noop */ }
+      try { if (captureNode) captureNode.port.onmessage = null; } catch { /* noop */ }
+      try { captureNode?.disconnect(); } catch { /* noop */ }
       try { inputCtx?.close(); } catch { /* noop */ }
       try { micStream?.getTracks().forEach(t => t.stop()); } catch { /* noop */ }
       try { ws?.close(); } catch { /* noop */ }
-      ws = null; micStream = null; inputCtx = null; processor = null;
+      ws = null; micStream = null; inputCtx = null; captureNode = null;
       latestFrame = null;
       dispatchedCalls.clear();
     },

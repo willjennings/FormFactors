@@ -5,6 +5,7 @@
 import { GoogleGenAI, Modality, Type } from '@google/genai';
 import type { VoiceProvider, VoiceSessionConfig, VoiceCallbacks, VoiceTool } from './types';
 import { geminiUserTurns } from './frames';
+import { Float32Chunker, floatToPcm16Base64, createPcmCaptureNode } from './pcmCapture';
 
 const MODEL = 'gemini-2.5-flash-native-audio-preview-12-2025';
 
@@ -55,19 +56,20 @@ export function createGeminiProvider(apiKey: string, onSessionReady?: (session: 
   let sessionPromise: Promise<any> | null = null;
   let inputCtx: AudioContext | null = null;
   let micStream: MediaStream | null = null;
-  let processor: ScriptProcessorNode | null = null;
+  let captureNode: AudioWorkletNode | null = null;
   let ended = false;
 
   // Release the mic capture pipeline. MUST run on SERVER-initiated closes too (live smoke
-  // 2026-07-16 console: after the server dropped the session, the ScriptProcessorNode kept
+  // 2026-07-16 console: after the server dropped the session, the capture node kept
   // pumping ~4x/s into the dead socket — endless "WebSocket is already in CLOSING or CLOSED
   // state" spam AND a hot microphone the user never turned off).
   function teardownAudio() {
     ended = true;
-    try { processor?.disconnect(); } catch {}
+    try { if (captureNode) captureNode.port.onmessage = null; } catch {}
+    try { captureNode?.disconnect(); } catch {}
     try { inputCtx?.close(); } catch {}
     try { micStream?.getTracks().forEach(t => t.stop()); } catch {}
-    processor = null; inputCtx = null; micStream = null;
+    captureNode = null; inputCtx = null; micStream = null;
   }
 
   return {
@@ -81,21 +83,26 @@ export function createGeminiProvider(apiKey: string, onSessionReady?: (session: 
           onopen: () => {
             cb.onOpen();
             inputCtx = new AudioContext({ sampleRate: 16000 });
-            const source = inputCtx.createMediaStreamSource(micStream!);
-            processor = inputCtx.createScriptProcessor(4096, 1, 1);
-            const silentGain = inputCtx.createGain();
-            silentGain.gain.value = 0;
-            processor.onaudioprocess = (e) => {
-              if (ended) return; // belt-and-braces: disconnect() can race one last tick
-              const inputData = e.inputBuffer.getChannelData(0);
-              const int16 = new Int16Array(inputData.length);
-              for (let i = 0; i < inputData.length; i++) int16[i] = inputData[i] * 32768;
-              const binary = String.fromCharCode(...new Uint8Array(int16.buffer));
-              sessionPromise?.then(s => { if (!ended) s.sendRealtimeInput({ audio: { data: btoa(binary), mimeType: 'audio/pcm;rate=16000' } }); });
-            };
-            source.connect(processor);
-            processor.connect(silentGain);
-            silentGain.connect(inputCtx.destination);
+            const ctx = inputCtx;
+            const source = ctx.createMediaStreamSource(micStream!);
+            // AudioWorklet capture (ScriptProcessorNode is deprecated): the worklet posts
+            // 128-frame quanta; the chunker rebuilds the old 4096-sample cadence.
+            const chunker = new Float32Chunker((chunk) => {
+              const data = floatToPcm16Base64(chunk);
+              sessionPromise?.then(s => { if (!ended) s.sendRealtimeInput({ audio: { data, mimeType: 'audio/pcm;rate=16000' } }); });
+            });
+            createPcmCaptureNode(ctx, (q) => { if (!ended) chunker.push(q); })
+              .then((node) => {
+                // teardownAudio may have run while addModule was in flight.
+                if (ended || inputCtx !== ctx) { try { node.disconnect(); } catch {} return; }
+                captureNode = node;
+                const silentGain = ctx.createGain();
+                silentGain.gain.value = 0;
+                source.connect(node);
+                node.connect(silentGain);
+                silentGain.connect(ctx.destination);
+              })
+              .catch((err) => cb.onError(`mic capture failed: ${err?.message ?? err}`));
           },
           onmessage: (msg: any) => {
             if (msg.toolCall) {
