@@ -1,0 +1,81 @@
+{
+  "$description": "Design tokens mirrored from src/index.css. Code is canonical — regenerate with `node scripts/tokens-to-figma.mjs`.",
+  "modes": [
+    "Light",
+    "Dark"
+  ],
+  "color": {
+    "bg-color": {
+      "$type": "color",
+      "Light": "#F8F9FC",
+      "Dark": "#121212"
+    },
+    "card-bg": {
+      "$type": "color",
+      "Light": "#ffffff",
+      "Dark": "#1C2938"
+    },
+    "card-border": {
+      "$type": "color",
+      "Light": "#E5E5E5",
+      "Dark": "#2d3748"
+    },
+    "text-primary": {
+      "$type": "color",
+      "Light": "#0f172a",
+      "Dark": "#ffffff"
+    },
+    "text-secondary": {
+      "$type": "color",
+      "Light": "#64748b",
+      "Dark": "#94a3b8"
+    },
+    "inverse-bg": {
+      "$type": "color",
+      "Light": "#1a1a1a",
+      "Dark": "#ffffff"
+    },
+    "inverse-text": {
+      "$type": "color",
+      "Light": "#ffffff",
+      "Dark": "#121212"
+    },
+    "dot-color": {
+      "$type": "color",
+      "Light": "rgba(26, 26, 26, 0.15)",
+      "Dark": "rgba(255, 255, 255, 0.15)"
+    },
+    "accent-color": {
+      "$type": "color",
+      "Light": "#1A74E8",
+      "Dark": "#0076F0"
+    },
+    "inner-box-bg": {
+      "$type": "color",
+      "Light": "#F8F9FC",
+      "Dark": "#0B1829"
+    },
+    "color-box-bg": {
+      "$type": "color",
+      "Light": "#1C2938",
+      "Dark": "#1C2938"
+    }
+  },
+  "fontFamily": {
+    "font-dm": {
+      "$type": "fontFamily",
+      "Light": "DM Sans, sans-serif",
+      "Dark": "DM Sans, sans-serif"
+    },
+    "font-inter": {
+      "$type": "fontFamily",
+      "Light": "Inter, sans-serif",
+      "Dark": "Inter, sans-serif"
+    },
+    "font-mono": {
+      "$type": "fontFamily",
+      "Light": "Roboto Mono, monospace",
+      "Dark": "Roboto Mono, monospace"
+    }
+  }
+}

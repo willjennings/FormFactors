@@ -1,0 +1,24 @@
+// Pure builders for the realtime wire frames used by sendUserText.
+// openai.ts and azure.ts speak the same protocol; gemini uses client-content turns.
+
+export function userTextItemFrame(text: string) {
+  return {
+    type: 'conversation.item.create',
+    item: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] },
+  };
+}
+
+export function responseCreateFrame() {
+  return { type: 'response.create' };
+}
+
+export function imageItemFrame(jpegBase64: string) {
+  return {
+    type: 'conversation.item.create',
+    item: { type: 'message', role: 'user', content: [{ type: 'input_image', image_url: `data:image/jpeg;base64,${jpegBase64}` }] },
+  };
+}
+
+export function geminiUserTurns(text: string) {
+  return { turns: [{ role: 'user', parts: [{ text }] }], turnComplete: true };
+}
