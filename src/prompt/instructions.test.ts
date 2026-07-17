@@ -75,4 +75,13 @@ describe('buildInstructions — honest desktop assistant', () => {
       expect(s).toMatch(/stock feed is SIMULATED/i);
     }
   });
+
+  it('hints are context, never requests (live smoke 2026-07-17: spurious first-turn teach)', () => {
+    for (const s of [honest, confident]) {
+      // Bracketed system updates must never trigger tools or teaching on their own —
+      // the model started an unprompted teach_sequence from the session-open hint burst.
+      expect(s).toMatch(/HINTS ARE CONTEXT, NOT REQUESTS/);
+      expect(s).toMatch(/never (start|begin|launch).*(teach|tool).*(hint|system update|bracketed)/is);
+    }
+  });
 });
