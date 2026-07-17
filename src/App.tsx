@@ -653,7 +653,13 @@ export default function App() {
   const missionDef = missionRun ? MISSIONS.find((m) => m.key === missionRun.key) ?? null : null;
   const missionCommitsRef = useRef<{ verb: string; verbClass: string; program: ProgramId }[]>([]);
   const missionSharesRef = useRef(0);
-  const missionTeachDoneRef = useRef<string[]>([]);
+  // { taskKey, program } — program is recorded HERE from activeProgramRef, not model-authored
+  // (final review I4: taskKeys are a model-authored convention and untrusted for predicates).
+  const missionTeachDoneRef = useRef<{ taskKey: string; program: ProgramId }[]>([]);
+  // World snapshot at run start (final review I2): predicates diff against this, not the
+  // pristine seed or the live corpus, so a re-run (or prior free play) that already satisfies a
+  // predicate does not auto-complete. Set in startMissionRun; read by the advance effect below.
+  const missionBaselineRef = useRef<{ docs: Partial<Record<ProgramId, MockDoc>>; artifactIds: string[] }>({ docs: {}, artifactIds: [] });
   const [missionTick, setMissionTick] = useState(0);
   const recordMissionCommit = (verb: string, verbClass: string) => {
     missionCommitsRef.current = [...missionCommitsRef.current, { verb, verbClass, program: activeProgramRef.current }];
@@ -664,7 +670,7 @@ export default function App() {
   const handleTeachingStateChange = (next: TeachingState) => {
     const prev = teachingSnapshotRef.current;
     if (prev?.sequence && prev.sequence.activeIndex !== null && next.sequence && next.sequence.activeIndex === null) {
-      missionTeachDoneRef.current = [...missionTeachDoneRef.current, prev.sequence.taskKey];
+      missionTeachDoneRef.current = [...missionTeachDoneRef.current, { taskKey: prev.sequence.taskKey, program: activeProgramRef.current }];
       setMissionTick((n) => n + 1);
     }
     setTeachingSnapshot(next);
@@ -2956,7 +2962,7 @@ export default function App() {
   useEffect(() => {
     if (!missionRun || !missionDef || missionRun.completedAt !== null) return;
     const obs: MissionObservables = {
-      docs: fullCorpus, seed: seedCorpus(),
+      docs: fullCorpus, baseline: missionBaselineRef.current,
       artifacts: artifactState.artifacts,
       commits: missionCommitsRef.current,
       sharesCommitted: missionSharesRef.current,
@@ -2964,10 +2970,17 @@ export default function App() {
     };
     const { run, stepsDone, completed } = advanceMission(missionDef, missionRun, obs, Date.now());
     if (!stepsDone.length) return;
+    // The goal channel is the agent's honest view — the mission must never overwrite a goal it
+    // does not own (final review I3). The agent can replace the goal mid-mission (set_goal); if
+    // the live goal is no longer this mission's brief, the run still advances (telemetry, rail
+    // card on completion) but stops touching goal state.
+    const ownsGoal = goalStateRef.current.objective === missionDef.brief;
     for (const i of stepsDone) {
       telemetry.missionStepDone(missionDef.key, missionDef.steps[i].key);
-      const gs = goalStateRef.current.steps[i];
-      if (gs && !gs.done) goalDispatch({ type: 'goal.stepDone', id: gs.id });
+      if (ownsGoal) {
+        const gs = goalStateRef.current.steps[i];
+        if (gs && !gs.done) goalDispatch({ type: 'goal.stepDone', id: gs.id });
+      }
     }
     setMissionRun(run);
     if (completed) {
@@ -2983,7 +2996,7 @@ export default function App() {
         cards: [{ t: 'answer', text: `${missionDef.title} complete — ${missionDef.steps.length} step${missionDef.steps.length === 1 ? '' : 's'}, ${mm}:${String(ss).padStart(2, '0')}`, band: 'solid', state: 'done' }],
         activeIndex: null, startedAt: Date.now(),
       } });
-      goalDispatch({ type: 'goal.clear' });
+      if (ownsGoal) goalDispatch({ type: 'goal.clear' });
       // The run is over — the rail card is the record. Clearing missionRun returns the panel
       // to the picker list (Task 4 drive: a completed run left a stale title-only strip).
       setMissionRun(null);
@@ -3147,6 +3160,13 @@ export default function App() {
       telemetry.missionAbandoned(missionRun.key, missionRun.stepIndex);
     }
     missionCommitsRef.current = []; missionSharesRef.current = 0; missionTeachDoneRef.current = [];
+    // Baseline snapshot (final review I2): the world AS OF right now, before this run's steps
+    // can touch it. Same fullCorpus composition (corpus + the live active doc) the advance
+    // effect reads; deep-cloned so later mutations to corpus/mockDoc can't leak into it.
+    missionBaselineRef.current = {
+      docs: JSON.parse(JSON.stringify(fullCorpus)),
+      artifactIds: artifactState.artifacts.map((a) => a.id),
+    };
     if (activeProgram !== def.program) handleProgramChange(def.program);
     goalDispatch({ type: 'goal.set', objective: def.brief, steps: def.steps.map((s) => ({ label: s.subgoal })) });
     telemetry.missionStart(key, missionRuns[key] ?? 0);
@@ -3155,7 +3175,9 @@ export default function App() {
   const abandonMission = () => {
     if (missionRun && missionRun.completedAt === null) {
       telemetry.missionAbandoned(missionRun.key, missionRun.stepIndex);
-      goalDispatch({ type: 'goal.clear' });
+      // Guarded the same way as the advance effect's completion branch (final review I3): don't
+      // clear a goal the agent has since replaced.
+      if (missionDef && goalStateRef.current.objective === missionDef.brief) goalDispatch({ type: 'goal.clear' });
     }
     setMissionRun(null);
   };

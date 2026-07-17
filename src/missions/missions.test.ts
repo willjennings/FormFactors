@@ -6,8 +6,10 @@ import { seedCorpus } from '../artifacts/seeds';
 import type { MissionObservables } from './types';
 
 const seed = seedCorpus();
+// Default baseline: the pristine world, no prior artifacts — matches a fresh first run.
+const emptyBaseline = { docs: seed, artifactIds: [] as string[] };
 const base = (): MissionObservables => ({
-  docs: { ...seed }, seed, artifacts: [], commits: [], sharesCommitted: 0, teachingCompleted: [],
+  docs: { ...seed }, baseline: emptyBaseline, artifacts: [], commits: [], sharesCommitted: 0, teachingCompleted: [],
 });
 const byKey = (k: string) => MISSIONS.find((m) => m.key === k)!;
 
@@ -37,7 +39,7 @@ describe('runStore — in-order deterministic advance (spec §3/§8)', () => {
     expect(r.stepsDone).toEqual([]);
     // Teach sequence completes → step 0 done; the earlier file commit is STILL visible in obs,
     // so step 1 completes in the same advance (both conditions now hold, order preserved):
-    r = advanceMission(def, r.run, { ...base(), commits: [{ verb: 'save_file', verbClass: 'mutate', program: 'word' }], teachingCompleted: ['word.save'] }, 1002);
+    r = advanceMission(def, r.run, { ...base(), commits: [{ verb: 'save_file', verbClass: 'mutate', program: 'word' }], teachingCompleted: [{ taskKey: 'word.save', program: 'word' }] }, 1002);
     expect(r.stepsDone).toEqual([0, 1]);
     expect(r.completed).toBe(true);
     expect(r.run.completedAt).toBe(1002);
@@ -45,10 +47,22 @@ describe('runStore — in-order deterministic advance (spec §3/§8)', () => {
   it('learn-tools: teach completion alone lands on step 1, not completed', () => {
     const def = byKey('learn-tools');
     const run = startMission(def, 0);
-    const r = advanceMission(def, run, { ...base(), teachingCompleted: ['word.save'] }, 1);
+    const r = advanceMission(def, run, { ...base(), teachingCompleted: [{ taskKey: 'word.save', program: 'word' }] }, 1);
     expect(r.run.stepIndex).toBe(1);
     expect(r.stepsDone).toEqual([0]);
     expect(r.completed).toBe(false);
+  });
+  it('learn-tools: any completed word teach sequence counts regardless of taskKey (final review I4 — taskKeys are model-authored, untrusted)', () => {
+    const def = byKey('learn-tools');
+    const run = startMission(def, 0);
+    const r = advanceMission(def, run, { ...base(), teachingCompleted: [{ taskKey: 'saving-a-doc', program: 'word' }] }, 1);
+    expect(r.stepsDone).toEqual([0]);
+  });
+  it('learn-tools: a teach sequence completed in a different program does not count', () => {
+    const def = byKey('learn-tools');
+    const run = startMission(def, 0);
+    const r = advanceMission(def, run, { ...base(), teachingCompleted: [{ taskKey: 'word.save', program: 'excel' }] }, 1);
+    expect(r.stepsDone).toEqual([]);
   });
   it('ship-brief: sheet fixed → combine doc from word+excel → share', () => {
     const def = byKey('ship-brief');
@@ -56,10 +70,10 @@ describe('runStore — in-order deterministic advance (spec §3/§8)', () => {
     const fixedExcel = { ...seed.excel, cells: { ...(seed.excel as any).cells, B4: '22%' } } as any;
     let r = advanceMission(def, run, { ...base(), docs: { ...seed, excel: fixedExcel } }, 1);
     expect(r.run.stepIndex).toBe(1);
-    r = advanceMission(def, r.run, { ...base(), docs: { ...seed, excel: fixedExcel }, artifacts: [{ kind: 'doc', sources: ['word', 'excel'] }] }, 2);
+    r = advanceMission(def, r.run, { ...base(), docs: { ...seed, excel: fixedExcel }, artifacts: [{ id: 'a1', kind: 'doc', sources: ['word', 'excel'] }] }, 2);
     expect(r.run.stepIndex).toBe(2);
     expect(r.completed).toBe(false);
-    r = advanceMission(def, r.run, { ...base(), docs: { ...seed, excel: fixedExcel }, artifacts: [{ kind: 'doc', sources: ['word', 'excel'] }], sharesCommitted: 1 }, 3);
+    r = advanceMission(def, r.run, { ...base(), docs: { ...seed, excel: fixedExcel }, artifacts: [{ id: 'a1', kind: 'doc', sources: ['word', 'excel'] }], sharesCommitted: 1 }, 3);
     expect(r.completed).toBe(true);
   });
   it('ship-brief: unmodified seed docs do not advance step 0', () => {
@@ -73,15 +87,15 @@ describe('runStore — in-order deterministic advance (spec §3/§8)', () => {
     const def = byKey('glance-numbers');
     let run = startMission(def, 0);
     // stock alone is not enough:
-    let r = advanceMission(def, run, { ...base(), artifacts: [{ kind: 'widget', sources: ['word', 'excel'], fields: [{ feed: 'stock' }] }] }, 1);
+    let r = advanceMission(def, run, { ...base(), artifacts: [{ id: 'a1', kind: 'widget', sources: ['word', 'excel'], fields: [{ feed: 'stock' }] }] }, 1);
     expect(r.completed).toBe(false);
-    r = advanceMission(def, r.run, { ...base(), artifacts: [{ kind: 'widget', sources: ['word', 'excel'], fields: [{ feed: 'stock' }, { feed: 'clock' }] }] }, 2);
+    r = advanceMission(def, r.run, { ...base(), artifacts: [{ id: 'a1', kind: 'widget', sources: ['word', 'excel'], fields: [{ feed: 'stock' }, { feed: 'clock' }] }] }, 2);
     expect(r.completed).toBe(true);
   });
   it('glance-numbers: right feeds but wrong sources does NOT complete (spec §4.3: built FROM word+excel)', () => {
     const def = byKey('glance-numbers');
     const run = startMission(def, 0);
-    const r = advanceMission(def, run, { ...base(), artifacts: [{ kind: 'widget', sources: ['powerpoint', 'photo'], fields: [{ feed: 'stock' }, { feed: 'clock' }] }] }, 1);
+    const r = advanceMission(def, run, { ...base(), artifacts: [{ id: 'a1', kind: 'widget', sources: ['powerpoint', 'photo'], fields: [{ feed: 'stock' }, { feed: 'clock' }] }] }, 1);
     expect(r.completed).toBe(false);
     expect(r.run.stepIndex).toBe(0);
   });
@@ -110,6 +124,44 @@ describe('runStore — in-order deterministic advance (spec §3/§8)', () => {
     const done = { key: def.key, stepIndex: def.steps.length, startedAt: 0, completedAt: 5 };
     const r = advanceMission(def, done, base(), 9);
     expect(r).toEqual({ run: done, stepsDone: [], completed: false });
+  });
+});
+
+describe('run-baselined predicates (final review I2): a re-run over a world that already satisfies every predicate does not complete', () => {
+  it('ship-brief: baseline already has the fixed sheet and the qualifying artifact id → run again does not advance', () => {
+    const def = byKey('ship-brief');
+    const fixedExcel = { ...seed.excel, cells: { ...(seed.excel as any).cells, B4: '22%' } } as any;
+    const baseline = { docs: { ...seed, excel: fixedExcel }, artifactIds: ['a1'] };
+    const run = startMission(def, 0);
+    const r = advanceMission(def, run, {
+      ...base(), baseline,
+      docs: { ...seed, excel: fixedExcel },
+      artifacts: [{ id: 'a1', kind: 'doc', sources: ['word', 'excel'] }],
+    }, 1);
+    expect(r.completed).toBe(false);
+    expect(r.run.stepIndex).toBe(0);
+    expect(r.stepsDone).toEqual([]);
+  });
+  it('glance-numbers: a widget already present at run start (its id in the baseline, e.g. free play or a prior run) does not complete step 0', () => {
+    const def = byKey('glance-numbers');
+    const baseline = { docs: seed, artifactIds: ['a1'] };
+    const run = startMission(def, 0);
+    const r = advanceMission(def, run, {
+      ...base(), baseline,
+      artifacts: [{ id: 'a1', kind: 'widget', sources: ['word', 'excel'], fields: [{ feed: 'stock' }, { feed: 'clock' }] }],
+    }, 1);
+    expect(r.completed).toBe(false);
+    expect(r.stepsDone).toEqual([]);
+  });
+  it('fix-deck: last slide already names Riverside Tower in the baseline (no fresh edit this run) does not complete', () => {
+    const def = byKey('fix-deck');
+    const seedSlides = (seed.powerpoint as any).slides as string[];
+    const retitled = { ...seed.powerpoint, slides: [...seedSlides.slice(0, -1), 'Riverside Tower — closing summary'] } as any;
+    const baseline = { docs: { ...seed, powerpoint: retitled }, artifactIds: [] as string[] };
+    const run = startMission(def, 0);
+    const r = advanceMission(def, run, { ...base(), baseline, docs: { ...seed, powerpoint: retitled } }, 1);
+    expect(r.completed).toBe(false);
+    expect(r.stepsDone).toEqual([]);
   });
 });
 

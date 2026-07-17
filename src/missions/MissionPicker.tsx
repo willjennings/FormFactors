@@ -4,7 +4,13 @@ import { Button } from '../ui/Button';
 import type { MissionDef, MissionRun } from './types';
 
 /** Floating mission panel (window family styling — see WhiteboardPanel). Picker when idle;
- *  slim strip while a run is active. Hints show ONLY on run 0 (spec §5 fade). */
+ *  slim strip while a run is active. Hints show ONLY on run 0 (spec §5 fade).
+ *  Both root divs carry `data-shell` (final review I1): App's pointer handlers skip touch-deixis
+ *  and paint over `[data-shell]` surfaces that carry no `[data-entity-id]` content, so clicking
+ *  "Start" or the abandon × no longer registers a false deixis point. No onPointerDown
+ *  stopPropagation — that broke the custom cursor over other shell surfaces (see the
+ *  handlePointerMove/handlePointerDown carve-out comments in App.tsx); data-shell alone is what
+ *  the handlers key off. */
 export function MissionPicker({ missions, runs, active, activeDef, open, onStart, onAbandon, onClose }: {
   missions: MissionDef[];
   runs: Record<string, number>;          // completed-run counts (fade source)
@@ -20,7 +26,7 @@ export function MissionPicker({ missions, runs, active, activeDef, open, onStart
     const step = activeDef.steps[active.stepIndex];
     const fade = (runs[activeDef.key] ?? 0) > 0;
     return (
-      <div className="absolute top-10 right-4 z-40 w-72 rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] shadow-lg px-4 py-3 pointer-events-auto" role="status" aria-label="Active mission">
+      <div className="absolute top-10 right-4 z-40 w-72 rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] shadow-lg px-4 py-3 pointer-events-auto" role="status" aria-label="Active mission" data-shell>
         <div className="flex items-center justify-between">
           <span className="text-[10px] font-mono uppercase tracking-widest text-[var(--text-secondary)]">{activeDef.title}</span>
           <button aria-label="Abandon mission" onClick={onAbandon} className="text-[var(--text-secondary)] hover:text-[var(--text-primary)]"><X size={12} /></button>
@@ -35,7 +41,7 @@ export function MissionPicker({ missions, runs, active, activeDef, open, onStart
     );
   }
   return (
-    <div className="absolute top-10 right-4 z-40 w-80 rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] shadow-lg p-3 pointer-events-auto" role="dialog" aria-label="Missions">
+    <div className="absolute top-10 right-4 z-40 w-80 rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] shadow-lg p-3 pointer-events-auto" role="dialog" aria-label="Missions" data-shell>
       <div className="flex items-center justify-between mb-2">
         <span className="text-[10px] font-mono uppercase tracking-widest text-[var(--text-secondary)]">Missions</span>
         <button aria-label="Close missions" onClick={onClose} className="text-[var(--text-secondary)] hover:text-[var(--text-primary)]"><X size={12} /></button>
