@@ -1446,6 +1446,8 @@ export default function App() {
         addLog('event', `Simulated: ${intent} → ${target}${details ? `: ${details}` : ''}`);
         setActRequest({ target, intent, details, confirmed: true });
         emitFeedback({ outcome: 'committed', verbClass: 'share', label: `${intent} → ${target} (simulated)` });
+        missionSharesRef.current += 1;
+        setMissionTick((n) => n + 1);
         ack({ success: true, simulated: true });
         providerRef.current?.sendTextHint('[SYSTEM: that was SIMULATED — nothing was really sent, booked, or dialed. Do not claim a real action happened.]');
       }
@@ -1634,6 +1636,8 @@ export default function App() {
     if (!shareRequest || shareRequest.confirmed) return;
     setShareRequest({ ...shareRequest, confirmed: true });
     emitFeedback({ outcome: 'committed', verbClass: 'share', label: `Shared with ${shareRequest.recipient}` });
+    missionSharesRef.current += 1;
+    setMissionTick((n) => n + 1);
     providerRef.current?.sendTextHint('[SYSTEM: the user confirmed the share via button — it was sent. Do not re-call the tool; do not acknowledge.]');
   };
   const cancelShare = () => {
@@ -1645,6 +1649,8 @@ export default function App() {
     if (!actRequest || actRequest.confirmed) return;
     setActRequest({ ...actRequest, confirmed: true });
     emitFeedback({ outcome: 'committed', verbClass: 'share', label: `${actRequest.intent} → ${actRequest.target} (simulated)` });
+    missionSharesRef.current += 1;
+    setMissionTick((n) => n + 1);
     providerRef.current?.sendTextHint('[SYSTEM: the user confirmed the action via button — it was SIMULATED (nothing really sent/booked). Do not re-call the tool; do not acknowledge.]');
   };
   const cancelAct = () => {
