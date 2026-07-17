@@ -8,9 +8,16 @@ import type { ArtifactState } from './types';
 type Layout = Record<string, [number, number, number, number]>;
 
 export function artifactEntities(state: ArtifactState, layout: Layout): SceneEntity[] {
+  // "the doc"/"the widget" only while unambiguous: with two artifacts of one kind the alias
+  // would resolve to one of them silently — drop it and let id/title carry the reference.
+  const kindCount = new Map<string, number>();
+  for (const a of state.artifacts) kindCount.set(a.kind, (kindCount.get(a.kind) ?? 0) + 1);
   return state.artifacts.map((a) => {
     const id = `artifact-${a.id}`;
-    const aliases = Array.from(new Set([normText(a.id), normText(a.title), normText(`the ${a.kind}`)]));
+    const aliases = Array.from(new Set([
+      normText(a.id), normText(a.title),
+      ...(kindCount.get(a.kind) === 1 ? [normText(`the ${a.kind}`)] : []),
+    ]));
     return {
       id: asId(id),
       title: a.title,

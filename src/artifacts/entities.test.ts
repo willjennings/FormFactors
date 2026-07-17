@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { artifactEntities } from './entities';
+import { initialArtifactState, reduce } from './artifactStore';
 import type { ArtifactState } from './types';
 
 const state: ArtifactState = {
@@ -34,5 +35,22 @@ describe('artifactEntities', () => {
 
   it('empty artifact state yields no entities', () => {
     expect(artifactEntities({ artifacts: [], nextId: 1, rejectedAtCap: 0 }, {})).toEqual([]);
+  });
+});
+
+describe('kind-alias collision (final review M3 — "the doc" must not silently pick one of two)', () => {
+  const mk = (title: string) => ({ type: 'artifact.create' as const, artifact: { kind: 'doc' as const, title, sources: ['word', 'excel'], content: 'x', createdAt: 1 } });
+  it('a lone doc artifact keeps the "the doc" alias', () => {
+    const st = reduce(initialArtifactState(), mk('Summary'));
+    const es = artifactEntities(st, {});
+    expect(es[0].aliases).toContain('the doc');
+  });
+  it('two doc artifacts → NEITHER carries the ambiguous kind alias; titles still resolve', () => {
+    let st = reduce(initialArtifactState(), mk('Summary'));
+    st = reduce(st, mk('Update'));
+    const es = artifactEntities(st, {});
+    for (const e of es) expect(e.aliases).not.toContain('the doc');
+    expect(es[0].aliases).toContain('summary');
+    expect(es[1].aliases).toContain('update');
   });
 });

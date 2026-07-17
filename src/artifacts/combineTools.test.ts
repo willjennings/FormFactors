@@ -58,7 +58,7 @@ describe('combine validation (spec §4/§5/§7)', () => {
       const after = reduce(arts, r.event!);
       expect(after.artifacts).toHaveLength(MAX_ARTIFACTS);
       expect(after.rejectedAtCap).toBe(arts.rejectedAtCap + 1);
-      expect(serializeArtifacts(after)).toContain(`1 creations were rejected at the ${MAX_ARTIFACTS}-artifact cap`);
+      expect(serializeArtifacts(after)).toContain(`1 creation was rejected at the ${MAX_ARTIFACTS}-artifact cap`);
     }
   });
   it('non-cap validation failures carry NO atCap/event — nothing to dispatch', () => {
@@ -146,5 +146,42 @@ describe('sourceDetail (read_sources → [CORPUS DETAIL])', () => {
     const d = sourceDetail('photo', corpus, initialArtifactState())!;
     expect(d).toContain('Riverside Tower');
     expect(d).toContain('caption');
+  });
+});
+
+describe('duplicate-combine gate (live smoke 2026-07-16: model repetition created one artifact 3x in a turn)', () => {
+  const dupArgs = { sources: ['word', 'excel'], kind: 'doc', title: 'Project Update', content: 'x' };
+  it('same title + same sources as an EXISTING artifact → honest rejection naming it', () => {
+    const st = reduce(initialArtifactState(), { type: 'artifact.create', artifact: { kind: 'doc', title: 'Project Update', sources: ['word', 'excel'], content: 'v1', createdAt: 1 } });
+    const r = validateCombineCall(dupArgs, corpus, st, now);
+    expect('error' in r && r.error).toMatch(/a1/);
+    expect('error' in r && r.error).toMatch(/already/i);
+    expect((r as { event?: unknown }).event).toBeUndefined(); // nothing to dispatch — not a cap rejection
+  });
+  it('title match is case-insensitive and source order does not matter', () => {
+    const st = reduce(initialArtifactState(), { type: 'artifact.create', artifact: { kind: 'doc', title: 'project update', sources: ['excel', 'word'], content: 'v1', createdAt: 1 } });
+    const r = validateCombineCall(dupArgs, corpus, st, now);
+    expect('error' in r).toBe(true);
+  });
+  it('same title with DIFFERENT sources is a legitimate new artifact', () => {
+    const st = reduce(initialArtifactState(), { type: 'artifact.create', artifact: { kind: 'doc', title: 'Project Update', sources: ['word', 'photo'], content: 'v1', createdAt: 1 } });
+    const r = validateCombineCall(dupArgs, corpus, st, now);
+    expect('event' in r && r.event?.type).toBe('artifact.create');
+  });
+  it('re-creating after the user closed the original is allowed (no ghost cooldown state)', () => {
+    let st = reduce(initialArtifactState(), { type: 'artifact.create', artifact: { kind: 'doc', title: 'Project Update', sources: ['word', 'excel'], content: 'v1', createdAt: 1 } });
+    st = reduce(st, { type: 'artifact.close', id: 'a1' });
+    const r = validateCombineCall(dupArgs, corpus, st, now);
+    expect('event' in r && r.event?.type).toBe('artifact.create');
+  });
+});
+
+describe('sourceDetail feed provenance (final review M2 — the one surface the provenance pass missed)', () => {
+  it('widget detail carries the same LIVE/SIMULATED summary as hint and chips', () => {
+    const st = reduce(initialArtifactState(), { type: 'artifact.create', artifact: {
+      kind: 'widget', title: 'Board', sources: ['word', 'excel'], createdAt: 1,
+      fields: [{ label: 'Time', feed: 'clock' }, { label: 'MERI', feed: 'stock' }] } });
+    const d = sourceDetail('a1', corpus, st)!;
+    expect(d).toContain('feeds: clock LIVE, stock SIMULATED');
   });
 });

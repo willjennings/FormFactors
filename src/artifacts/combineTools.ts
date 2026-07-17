@@ -5,7 +5,7 @@ import type { MockDoc, ProgramId } from '../scenarios';
 import { serializeMockDoc } from '../scenarios';
 import type { Artifact, ArtifactState, ArtifactEvent, FeedId, WidgetField } from './types';
 import { reduce as artifactReduce, MAX_ARTIFACTS } from './artifactStore';
-import { FEEDS } from './feeds';
+import { FEEDS, feedsSummary } from './feeds';
 
 export const COMBINE_TOOL: VoiceTool = {
   name: 'combine',
@@ -57,7 +57,12 @@ export function sourceDetail(
   id: string, corpus: Partial<Record<ProgramId, MockDoc>>, artifacts: ArtifactState,
 ): string | null {
   const art = artifacts.artifacts.find((a) => a.id === id);
-  if (art) return `${art.id} "${art.title}" (${art.kind}, from: ${art.sources.join(' + ')}): ${art.content ?? art.fields?.map((f) => `${f.label}: ${f.value ?? f.feed}`).join('; ') ?? ''}`;
+  if (art) {
+    // Widget details carry the same per-feed provenance as the hint/ack/chips (feedsSummary
+    // is the single source) — read_sources was the one surface the provenance pass missed.
+    const feeds = art.kind === 'widget' ? feedsSummary(art.fields) : null;
+    return `${art.id} "${art.title}" (${art.kind}, from: ${art.sources.join(' + ')}${feeds ? `; feeds: ${feeds}` : ''}): ${art.content ?? art.fields?.map((f) => `${f.label}: ${f.value ?? f.feed}`).join('; ') ?? ''}`;
+  }
   const doc = corpus[id as ProgramId];
   if (!doc) return null;
   return `${id}: ${serializeMockDoc(doc)}`; // photo → its caption line, never pixels
@@ -70,10 +75,22 @@ export function validateCombineCall(
   const sources: string[] = Array.isArray(args?.sources) ? [...new Set<string>(args.sources.map(String))] : [];
   if (sources.length < 2) return { error: 'combine needs at least 2 sources — for a single target use the ordinary editing/creation verbs instead.' };
   const resolved = resolveSources(sources, corpus, artifacts);
-  if ('error' in (resolved as any)) return resolved as { error: string };
+  if (!Array.isArray(resolved)) return resolved;
   const kind = args?.kind === 'widget' ? 'widget' : 'doc';
   const title = String(args?.title ?? '').trim();
   if (!title) return { error: 'combine needs a non-empty title.' };
+
+  // Duplicate gate (live smoke 2026-07-16: model repetition created one artifact 3× in a
+  // turn). Same title + same source set as a LIVE artifact is a repeat, not a new creation —
+  // reject honestly naming the existing id. Closing the original clears the gate: the check
+  // is against present state only, never a ghost cooldown.
+  const sourceKey = [...sources].sort().join('+');
+  const dup = artifacts.artifacts.find((a) =>
+    a.title.trim().toLowerCase() === title.toLowerCase() &&
+    [...a.sources].sort().join('+') === sourceKey);
+  if (dup) {
+    return { error: `${dup.id} "${dup.title}" already exists with exactly these sources — it is on screen now. Do not create it again; vary the title or sources only if the user asked for something different.` };
+  }
 
   let artifact: Omit<Artifact, 'id'>;
   if (kind === 'widget') {

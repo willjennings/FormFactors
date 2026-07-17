@@ -8,10 +8,10 @@ import { FEEDS } from './feeds';
 // with its OLD timestamp, never a stale value passing as fresh (spec §8/§9).
 interface FieldStatus { value?: string; updatedAt?: number; failed: boolean }
 
+// Same locale format as the clock feed's value — a clock reading "2:30:05 PM" must not sit
+// over an "updated 14:30:05" stamp (final review M5).
 function fmtStamp(ts: number): string {
-  const d = new Date(ts);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  return new Date(ts).toLocaleTimeString();
 }
 
 // A synthesized artifact rendered as a floating window (whiteboard-panel styling family).

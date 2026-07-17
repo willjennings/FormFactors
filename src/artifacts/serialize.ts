@@ -20,13 +20,19 @@ export function serializeCorpus(corpus: Partial<Record<ProgramId, MockDoc>>): st
 }
 
 export function serializeArtifacts(state: ArtifactState): string | null {
-  if (!state.artifacts.length && state.rejectedAtCap === 0) return null;
+  if (!state.artifacts.length && state.rejectedAtCap === 0) {
+    // Boot (nothing ever created) stays silent; but once artifacts HAVE existed, an empty
+    // desk must be said out loud — a model that saw a1 keeps believing in it otherwise
+    // (final review M1: the map self-corrected only through a failed combine).
+    if (state.nextId === 1) return null;
+    return '[ARTIFACTS: none — the user closed every artifact window. DO NOT acknowledge this update.]';
+  }
   // Widget entries append per-field feed provenance (spec §8): the hint carries the same
   // LIVE/SIMULATED labels the chips render, so the model never claims simulated data is real.
   const items = state.artifacts.map((a) => {
     const feeds = a.kind === 'widget' ? feedsSummary(a.fields) : null;
     return `${a.id} "${a.title}" (${a.kind}, from: ${a.sources.join(' + ')}${feeds ? `; feeds: ${feeds}` : ''})`;
   });
-  const capNote = state.rejectedAtCap > 0 ? ` ${state.rejectedAtCap} creations were rejected at the ${MAX_ARTIFACTS}-artifact cap — the user must close one first.` : '';
+  const capNote = state.rejectedAtCap > 0 ? ` ${state.rejectedAtCap} creation${state.rejectedAtCap === 1 ? ' was' : 's were'} rejected at the ${MAX_ARTIFACTS}-artifact cap — the user must close one first.` : '';
   return `[ARTIFACTS: ${items.join('; ') || 'none'}.${capNote} Artifacts are valid combine sources. DO NOT acknowledge this update.]`;
 }

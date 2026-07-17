@@ -36,8 +36,11 @@ function readStock(now: number): string {
 
 async function readWeather(_now: number): Promise<string> {
   try {
+    // A hung request must become the honest "feed unavailable" path, not a field stuck on
+    // "…" until the 10-minute refresh re-arms (final review M4).
     const res = await fetch(
       'https://api.open-meteo.com/v1/forecast?latitude=40.71&longitude=-74.01&current=temperature_2m,weather_code',
+      { signal: AbortSignal.timeout(5000) },
     );
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();

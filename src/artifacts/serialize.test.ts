@@ -47,3 +47,21 @@ describe('serializeArtifacts', () => {
     expect(s).not.toContain('feeds:');
   });
 });
+
+describe('[ARTIFACTS] retraction + cap-note grammar (final review M1 + nit)', () => {
+  it('boot state (nothing ever created) stays null — no session-start noise', () => {
+    expect(serializeArtifacts(initialArtifactState())).toBeNull();
+  });
+  it('empty AFTER artifacts existed → explicit "none" retraction so the model\'s map stays current', () => {
+    let st = reduce(initialArtifactState(), { type: 'artifact.create', artifact: { kind: 'doc', title: 'T', sources: ['word', 'excel'], content: 'x', createdAt: 1 } });
+    st = reduce(st, { type: 'artifact.close', id: 'a1' });
+    const s = serializeArtifacts(st)!;
+    expect(s).toMatch(/\[ARTIFACTS: none/);
+    expect(s).toMatch(/closed/i);
+    expect(s).toContain('DO NOT acknowledge');
+  });
+  it('a single rejection reads "1 creation was rejected", not "1 creations were"', () => {
+    const st = { ...initialArtifactState(), rejectedAtCap: 1 };
+    expect(serializeArtifacts(st)).toContain('1 creation was rejected');
+  });
+});
