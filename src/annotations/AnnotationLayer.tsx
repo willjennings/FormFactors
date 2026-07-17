@@ -5,7 +5,9 @@ import type { AnnotationState, AnnotationEvent } from './types';
 import { initialAnnotationState, reduce } from './annotationStore';
 import { bboxOf, center, unionBbox, placementPoint } from './geometry';
 import { buildIllustrateScript } from './illustrateDemo';
-import { seedFrom, roughLine, roughRect, roughEllipse, roughArc, roughArrowhead } from '../ink/rough';
+import { seedFrom, roughLine } from '../ink/rough';
+import { inkLine, inkQuad, inkRect, inkEllipse, inkArrowhead } from '../ink/stroke';
+import { useAspect } from '../ink/useAspect';
 
 const pct = (v: number) => v / 10; // 0-1000 → percent (SVG viewBox is 0..100)
 
@@ -21,6 +23,7 @@ const INK = 'rgb(99,102,241)'; // indigo — matches the relate arc
 
 export function AnnotationLayer({ entities, program, demo = false, dispatchRef, onStateChange }: Props) {
   const [state, dispatch] = useReducer(reduce, undefined, initialAnnotationState);
+  const [svgRef, aspect] = useAspect<SVGSVGElement>();
 
   useEffect(() => {
     if (!dispatchRef) return;
@@ -47,7 +50,7 @@ export function AnnotationLayer({ entities, program, demo = false, dispatchRef, 
 
   return (
     <div className="absolute inset-0 z-[55] pointer-events-none" data-annotation-layer>
-      <svg className="absolute inset-0 w-full h-full overflow-visible" viewBox="0 0 100 100" preserveAspectRatio="none">
+      <svg ref={svgRef} className="absolute inset-0 w-full h-full overflow-visible" viewBox="0 0 100 100" preserveAspectRatio="none">
         {state.annotations.map((a) => {
           if (a.kind === 'arrow') {
             const bf = bboxOf(entities, a.from), bt = bboxOf(entities, a.to);
@@ -56,10 +59,10 @@ export function AnnotationLayer({ entities, program, demo = false, dispatchRef, 
             const mx = (pct(p.x) + pct(q.x)) / 2, my = (pct(p.y) + pct(q.y)) / 2 - 6;
             const angle = Math.atan2(pct(q.y) - my, pct(q.x) - mx); // approach direction from ctrl → tip
             return (
-              <g key={a.id} stroke={INK} fill="none" strokeWidth="0.4" strokeLinecap="round">
-                <path d={roughArc(pct(p.x), pct(p.y), mx, my, pct(q.x), pct(q.y), seedFrom(a.id))} vectorEffect="non-scaling-stroke" />
-                <path d={roughArrowhead(pct(q.x), pct(q.y), angle, seedFrom(a.id + '/head'))} vectorEffect="non-scaling-stroke" />
-                {a.label && <text x={mx} y={my - 1} textAnchor="middle" fontSize={3.2} stroke="none" className="fill-indigo-500 font-ink">{a.label}</text>}
+              <g key={a.id} fill={INK}>
+                <path d={inkQuad(pct(p.x), pct(p.y), mx, my, pct(q.x), pct(q.y), seedFrom(a.id), { aspect })} />
+                <path d={inkArrowhead(pct(q.x), pct(q.y), angle, seedFrom(a.id + '/head'), { aspect })} />
+                {a.label && <text x={mx} y={my - 1} textAnchor="middle" fontSize={3.2} className="fill-indigo-500 font-ink">{a.label}</text>}
               </g>
             );
           }
@@ -68,15 +71,15 @@ export function AnnotationLayer({ entities, program, demo = false, dispatchRef, 
             if (!u) return null;
             const x = pct(u[1]) - 1, y = pct(u[0]) - 1, w = pct(u[3] - u[1]) + 2, h = pct(u[2] - u[0]) + 2;
             const d = a.shape === 'circle'
-              ? roughEllipse(x + w / 2, y + h / 2, w / 2, h / 2, seedFrom(a.id))
+              ? inkEllipse(x + w / 2, y + h / 2, w / 2, h / 2, seedFrom(a.id), { aspect })
               : a.shape === 'box'
-                ? roughRect(x, y, w, h, seedFrom(a.id))
-                : [roughLine(x, y, x - 1.5, y, seedFrom(a.id)),
-                   roughLine(x - 1.5, y, x - 1.5, y + h, seedFrom(a.id + '/2')),
-                   roughLine(x - 1.5, y + h, x, y + h, seedFrom(a.id + '/3'))].join(' ');
+                ? inkRect(x, y, w, h, seedFrom(a.id), { aspect })
+                : [inkLine(x, y, x - 1.5, y, seedFrom(a.id), { aspect }),
+                   inkLine(x - 1.5, y, x - 1.5, y + h, seedFrom(a.id + '/2'), { aspect }),
+                   inkLine(x - 1.5, y + h, x, y + h, seedFrom(a.id + '/3'), { aspect })].join(' ');
             return (
               <g key={a.id}>
-                <path d={d} fill="none" stroke={INK} strokeWidth="0.4" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+                <path d={d} fill={INK} />
                 {a.label && <text x={x + w / 2} y={y - 1} textAnchor="middle" fontSize={3.2} className="fill-indigo-500 font-ink">{a.label}</text>}
               </g>
             );
