@@ -69,6 +69,18 @@ describe('rough ink — deterministic hand-drawn paths (spec §3)', () => {
       expect(Math.hypot(sn[sn.length - 2] - 50, sn[sn.length - 1] - 50)).toBeLessThan(0.6);
     }
   });
+  it('RING_OPTS (teaching ring, pixel space) keeps coordinates within the box + 8.2 on a wide-short target', () => {
+    // Mirrors TeachingLayer's RING_OPTS: {bow:2, jitter:1.2, overshoot:5, passes:1}. Budget
+    // = overshoot 5 + jitter 1.2 + bow 2 = 8.2px, measured against a 500×60 ribbon-shaped box
+    // (the shape that broke the old percent-space ring — see spec §5.3 pixel-space note).
+    const RING_OPTS = { bow: 2, jitter: 1.2, overshoot: 5, passes: 1 as const };
+    const RING_BUDGET = 8.2;
+    const d = roughRect(3, 3, 500, 60, seedFrom('ring1'), RING_OPTS);
+    for (const [i, v] of nums(d).entries()) {
+      if (i % 2 === 0) { expect(v).toBeGreaterThanOrEqual(3 - RING_BUDGET); expect(v).toBeLessThanOrEqual(503 + RING_BUDGET); }
+      else { expect(v).toBeGreaterThanOrEqual(3 - RING_BUDGET); expect(v).toBeLessThanOrEqual(63 + RING_BUDGET); }
+    }
+  });
   it('passes: 2 emits a second stroke for every primitive', () => {
     const o = { ...INK_OPTS, passes: 2 as const };
     const one = roughLine(0, 0, 10, 0, seedFrom('p'), INK_OPTS);

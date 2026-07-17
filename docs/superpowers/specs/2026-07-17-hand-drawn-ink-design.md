@@ -70,14 +70,25 @@ current fonts. The step-label pill and toasts are chrome — mono stays.
    teach highlights), user ink remains graphite. Wobble is deterministic and consistent —
    styling reads "sketched," never "a live human hand." No color/width changes that could
    blur the two-ink distinction.
-2. **Perception fidelity.** Plain SVG paths + a webfont only — both already rasterize
-   through the existing html-to-image snapshot seam (labels already use a webfont today).
-   NO SVG filters, NO external images, nothing that could make the model's vision frame
-   diverge from the user's screen.
+2. **Perception fidelity.** Plain SVG paths + a webfont only — NO SVG filters, NO external
+   images, nothing that could make the model's vision frame diverge from the user's screen.
+   The webfont label switch initially shipped on top of `snapshotNode`'s `skipFonts: true`,
+   which meant every label rasterized in a fallback face in the model's frame while the
+   screen showed Caveat (final review, 2026-07-18). Fixed: `snapshotNode` now embeds fonts
+   via a session-cached `getFontEmbedCSS(node)` call (fetched once, reused across snapshot
+   ticks) so frame glyphs match the screen; if embedding ever fails, it falls back to
+   `skipFonts: true` rather than blocking the snapshot (fail-soft, per §6/learnings §6).
 3. **Coordinates stay true.** Max total displacement (bow 0.35 + jitter 0.25 + overshoot
    0.8 = 1.4) stays under 1.5 viewBox units so drawn pixels still visually match the
    coordinates declared in
-   [WHITEBOARD]/[ANNOTATIONS] hints and the entity bboxes the model grounds against.
+   [WHITEBOARD]/[ANNOTATIONS] hints and the entity bboxes the model grounds against. The
+   teaching `RoughRing` is the one exception: it generates in **pixel space** (measured
+   element box, not the 0..100 viewBox) with `RING_OPTS {bow:2, jitter:1.2, overshoot:5}`,
+   since ring targets declare no [WHITEBOARD]/[ANNOTATIONS] coordinates for the viewBox
+   budget to protect — measured worst-case excursion ≈3.6px including stroke half-width,
+   inside the old CSS `ring-4`'s 4px envelope. The three SVG mark layers (WhiteboardMarks,
+   AnnotationLayer, TeachingLayer's relate arcs) remain governed by the viewBox-unit budget
+   above.
 4. **Render-only.** `nodeBox`, `connectorEnds`, `geometry.ts`, every store/serializer/tool,
    and every hint string are untouched. If a diff in this project touches a serializer, it
    is wrong.

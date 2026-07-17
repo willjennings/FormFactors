@@ -1,4 +1,14 @@
-import { toCanvas } from 'html-to-image';
+import { toCanvas, getFontEmbedCSS } from 'html-to-image';
+
+// Font-embed CSS is fetched once per session and reused: the per-snapshot cost is string
+// injection, not network. Embedding keeps the model's frame glyph-identical to the screen
+// (the old skipFonts:true rendered ALL webfont labels in fallback faces — an honesty gap
+// the hand-drawn-ink final review caught). Failure falls back to skipFonts, never blocks.
+let fontCssPromise: Promise<string | null> | null = null;
+function cachedFontCss(node: HTMLElement): Promise<string | null> {
+  if (!fontCssPromise) fontCssPromise = getFontEmbedCSS(node).catch(() => null);
+  return fontCssPromise;
+}
 
 /**
  * Rasterize a DOM node to a canvas (real pixels of exactly what the user sees).
@@ -7,7 +17,11 @@ import { toCanvas } from 'html-to-image';
  */
 export async function snapshotNode(node: HTMLElement): Promise<HTMLCanvasElement | null> {
   try {
-    return await toCanvas(node, { cacheBust: false, pixelRatio: 1, skipFonts: true });
+    const fontEmbedCSS = await cachedFontCss(node);
+    return await toCanvas(node, {
+      cacheBust: false, pixelRatio: 1,
+      ...(fontEmbedCSS !== null ? { fontEmbedCSS } : { skipFonts: true }),
+    });
   } catch {
     return null;
   }

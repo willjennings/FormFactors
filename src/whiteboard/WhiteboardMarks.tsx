@@ -18,7 +18,7 @@ export function WhiteboardMarks({ state }: { state: WhiteboardState }) {
         const x1 = pct(ends.from.x), y1 = pct(ends.from.y), x2 = pct(ends.to.x), y2 = pct(ends.to.y);
         const angle = Math.atan2(y2 - y1, x2 - x1);
         return (
-          <g key={m.id} stroke={INK} fill="none" strokeWidth="0.4" strokeLinecap="round" vectorEffect="non-scaling-stroke">
+          <g key={m.id} stroke={INK} fill="none" strokeWidth="0.4" strokeLinecap="round">
             <path d={roughLine(x1, y1, x2, y2, seedFrom(m.id))} vectorEffect="non-scaling-stroke" />
             <path d={roughArrowhead(x2, y2, angle, seedFrom(m.id + '/head'))} vectorEffect="non-scaling-stroke" />
           </g>
