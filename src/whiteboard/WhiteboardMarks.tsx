@@ -21,7 +21,6 @@ export function WhiteboardMarks({ state }: { state: WhiteboardState }) {
           <g key={m.id} stroke={INK} fill="none" strokeWidth="0.4" strokeLinecap="round" vectorEffect="non-scaling-stroke">
             <path d={roughLine(x1, y1, x2, y2, seedFrom(m.id))} vectorEffect="non-scaling-stroke" />
             <path d={roughArrowhead(x2, y2, angle, seedFrom(m.id + '/head'))} vectorEffect="non-scaling-stroke" />
-            {m.label && <text x={(x1 + x2) / 2} y={(y1 + y2) / 2 - 1} textAnchor="middle" fontSize={3.2} stroke="none" className="fill-indigo-500 font-ink">{m.label}</text>}
           </g>
         );
       })}
@@ -43,6 +42,14 @@ export function WhiteboardMarks({ state }: { state: WhiteboardState }) {
           </g>
         );
       })}
+      {/* connector labels last (above node fills — Caveat runs wider than the old mono) */}
+      {state.marks.map((m) => m.kind === 'connector' && m.label
+        ? (() => {
+            const ends = connectorEnds(state.marks, m);
+            if (!ends) return null;
+            return <text key={m.id + '/label'} x={(pct(ends.from.x) + pct(ends.to.x)) / 2} y={(pct(ends.from.y) + pct(ends.to.y)) / 2 - 1} textAnchor="middle" fontSize={3.2} className="fill-indigo-500 font-ink">{m.label}</text>;
+          })()
+        : null)}
       {state.marks.map((m) => m.kind === 'label'
         ? <text key={m.id} x={pct(m.x)} y={pct(m.y)} textAnchor="middle" fontSize={3.2} className="fill-indigo-500 font-ink">{m.text}</text>
         : null)}
