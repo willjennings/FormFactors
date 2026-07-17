@@ -8,8 +8,20 @@ import { buildDemoScript } from './demoScript';
 import { loadCompetence, saveCompetence } from './persistence';
 import { telemetry } from '../telemetry';
 import type { Program } from '../scenarios';
+import { seedFrom, roughRect, roughArc } from '../ink/rough';
 
 const pct = (v: number) => `${v / 10}%`; // 0-1000 space → percentage of the container
+
+/** Rough-ink rectangle drawn just inside its positioned parent div (replaces CSS ring-4).
+ *  The parent keeps the glow shadow; this draws the hand stroke. */
+function RoughRing({ seedId, color }: { seedId: string; color: string }) {
+  return (
+    <svg className="absolute inset-0 w-full h-full overflow-visible" viewBox="0 0 100 100" preserveAspectRatio="none">
+      <path d={roughRect(2, 4, 96, 92, seedFrom(seedId))} fill="none" stroke={color}
+            strokeWidth="3" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+    </svg>
+  );
+}
 
 type Props = {
   entities: SceneEntity[];
@@ -92,7 +104,8 @@ export function TeachingLayer({ entities, program, demo = false, dispatchRef, on
       {state.highlights.map((h, i) => {
         const b = box(h.entityId);
         return b && (
-          <div key={i} className="absolute rounded-xl ring-4 ring-amber-400/80 shadow-[0_0_24px_rgba(251,191,36,0.5)] transition-all" style={b}>
+          <div key={i} className="absolute rounded-xl shadow-[0_0_24px_rgba(251,191,36,0.5)] transition-all" style={b}>
+            <RoughRing seedId={`hl/${h.entityId}`} color="rgb(251,191,36)" />
             {h.note && <span className="absolute -top-2 left-2 px-1.5 rounded bg-amber-400 text-[10px] font-bold text-black">{h.note}</span>}
           </div>
         );
@@ -108,10 +121,10 @@ export function TeachingLayer({ entities, program, demo = false, dispatchRef, on
           const mx = (cx(a) + cx(b2)) / 2, my = (cy(a) + cy(b2)) / 2 - 6;
           return (
             <g key={i}>
-              <path d={`M ${cx(a)} ${cy(a)} Q ${mx} ${my - 8} ${cx(b2)} ${cy(b2)}`}
+              <path d={roughArc(cx(a), cy(a), mx, my - 8, cx(b2), cy(b2), seedFrom(`rel/${r.from}/${r.to}`))}
                     fill="none" stroke="rgb(99,102,241)" strokeWidth="0.4" strokeDasharray="1.2 0.8"
-                    vectorEffect="non-scaling-stroke" transform="scale(1,1)" />
-              <text x={mx} y={my} textAnchor="middle" fontSize={2.5} className="fill-indigo-500 font-mono">{r.label}</text>
+                    strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+              <text x={mx} y={my} textAnchor="middle" fontSize={3.2} className="fill-indigo-500 font-ink">{r.label}</text>
             </g>
           );
         })}
@@ -134,8 +147,9 @@ export function TeachingLayer({ entities, program, demo = false, dispatchRef, on
             if (!b) return null;
             const showRing = scaffold.markers || scaffold.highlightOnly;
             return (
-              <div className={`absolute rounded-xl pointer-events-none ${showRing ? 'ring-4 ring-[var(--accent-color)] shadow-[0_0_28px_rgba(99,102,241,0.45)]' : ''}`}
-                   style={b}>
+              <div className="absolute rounded-xl pointer-events-none" style={b}>
+                {showRing && <RoughRing seedId={`step/${step.entityId}`} color="var(--accent-color)" />}
+                {showRing && <div className="absolute inset-0 rounded-xl shadow-[0_0_28px_rgba(99,102,241,0.45)]" />}
                 {scaffold.markers && seq.activeIndex !== null && (
                   <span className="absolute -top-3 -left-3 w-7 h-7 rounded-full bg-[var(--accent-color)] text-white text-sm font-bold flex items-center justify-center shadow">
                     {seq.activeIndex + 1}
