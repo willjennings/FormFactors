@@ -13,7 +13,10 @@ export function useAspect<T extends Element>(): [RefObject<T | null>, number] {
     const ro = new ResizeObserver(() => {
       const r = el.getBoundingClientRect();
       if (r.width > 0 && r.height > 0) {
-        const a = r.width / r.height;
+        // Clamp: a collapsing/transitioning container can transiently report an absurd ratio,
+        // which would balloon every stroke's resample length (probe 2026-07-17). Real layer
+        // aspects live in ~[0.3, 4]; [0.2, 8] leaves headroom without admitting pathology.
+        const a = Math.min(8, Math.max(0.2, r.width / r.height));
         setAspect((prev) => (Math.abs(prev - a) < 0.01 ? prev : a));
       }
     });

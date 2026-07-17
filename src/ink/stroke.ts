@@ -32,8 +32,17 @@ const j = (rnd: () => number, amt: number) => (rnd() * 2 - 1) * amt;
 
 type P = [number, number];
 
+/** Hard cap on resampled points per stroke: a pathological aspect (transient zero-height
+ *  container → huge width/height ratio) once ballooned ONE 2-point line into a megabyte-scale
+ *  path and could OOM the tab (probe 2026-07-17). The step widens instead; the wobble gets
+ *  sparser on absurd geometry, which is exactly the honest degradation. */
+const MAX_RESAMPLE_POINTS = 48;
+
 /** Resample a polyline at ~`step` spacing (arc length), keeping endpoints. */
 function resample(pts: P[], step: number): P[] {
+  let total = 0;
+  for (let i = 1; i < pts.length; i++) total += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+  step = Math.max(step, total / MAX_RESAMPLE_POINTS);
   const out: P[] = [pts[0]];
   let carry = 0;
   for (let i = 1; i < pts.length; i++) {
@@ -93,7 +102,10 @@ function qChain(pts: P[]): string {
  */
 export function inkStroke(points: P[], seed: number, o: StrokeOpts = BODY): string {
   const rnd = mulberry32(seed);
-  const a = o.aspect || 1;
+  // Defensive clamp: aspect comes from measured layout (useAspect) and a mid-transition
+  // container can report absurd ratios; unbounded aspect scales the resample length without
+  // limit (probe 2026-07-17: aspect=1e9 OOM-crashed the process from one call).
+  const a = Math.min(20, Math.max(0.05, o.aspect || 1));
   const pts = resample(points.map(([x, y]) => [x * a, y] as P), 1.5);
   const n = pts.length;
   // Length-scaled roughness ramp (rough.js): short strokes keep full wobble, long calm down.

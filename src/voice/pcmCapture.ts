@@ -10,8 +10,11 @@ export const CHUNK_SAMPLES = 4096;
 export class Float32Chunker {
   private buf: Float32Array;
   private len = 0;
-  constructor(private emit: (chunk: Float32Array) => void, private size = CHUNK_SAMPLES) {
-    this.buf = new Float32Array(size);
+  private size: number;
+  constructor(private emit: (chunk: Float32Array) => void, size = CHUNK_SAMPLES) {
+    // size <= 0 would make push() spin forever on the main thread (probe 2026-07-17).
+    this.size = Math.max(1, Math.floor(size) || 1);
+    this.buf = new Float32Array(this.size);
   }
   push(samples: Float32Array): void {
     let off = 0;
@@ -21,8 +24,13 @@ export class Float32Chunker {
       this.len += n;
       off += n;
       if (this.len === this.size) {
-        this.emit(this.buf.slice(0));
+        // Reset BEFORE emit and swallow emit failures: a throwing emit (transient socket
+        // error) must neither drop the rest of this push nor re-send the stale chunk on the
+        // next push (probe 2026-07-17). The failed chunk is dropped honestly — live audio
+        // frames are ephemeral; a duplicated stale frame is worse than a gap.
+        const chunk = this.buf.slice(0);
         this.len = 0;
+        try { this.emit(chunk); } catch { /* dropped; stream continues */ }
       }
     }
   }
