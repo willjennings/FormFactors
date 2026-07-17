@@ -106,6 +106,11 @@ import { artifactEntities } from './artifacts/entities';
 import { ArtifactWindow } from './artifacts/ArtifactWindow';
 import { ARTIFACT_DEMO_ARGS, ARTIFACT_DEMO_WIDGET_ARGS } from './artifacts/demo';
 import type { ArtifactEvent } from './artifacts/types';
+import { MissionPicker } from './missions/MissionPicker';
+import { MISSIONS } from './missions/defs';
+import { startMission, advanceMission } from './missions/runStore';
+import { loadRuns, saveRuns } from './missions/persistence';
+import type { MissionRun, MissionObservables } from './missions/types';
 
 // --- Types ---
 interface Marker {
@@ -320,6 +325,8 @@ const LaptopSmileyIcon = ({ size = 64, className = "" }: { size?: number, classN
 export default function App() {
   // --- Active program (Word / Excel / PowerPoint) — single source of truth for content ---
   const [activeProgram, setActiveProgram] = useState<ProgramId>(DEFAULT_PROGRAM);
+  const activeProgramRef = useRef(activeProgram);
+  useEffect(() => { activeProgramRef.current = activeProgram; }, [activeProgram]);
   const program = React.useMemo(() => getProgram(activeProgram), [activeProgram]);
   // The carousel is built from the shared task library, filtered + ordered for this program.
   const TASKS = React.useMemo(() => tasksForProgram(activeProgram), [activeProgram]);
@@ -637,6 +644,32 @@ export default function App() {
   const goalStateRef = useRef<GoalState>(goalState);
   useEffect(() => { goalStateRef.current = goalState; }, [goalState]);
   const goalHintGateRef = useRef(makeChangeGate());
+
+  // --- Missions (spec 2026-07-17-mission-arcs): user-side scaffolding ONLY — the agent sees
+  // nothing but the goal model. Observables are COMMITTED state (never model claims).
+  const [missionOpen, setMissionOpen] = useState(false);
+  const [missionRuns, setMissionRuns] = useState<Record<string, number>>(() => loadRuns());
+  const [missionRun, setMissionRun] = useState<MissionRun | null>(null);
+  const missionDef = missionRun ? MISSIONS.find((m) => m.key === missionRun.key) ?? null : null;
+  const missionCommitsRef = useRef<{ verb: string; verbClass: string; program: ProgramId }[]>([]);
+  const missionSharesRef = useRef(0);
+  const missionTeachDoneRef = useRef<string[]>([]);
+  const [missionTick, setMissionTick] = useState(0);
+  const recordMissionCommit = (verb: string, verbClass: string) => {
+    missionCommitsRef.current = [...missionCommitsRef.current, { verb, verbClass, program: activeProgramRef.current }];
+    setMissionTick((n) => n + 1);
+  };
+  // Detect a teach sequence completing (activeIndex flips non-null → null) by comparing against
+  // the prior snapshot ref before handing the new one to TeachingLayer's own state setter.
+  const handleTeachingStateChange = (next: TeachingState) => {
+    const prev = teachingSnapshotRef.current;
+    if (prev?.sequence && prev.sequence.activeIndex !== null && next.sequence && next.sequence.activeIndex === null) {
+      missionTeachDoneRef.current = [...missionTeachDoneRef.current, prev.sequence.taskKey];
+      setMissionTick((n) => n + 1);
+    }
+    setTeachingSnapshot(next);
+  };
+
   const [whiteboard, whiteboardDispatch] = useReducer(wbReduce, undefined, initialWhiteboardState);
   const [whiteboardMode, setWhiteboardMode] = useState<'board' | 'overlay'>('board');
   // Stale-closure-free read for handleVoiceToolCall (its onToolCall callback is captured once
@@ -1255,6 +1288,8 @@ export default function App() {
         addLog('event', `Shared ${payload ?? 'item'} with ${recipient}`);
         setShareRequest({ recipient, payload, confirmed: true });
         emitFeedback({ outcome: 'committed', verbClass: 'share', label: `Shared with ${recipient}` });
+        missionSharesRef.current += 1;
+        setMissionTick((n) => n + 1);
       }
       ack({ success: true, sent: confirmed });
     } else if (fc.name === 'combine') {
@@ -1336,6 +1371,7 @@ export default function App() {
         : undefined;
 
       telemetry.action(fc.name, verbClass, effectiveDecision, lastInputModalityRef.current);
+      if (effectiveDecision === 'commit') recordMissionCommit(fc.name, verbClass);
       if (effectiveDecision === 'witness') {
         addLog('tool', `Tool Call: ${fc.name}(witness${disagreement ? ', grounding mismatch' : ''}) — ${phrase}`);
         setPendingAction({ verb: fc.name, label, target, detail, confirmed: false, note });
@@ -1556,6 +1592,7 @@ export default function App() {
     setUndoStack(s => [...s, { doc: prevDoc, label: `${d.label} ${d.target}` }]);
     lastInputModalityRef.current = 'direct';
     telemetry.action(verb, classOf(verb), 'commit', 'direct');
+    recordMissionCommit(verb, classOf(verb));
     emitFeedback({ outcome: 'committed', verbClass: classOf(verb), label: `${d.label} ${d.target}` });
     providerRef.current?.sendTextHint(`[DOCUMENT STATE after the user's direct edit: ${serializeMockDoc(nextDoc)}. DO NOT acknowledge this message.]`);
   };
@@ -1583,6 +1620,7 @@ export default function App() {
     setUndoStack(s => [...s, { doc: prevDoc, label: `${p.label} ${p.target}` }]);
     goalDispatch({ type: 'goal.actionCommitted', verb: p.verb, target: p.target });
     telemetry.action(p.verb, classOf(p.verb), 'commit', 'direct');
+    recordMissionCommit(p.verb, classOf(p.verb));
     emitFeedback({ outcome: 'committed', verbClass: classOf(p.verb), label: `${p.label} ${p.target}` });
     setPendingAction({ ...p, confirmed: true });
     providerRef.current?.sendTextHint(`[SYSTEM: the user confirmed via button — the action was applied. DOCUMENT STATE: ${serializeMockDoc(nextDoc)}. Do not re-call the tool; do not acknowledge.]`);
@@ -2905,6 +2943,45 @@ export default function App() {
   // doc (which lives in mockDoc, not corpus, until the next program swap saves it in).
   const fullCorpus = React.useMemo(() => ({ ...corpus, [activeProgram]: mockDoc }), [corpus, activeProgram, mockDoc]);
 
+  // Mission advance (spec §3/§8): single subscription point over committed observables. Steps
+  // complete IN ORDER (advanceMission is the pure reducer from Task 2) — this effect only
+  // reacts, dispatching goal.stepDone (the ONLY agent-visible surface) and, on completion, a
+  // quiet rail card carrying MEASURED facts only (steps count + duration — spec §8.4).
+  useEffect(() => {
+    if (!missionRun || !missionDef || missionRun.completedAt !== null) return;
+    const obs: MissionObservables = {
+      docs: fullCorpus, seed: seedCorpus(),
+      artifacts: artifactState.artifacts,
+      commits: missionCommitsRef.current,
+      sharesCommitted: missionSharesRef.current,
+      teachingCompleted: missionTeachDoneRef.current,
+    };
+    const { run, stepsDone, completed } = advanceMission(missionDef, missionRun, obs, Date.now());
+    if (!stepsDone.length) return;
+    for (const i of stepsDone) {
+      telemetry.missionStepDone(missionDef.key, missionDef.steps[i].key);
+      const gs = goalStateRef.current.steps[i];
+      if (gs && !gs.done) goalDispatch({ type: 'goal.stepDone', id: gs.id });
+    }
+    setMissionRun(run);
+    if (completed) {
+      const runN = missionRuns[missionDef.key] ?? 0;
+      const durationMs = Date.now() - run.startedAt;
+      telemetry.missionComplete(missionDef.key, runN, durationMs, missionDef.steps.length);
+      const next = { ...missionRuns, [missionDef.key]: runN + 1 };
+      setMissionRuns(next); saveRuns(next);
+      emitFeedback({ outcome: 'committed', verbClass: 'create', label: `${missionDef.title} — complete` });
+      const mm = Math.floor(durationMs / 60000), ss = Math.floor((durationMs % 60000) / 1000);
+      railDispatchRef.current?.({ type: 'rail.set', rail: {
+        seq: `mission-${missionDef.key}-${run.startedAt}`,
+        cards: [{ t: 'answer', text: `${missionDef.title} complete — ${missionDef.steps.length} step${missionDef.steps.length === 1 ? '' : 's'}, ${mm}:${String(ss).padStart(2, '0')}`, band: 'solid', state: 'done' }],
+        activeIndex: null, startedAt: Date.now(),
+      } });
+      goalDispatch({ type: 'goal.clear' });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [missionTick, fullCorpus, artifactState, missionRun, missionDef]);
+
   // [CORPUS] hint: the model's standing view of what's combinable. Deduped via the change-gate.
   useEffect(() => {
     if (!isLive) return;
@@ -3053,6 +3130,27 @@ export default function App() {
     // re-render and captures the new program's tools + prompt.
   };
 
+  // Missions (spec §3/§5): starting/abandoning is user-side — the agent only ever sees the
+  // resulting goal.set / goal.clear, same channel as any other tracked objective.
+  const startMissionRun = (key: string) => {
+    const def = MISSIONS.find((m) => m.key === key)!;
+    if (missionRun && missionRun.completedAt === null) {
+      telemetry.missionAbandoned(missionRun.key, missionRun.stepIndex);
+    }
+    missionCommitsRef.current = []; missionSharesRef.current = 0; missionTeachDoneRef.current = [];
+    if (activeProgram !== def.program) handleProgramChange(def.program);
+    goalDispatch({ type: 'goal.set', objective: def.brief, steps: def.steps.map((s) => ({ label: s.subgoal })) });
+    telemetry.missionStart(key, missionRuns[key] ?? 0);
+    setMissionRun(startMission(def, Date.now()));
+  };
+  const abandonMission = () => {
+    if (missionRun && missionRun.completedAt === null) {
+      telemetry.missionAbandoned(missionRun.key, missionRun.stepIndex);
+      goalDispatch({ type: 'goal.clear' });
+    }
+    setMissionRun(null);
+  };
+
   // Undo the most recent committed document mutation (restore the memento).
   const handleUndo = () => {
     if (undoStack.length === 0) {
@@ -3138,7 +3236,7 @@ export default function App() {
           className="h-full w-full relative bg-[var(--bg-color)]"
         >
           <div aria-hidden className="absolute inset-0 pointer-events-none opacity-[0.04] bg-[radial-gradient(circle_at_1px_1px,currentColor_1px,transparent_0)] [background-size:24px_24px]" />
-          <MenuBar isLive={isLive} isConnecting={isConnecting} isDarkMode={isDarkMode} traffic={traffic} onToggleTheme={() => setIsDarkMode(!isDarkMode)} onToggleDrawer={() => setDrawerOpen(o => !o)} onRambleMode={() => { window.location.search = 'ramble=live'; }} onSketchBoard={() => setBoardOpen((o) => !o)} />
+          <MenuBar isLive={isLive} isConnecting={isConnecting} isDarkMode={isDarkMode} traffic={traffic} onToggleTheme={() => setIsDarkMode(!isDarkMode)} onToggleDrawer={() => setDrawerOpen(o => !o)} onRambleMode={() => { window.location.search = 'ramble=live'; }} onSketchBoard={() => setBoardOpen((o) => !o)} onMissions={() => setMissionOpen((v) => !v)} />
           <Dock active={activeProgram} onSelect={handleProgramChange} onReopen={() => setWindowOpen(true)} />
           <CursorResources mode={isPainting ? 'painting' : 'off'} color="#3b82f6" />
           <CursorTrail isActive={isPainting} mousePos={trailMousePos} color="#3b82f6" />
@@ -3158,7 +3256,7 @@ export default function App() {
                 fonts (Caveat ink labels) would be filtered out of the embed CSS. This invisible
                 HTML span makes the scanner see the ink font (final review C1). */}
             <span aria-hidden className="font-ink absolute opacity-0 pointer-events-none select-none">.</span>
-            <TeachingLayer entities={entities} program={program} demo={teachMode} dispatchRef={teachingDispatchRef} onStateChange={setTeachingSnapshot} />
+            <TeachingLayer entities={entities} program={program} demo={teachMode} dispatchRef={teachingDispatchRef} onStateChange={handleTeachingStateChange} />
             <AnnotationLayer entities={entities} program={program} demo={illustrateMode} dispatchRef={annotationDispatchRef} onStateChange={setAnnotationSnapshot} />
             {whiteboardMode === 'overlay' && <WhiteboardMarks state={whiteboard} />}
           </div>
@@ -3218,9 +3316,10 @@ export default function App() {
               <span className="text-[10px] font-mono uppercase tracking-wide text-[var(--text-secondary)]">Working toward</span>
               <span className="text-[11px] font-mono text-[var(--text-primary)] max-w-[280px] truncate">{goalState.objective}</span>
               <span className="text-[10px] font-mono text-[var(--text-secondary)]">· {goalState.steps.filter((s) => s.done).length}/{goalState.steps.length}</span>
-              <button aria-label="Clear goal" className="text-[var(--text-secondary)] hover:text-[var(--text-primary)]" onClick={() => goalDispatch({ type: 'goal.clear' })}><X size={12} /></button>
+              <button aria-label="Clear goal" className="text-[var(--text-secondary)] hover:text-[var(--text-primary)]" onClick={() => (missionRun && missionRun.completedAt === null ? abandonMission() : goalDispatch({ type: 'goal.clear' }))}><X size={12} /></button>
             </div>
           )}
+          <MissionPicker missions={MISSIONS} runs={missionRuns} active={missionRun} activeDef={missionDef} open={missionOpen} onStart={startMissionRun} onAbandon={abandonMission} onClose={() => setMissionOpen(false)} />
           {/* Highlight category legend — explains the colour ↔ category mapping while debug markings are on */}
           {showMarkings && (
             <div className="absolute top-3 right-3 z-50 pointer-events-none rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)]/90 backdrop-blur px-3 py-2 shadow-md">

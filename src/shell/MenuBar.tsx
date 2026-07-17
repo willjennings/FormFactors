@@ -1,12 +1,12 @@
 import React from 'react';
-import { Sun, Moon, Settings2, AudioLines, PenLine } from 'lucide-react';
+import { Sun, Moon, Settings2, AudioLines, PenLine, Target } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Tip } from '../ui/Tooltip';
 import type { Traffic } from './traffic';
 
-export function MenuBar({ isLive, isConnecting, isDarkMode, traffic, onToggleTheme, onToggleDrawer, onRambleMode, onSketchBoard }: {
+export function MenuBar({ isLive, isConnecting, isDarkMode, traffic, onToggleTheme, onToggleDrawer, onRambleMode, onSketchBoard, onMissions }: {
   isLive: boolean; isConnecting: boolean; isDarkMode: boolean; traffic: Traffic | null;
-  onToggleTheme: () => void; onToggleDrawer: () => void; onRambleMode: () => void; onSketchBoard: () => void;
+  onToggleTheme: () => void; onToggleDrawer: () => void; onRambleMode: () => void; onSketchBoard: () => void; onMissions: () => void;
 }) {
   return (
     <div className="absolute top-0 left-0 right-0 z-30 flex items-center justify-between px-4 h-12 border-b border-[var(--card-border)] bg-[var(--card-bg)]/80 backdrop-blur" data-shell onPointerDown={(e) => e.stopPropagation()}>
@@ -18,6 +18,7 @@ export function MenuBar({ isLive, isConnecting, isDarkMode, traffic, onToggleThe
         </span>
         <Tip label="Ramble mode (scribe)"><Button size="icon44" aria-label="Ramble mode" onClick={onRambleMode}><AudioLines size={16} /></Button></Tip>
         <Tip label="Sketch board"><Button size="icon44" aria-label="Sketch board" onClick={onSketchBoard}><PenLine size={16} /></Button></Tip>
+        <Tip label="Missions"><Button size="icon44" aria-label="Missions" onClick={onMissions}><Target size={16} /></Button></Tip>
         <Tip label="Toggle theme"><Button size="icon44" aria-label="Toggle theme" onClick={onToggleTheme}>{isDarkMode ? <Sun size={16} /> : <Moon size={16} />}</Button></Tip>
         <Tip label="Debug drawer"><Button size="icon44" aria-label="Debug drawer" onClick={onToggleDrawer}><Settings2 size={16} /></Button></Tip>
       </div>

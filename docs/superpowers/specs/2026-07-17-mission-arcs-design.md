@@ -78,7 +78,8 @@ place. (Teaching's own fade continues independently via its competence store.)
 
 ## 6. Surfaces
 
-- **Mission picker:** the task-carousel surface swaps content — mission cards
+- **Mission picker:** a floating Missions panel (MenuBar Target toggle; the audit-era carousel
+  was already deleted in A1) lists mission cards
   (title + brief + step count + a "run again" affordance showing runsCompleted). Program
   auto-switches to `def.program` on start. The per-program suggestion chips in the omnibox
   stay (contextual, not scripted). The old TASK_LIBRARY carousel content is deleted with the
