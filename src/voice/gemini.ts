@@ -133,11 +133,17 @@ export function createGeminiProvider(apiKey: string, onSessionReady?: (session: 
       onSessionReady?.(session);
     },
 
-    sendTextHint(text: string) { session?.sendRealtimeInput({ text }); },
-    sendUserText(text: string) { session?.sendClientContent(geminiUserTurns(text)); },
-    sendVideoFrame(jpegBase64: string) { session?.sendRealtimeInput({ video: { data: jpegBase64, mimeType: 'image/jpeg' } }); },
+    // All sends queue on sessionPromise (like the audio pump above): the SDK invokes
+    // callbacks.onopen BEFORE its connect promise resolves, so `session` is still null
+    // while the app's onOpen handler flushes queued typed text + the stashed deixis
+    // hint — a bare `session?.` silently dropped the first user turn of every cold
+    // start (live smoke 2026-07-16: generic reply + hint-driven spurious teach overlay).
+    // .then() on one promise is FIFO, so hint-before-text ordering is preserved.
+    sendTextHint(text: string) { sessionPromise?.then(s => { if (!ended) s.sendRealtimeInput({ text }); }); },
+    sendUserText(text: string) { sessionPromise?.then(s => { if (!ended) s.sendClientContent(geminiUserTurns(text)); }); },
+    sendVideoFrame(jpegBase64: string) { sessionPromise?.then(s => { if (!ended) s.sendRealtimeInput({ video: { data: jpegBase64, mimeType: 'image/jpeg' } }); }); },
     sendToolResponse(id: string, name: string, result: any) {
-      session?.sendToolResponse({ functionResponses: [{ id, name, response: result }] });
+      sessionPromise?.then(s => { if (!ended) s.sendToolResponse({ functionResponses: [{ id, name, response: result }] }); });
     },
     close() {
       teardownAudio();
