@@ -2984,6 +2984,9 @@ export default function App() {
         activeIndex: null, startedAt: Date.now(),
       } });
       goalDispatch({ type: 'goal.clear' });
+      // The run is over — the rail card is the record. Clearing missionRun returns the panel
+      // to the picker list (Task 4 drive: a completed run left a stale title-only strip).
+      setMissionRun(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [missionTick, fullCorpus, artifactState, missionRun, missionDef]);
