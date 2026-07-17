@@ -5,7 +5,7 @@ export interface MissionObservables {
   docs: Partial<Record<ProgramId, MockDoc>>;
   seed: Record<ProgramId, MockDoc>;
   artifacts: { kind: string; sources: string[]; fields?: { feed?: string }[] }[];
-  commits: { verbClass: string; program: ProgramId }[];
+  commits: { verb: string; verbClass: string; program: ProgramId }[];
   sharesCommitted: number;
   teachingCompleted: string[]; // taskKeys of completed teach sequences
 }

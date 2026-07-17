@@ -11,10 +11,11 @@ export const MISSIONS: MissionDef[] = [
     steps: [
       { key: 'walkthrough', subgoal: 'Complete a save walkthrough',
         hint: 'Try: "teach me how to save this"',
+        // startsWith('word.') by design: live models author their own taskKeys; any completed word teach sequence counts.
         doneWhen: (o) => o.teachingCompleted.some((k) => k.startsWith('word.')) },
       { key: 'export', subgoal: 'Export a copy',
         hint: 'Try: "export this as a PDF"',
-        doneWhen: (o) => o.commits.some((c) => c.verbClass === 'file' && c.program === 'word') },
+        doneWhen: (o) => o.commits.some((c) => c.verb === 'save_file' && c.program === 'word') },
     ],
   },
   {
@@ -39,6 +40,7 @@ export const MISSIONS: MissionDef[] = [
       { key: 'widget', subgoal: 'Create the status widget',
         hint: 'Try: "make a widget from the report and the sheet with the time and our stock price"',
         doneWhen: (o) => o.artifacts.some((a) => a.kind === 'widget'
+          && a.sources.includes('word') && a.sources.includes('excel')
           && a.fields?.some((f) => f.feed === 'stock')
           && a.fields?.some((f) => f.feed === 'clock' || f.feed === 'weather')) },
     ],

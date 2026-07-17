@@ -32,15 +32,23 @@ describe('runStore — in-order deterministic advance (spec §3/§8)', () => {
     let run = startMission(def, 1000);
     expect(run.stepIndex).toBe(0);
     // A later-step condition arriving early must NOT advance step 0:
-    let r = advanceMission(def, run, { ...base(), commits: [{ verbClass: 'file', program: 'word' }] }, 1001);
+    let r = advanceMission(def, run, { ...base(), commits: [{ verb: 'save_file', verbClass: 'mutate', program: 'word' }] }, 1001);
     expect(r.run.stepIndex).toBe(0);
     expect(r.stepsDone).toEqual([]);
     // Teach sequence completes → step 0 done; the earlier file commit is STILL visible in obs,
     // so step 1 completes in the same advance (both conditions now hold, order preserved):
-    r = advanceMission(def, r.run, { ...base(), commits: [{ verbClass: 'file', program: 'word' }], teachingCompleted: ['word.save'] }, 1002);
+    r = advanceMission(def, r.run, { ...base(), commits: [{ verb: 'save_file', verbClass: 'mutate', program: 'word' }], teachingCompleted: ['word.save'] }, 1002);
     expect(r.stepsDone).toEqual([0, 1]);
     expect(r.completed).toBe(true);
     expect(r.run.completedAt).toBe(1002);
+  });
+  it('learn-tools: teach completion alone lands on step 1, not completed', () => {
+    const def = byKey('learn-tools');
+    const run = startMission(def, 0);
+    const r = advanceMission(def, run, { ...base(), teachingCompleted: ['word.save'] }, 1);
+    expect(r.run.stepIndex).toBe(1);
+    expect(r.stepsDone).toEqual([0]);
+    expect(r.completed).toBe(false);
   });
   it('ship-brief: sheet fixed → combine doc from word+excel → share', () => {
     const def = byKey('ship-brief');
@@ -54,6 +62,13 @@ describe('runStore — in-order deterministic advance (spec §3/§8)', () => {
     r = advanceMission(def, r.run, { ...base(), docs: { ...seed, excel: fixedExcel }, artifacts: [{ kind: 'doc', sources: ['word', 'excel'] }], sharesCommitted: 1 }, 3);
     expect(r.completed).toBe(true);
   });
+  it('ship-brief: unmodified seed docs do not advance step 0', () => {
+    const def = byKey('ship-brief');
+    const run = startMission(def, 0);
+    const r = advanceMission(def, run, base(), 1);
+    expect(r.run.stepIndex).toBe(0);
+    expect(r.stepsDone).toEqual([]);
+  });
   it('glance-numbers: widget with the SIMULATED stock plus a LIVE feed', () => {
     const def = byKey('glance-numbers');
     let run = startMission(def, 0);
@@ -62,6 +77,13 @@ describe('runStore — in-order deterministic advance (spec §3/§8)', () => {
     expect(r.completed).toBe(false);
     r = advanceMission(def, r.run, { ...base(), artifacts: [{ kind: 'widget', sources: ['word', 'excel'], fields: [{ feed: 'stock' }, { feed: 'clock' }] }] }, 2);
     expect(r.completed).toBe(true);
+  });
+  it('glance-numbers: right feeds but wrong sources does NOT complete (spec §4.3: built FROM word+excel)', () => {
+    const def = byKey('glance-numbers');
+    const run = startMission(def, 0);
+    const r = advanceMission(def, run, { ...base(), artifacts: [{ kind: 'widget', sources: ['powerpoint', 'photo'], fields: [{ feed: 'stock' }, { feed: 'clock' }] }] }, 1);
+    expect(r.completed).toBe(false);
+    expect(r.run.stepIndex).toBe(0);
   });
   it('fix-deck: title slide must name the lead project (seed title does not)', () => {
     const def = byKey('fix-deck');
