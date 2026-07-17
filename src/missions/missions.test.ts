@@ -85,13 +85,25 @@ describe('runStore — in-order deterministic advance (spec §3/§8)', () => {
     expect(r.completed).toBe(false);
     expect(r.run.stepIndex).toBe(0);
   });
-  it('fix-deck: title slide must name the lead project (seed title does not)', () => {
+  it('fix-deck: CURRENT (last) slide must name the lead project (seed last slide does not)', () => {
     const def = byKey('fix-deck');
-    let run = startMission(def, 0);
+    const run = startMission(def, 0);
+    // Seed deck's last slide is 'Outlook: Harbor Bridge…' — must NOT complete
+    // (even though seed slide 2 already contains 'Riverside Tower'; the check is last-slide only):
     expect(advanceMission(def, run, base(), 1).completed).toBe(false);
-    const retitled = { ...seed.powerpoint, slides: ['Riverside Tower — Q3 2026 board review', ...(seed.powerpoint as any).slides.slice(1)] } as any;
+    const seedSlides = (seed.powerpoint as any).slides as string[];
+    const retitled = { ...seed.powerpoint, slides: [...seedSlides.slice(0, -1), 'Riverside Tower — closing summary'] } as any;
     const r = advanceMission(def, run, { ...base(), docs: { ...seed, powerpoint: retitled } }, 2);
     expect(r.completed).toBe(true);
+  });
+  it('fix-deck: first slide naming Riverside Tower with last slide unchanged does NOT complete', () => {
+    const def = byKey('fix-deck');
+    const run = startMission(def, 0);
+    const seedSlides = (seed.powerpoint as any).slides as string[];
+    const firstRetitled = { ...seed.powerpoint, slides: ['Riverside Tower — Q3 2026 board review', ...seedSlides.slice(1)] } as any;
+    const r = advanceMission(def, run, { ...base(), docs: { ...seed, powerpoint: firstRetitled } }, 1);
+    expect(r.completed).toBe(false);
+    expect(r.run.stepIndex).toBe(0);
   });
   it('advance after completion is a no-op', () => {
     const def = byKey('fix-deck');

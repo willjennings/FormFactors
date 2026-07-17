@@ -47,13 +47,15 @@ export const MISSIONS: MissionDef[] = [
   },
   {
     key: 'fix-deck', title: 'Fix the deck', program: 'powerpoint',
-    brief: 'Make the board deck lead with the lead project: the title slide should name Riverside Tower.',
+    brief: 'Make the deck close on the lead project: the current slide should name Riverside Tower.',
     steps: [
-      { key: 'retitle', subgoal: 'Title slide names Riverside Tower',
-        hint: 'Point at the title slide and retitle it',
+      { key: 'retitle', subgoal: 'Current slide names Riverside Tower',
+        hint: 'Point at the slide canvas and retitle it',
+        // The action layer edits only the CURRENT (last) slide — scenarios.ts edit_content; a title-slide predicate would be unreachable (Task 4 browser drive, 2026-07-17).
         doneWhen: (o) => {
           const ppt = o.docs.powerpoint as { slides?: string[] } | undefined;
-          return !!ppt?.slides?.[0]?.includes('Riverside Tower');
+          const last = ppt?.slides?.[ppt.slides.length - 1];
+          return !!last?.includes('Riverside Tower');
         } },
     ],
   },
