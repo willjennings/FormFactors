@@ -433,12 +433,12 @@ const [missionOpen, setMissionOpen] = useState(false);
 const [missionRuns, setMissionRuns] = useState<Record<string, number>>(() => loadRuns());
 const [missionRun, setMissionRun] = useState<MissionRun | null>(null);
 const missionDef = missionRun ? MISSIONS.find((m) => m.key === missionRun.key) ?? null : null;
-const missionCommitsRef = useRef<{ verbClass: string; program: ProgramId }[]>([]);
+const missionCommitsRef = useRef<{ verb: string; verbClass: string; program: ProgramId }[]>([]);
 const missionSharesRef = useRef(0);
 const missionTeachDoneRef = useRef<string[]>([]);
 const [missionTick, setMissionTick] = useState(0);
-const recordMissionCommit = (verbClass: string) => {
-  missionCommitsRef.current = [...missionCommitsRef.current, { verbClass, program: activeProgramRef.current }];
+const recordMissionCommit = (verb: string, verbClass: string) => {
+  missionCommitsRef.current = [...missionCommitsRef.current, { verb, verbClass, program: activeProgramRef.current }];
   setMissionTick((n) => n + 1);
 };
 ```
@@ -446,8 +446,8 @@ const recordMissionCommit = (verbClass: string) => {
 (If `activeProgramRef` does not already exist, add `const activeProgramRef = useRef(activeProgram);` + sync effect beside the other refs.)
 
 Hook the observation points:
-1. At App.tsx:1338 (`telemetry.action(fc.name, verbClass, effectiveDecision, …)`): immediately after, `if (effectiveDecision === 'commit') recordMissionCommit(verbClass);`
-2. At :1558 and :1585 (direct commits): after each `telemetry.action(...)`, `recordMissionCommit(classOf(verb))` / `recordMissionCommit(classOf(p.verb))`.
+1. At App.tsx:1338 (`telemetry.action(fc.name, verbClass, effectiveDecision, …)`): immediately after, `if (effectiveDecision === 'commit') recordMissionCommit(fc.name, verbClass);`
+2. At :1558 and :1585 (direct commits): after each `telemetry.action(...)`, `recordMissionCommit(verb, classOf(verb))` / `recordMissionCommit(p.verb, classOf(p.verb))`.
 3. At the share commit (:1257, the `outcome: 'committed', verbClass: 'share'` branch): `missionSharesRef.current += 1; setMissionTick((n) => n + 1);`
 4. Teaching completions: in the existing TeachingLayer `onStateChange` handler App passes, detect completion (keep the previous snapshot in a ref; when `prev?.sequence && prev.sequence.activeIndex !== null && next.sequence && next.sequence.activeIndex === null`, push `prev.sequence.taskKey` into `missionTeachDoneRef.current` and `setMissionTick((n) => n + 1)`).
 
