@@ -147,10 +147,12 @@ function PptSurface({ program, doc, live, focusTitle, blockedElements, onAction,
       </SurfaceElement>
       <div className="flex-1 flex gap-2 min-h-0">
         {/* filmstrip (chrome, not a named element) */}
-        <div className="w-20 shrink-0 flex flex-col gap-1.5 overflow-y-auto">
+        <div className="w-24 shrink-0 flex flex-col gap-1.5 overflow-y-auto">
+          {/* Thumbnails are MINIATURES of the canvas: same aspect, same centered bold title,
+              clamped — not the full slide text crammed into a squashed box (user, 2026-07-18). */}
           {m.slides.map((s, i) => (
-            <div key={i} data-entity-id={`${program.id}-slide-${i + 1}`} className={`h-12 shrink-0 rounded-md border text-[8px] text-center flex items-center justify-center px-1 leading-tight bg-white dark:bg-[#0f1623] text-[var(--text-primary)] ${i === m.slides.length - 1 ? 'border-[var(--accent-color)]' : 'border-[var(--card-border)]'}`}>
-              {s}
+            <div key={i} data-entity-id={`${program.id}-slide-${i + 1}`} className={`aspect-[5/4] w-full shrink-0 rounded-md border flex items-center justify-center px-1.5 overflow-hidden bg-white dark:bg-[#0f1623] ${i === m.slides.length - 1 ? 'border-[var(--accent-color)]' : 'border-[var(--card-border)]'}`}>
+              <span className="text-[9px] font-bold text-center leading-tight text-slate-900 dark:text-slate-100 line-clamp-3">{s}</span>
             </div>
           ))}
         </div>
