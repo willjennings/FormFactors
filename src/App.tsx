@@ -65,6 +65,8 @@ import { ProgramSurface } from './widgets/ProgramSurface';
 import { ProgramWindow } from './shell/ProgramWindow';
 import { Omnibox } from './shell/Omnibox';
 import { quickFireIndex, isEditableTarget } from './shell/quickFire';
+import { reduceActivity, initialActivity, type ActivityEntry } from './shell/activityStore';
+import { ActivityTrace } from './shell/ActivityTrace';
 import { DebugDrawer } from './shell/DebugDrawer';
 import { Sheet } from './ui/Sheet';
 import { Button } from './ui/Button';
@@ -345,6 +347,10 @@ export default function App() {
   // path (deixis binds to the current hover), pointer never moves. The echo pill shows what
   // was just asked and about what, so the request chain stays visible.
   const [quickFireEcho, setQuickFireEcho] = useState<{ n: number; phrase: string; referent: string | null; at: number } | null>(null);
+  // Transparency trace (audit 2026-07-18): fed only from real seams — request entry,
+  // tool-call dispatch, ack outcomes, feedback commits. Never from model narration.
+  const [activity, setActivity] = useState(initialActivity());
+  const traceActivity = (entry: Omit<ActivityEntry, 'at'>) => setActivity((s) => reduceActivity(s, { ...entry, at: Date.now() }));
   useEffect(() => {
     if (!quickFireEcho) return;
     const t = setTimeout(() => setQuickFireEcho(null), 4000);
@@ -1263,8 +1269,20 @@ export default function App() {
     // Errors are data AND retryable: a REJECTED call never executed, so un-record it from
     // the deduper — an identical retry is re-processed (and honestly re-errored), never
     // acked as a fake deduped success. Every ack in this handler flows through here.
+    const targetSummary = typeof fc.args?.target === 'string' ? ` (${fc.args.target})`
+      : typeof fc.args?.subject === 'string' ? ` (${fc.args.subject})`
+      : typeof fc.args?.title === 'string' ? ` (${fc.args.title})` : '';
+    if (fc.name !== 'respond') traceActivity({ kind: 'call', callId: fc.id, text: `${fc.name}${targetSummary}` });
     const ack = (result: Record<string, any>) => {
-      if (result.success === false) callDeduperRef.current.forget(fc.name, dedupeKey);
+      if (result.success === false) {
+        callDeduperRef.current.forget(fc.name, dedupeKey);
+        // A rejection is data the user should see too — retries stop looking like dead air.
+        traceActivity({ kind: 'error', callId: fc.id, text: `${fc.name}: ${String(result.error ?? 'rejected').slice(0, 80)}` });
+      } else if (result.witnessed || result.offered) {
+        traceActivity({ kind: 'witness', callId: fc.id, text: `${fc.name} — awaiting your confirm` });
+      } else if (fc.name !== 'respond' && !result.deduped) {
+        traceActivity({ kind: 'done', callId: fc.id, text: `${fc.name}${targetSummary}` });
+      }
       providerRef.current?.sendToolResponse(fc.id, fc.name, result);
     };
     if (fc.name !== 'respond' && callDeduperRef.current.seen(fc.name, dedupeKey, Date.now())) {
@@ -1718,6 +1736,7 @@ export default function App() {
 
   const processInputTranscript = (text: string) => {
     addLog('info', `User: "${text}"`);
+    traceActivity({ kind: 'ask', text: text.slice(0, 60) });
     lastTranscriptionTimeRef.current = Date.now();
 
     // Clean transcription: remove <noise>, [noise], (noise), *noise*, etc.
@@ -3418,6 +3437,7 @@ export default function App() {
               <button aria-label="Clear goal" className="hit-24 text-[var(--text-secondary)] hover:text-[var(--text-primary)]" onClick={() => (missionRun && missionRun.completedAt === null ? abandonMission() : goalDispatch({ type: 'goal.clear' }))}><X size={12} /></button>
             </div>
           )}
+          <ActivityTrace state={activity} onOpenStream={() => setDrawerOpen(true)} />
           <MissionPicker missions={MISSIONS} runs={missionRuns} active={missionRun} activeDef={missionDef} open={missionOpen} onStart={startMissionRun} onAbandon={abandonMission} onClose={() => setMissionOpen(false)} />
           {/* Highlight category legend — explains the colour ↔ category mapping while debug markings are on */}
           {showMarkings && (
