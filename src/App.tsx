@@ -64,6 +64,7 @@ import { buildSpreadsheetSnapshot, formatSnapshotForModel } from './widgets/spre
 import { ProgramSurface } from './widgets/ProgramSurface';
 import { ProgramWindow } from './shell/ProgramWindow';
 import { Omnibox } from './shell/Omnibox';
+import { quickFireIndex, isEditableTarget } from './shell/quickFire';
 import { DebugDrawer } from './shell/DebugDrawer';
 import { Sheet } from './ui/Sheet';
 import { Button } from './ui/Button';
@@ -337,6 +338,18 @@ export default function App() {
     phrase: t.hint.match(/"(.*?)"/)?.[1] ?? t.title,
     color: ACTION_CATEGORIES[t.action].color,
   })), [TASKS]);
+  const suggestionsRef = useRef(suggestions);
+  useEffect(() => { suggestionsRef.current = suggestions; }, [suggestions]);
+  // Quick-fire chips (user finding 2026-07-18): clicking a chip forces the pointer OFF the
+  // referent the question is about. Digits 1-9 fire the matching chip through the SAME typed
+  // path (deixis binds to the current hover), pointer never moves. The echo pill shows what
+  // was just asked and about what, so the request chain stays visible.
+  const [quickFireEcho, setQuickFireEcho] = useState<{ n: number; phrase: string; referent: string | null; at: number } | null>(null);
+  useEffect(() => {
+    if (!quickFireEcho) return;
+    const t = setTimeout(() => setQuickFireEcho(null), 4000);
+    return () => clearTimeout(t);
+  }, [quickFireEcho]);
   // Tools offered to the voice model = the kept verbs (explain, share) + the action verbs this
   // program exposes. Read at connect time; program swap reconnects (see handleProgramChange).
   const voiceTools = React.useMemo(
@@ -1939,8 +1952,14 @@ export default function App() {
 
         // Proactive pattern-offer seam retired with the map-era payload; re-aim at program behavior when a goal model exists.
 
-        // SEND DEIXIS HINT to whichever backend is live.
-        if (providerRef.current) {
+        // SEND DEIXIS HINT to whichever backend is live — or STASH it when none is yet.
+        // The old "if (providerRef.current)" outer gate made the R1 #1 stash below dead code
+        // (and this runs BEFORE sendTypedInput queues the text, so no queued-text condition
+        // can save it): a cold-start "What is this?" arrived with no pointing context (live
+        // smoke 2026-07-18, twice). Construct unconditionally; the stash is consumed ONLY
+        // merged into a queued command at onOpen (never flushed bare), so a stale stash from
+        // an abandoned hover is inert.
+        {
           const commandWords = ["show", "go", "directions", "where", "what", "search", "find", "how", "get", "near"];
           const isCommand = commandWords.some(w => lowerText.includes(w));
           // Honest mode threads confidence into the hint; the baseline hint is unchanged.
@@ -1997,6 +2016,27 @@ export default function App() {
       }
     }
   };
+
+  // Quick-fire keydown: window-level so it works wherever the pointer is; guarded off all
+  // editable targets (digits must keep typing) and modifier combos (browser shortcuts).
+  const sendTypedInputRef = useRef(sendTypedInput);
+  sendTypedInputRef.current = sendTypedInput;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const i = quickFireIndex(e.key, isEditableTarget(e.target), suggestionsRef.current.length);
+      if (i === null) return;
+      e.preventDefault();
+      const sug = suggestionsRef.current[i];
+      const hovered = hoveredIdRef.current ? entityById(entitiesRef.current, hoveredIdRef.current) : null;
+      setQuickFireEcho({ n: i + 1, phrase: sug.phrase, referent: hovered ? displayName(hovered) : null, at: Date.now() });
+      lastActivityRef.current = Date.now();
+      setFirstRunHint(false);
+      sendTypedInputRef.current(sug.phrase);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   // R1: a typed command may have auto-started this session attempt. If session
   // startup fails BEFORE the provider callbacks exist (missing key, mic denied,
@@ -2126,16 +2166,23 @@ export default function App() {
             connectInFlightRef.current = false;
             // R1 #1: deliver the stashed type-time deixis hint before the queued text so
             // the model reads the pointer context first.
-            if (pendingHintRef.current) {
-              providerRef.current?.sendTextHint(pendingHintRef.current);
-              pendingHintRef.current = null;
-            }
+            // A stashed deixis hint is consumed ONLY merged into a queued command below —
+            // a bare stale hint from an abandoned hover would misground the next utterance.
+            if (pendingHintRef.current && !pendingTypedRef.current) pendingHintRef.current = null;
             if (pendingTypedRef.current) {
               // The queued typed text IS the first user turn: arm the transcription clock
               // before sending, or the guards below discard the model's entire first
               // response ("Ignoring model turn/tool call before first transcription").
               lastTranscriptionTimeRef.current = Date.now();
-              providerRef.current?.sendUserText(pendingTypedRef.current);
+              // Merge the stashed deixis hint INTO the queued text as one clientContent:
+              // flushed as two channels (realtimeInput hint + clientContent text) the server
+              // can start generating from the text before ingesting the hint — the model
+              // answered "please point" while the hint sat unread (live smoke 2026-07-18).
+              const flushText = pendingHintRef.current
+                ? `${pendingHintRef.current}\n${pendingTypedRef.current}`
+                : pendingTypedRef.current;
+              pendingHintRef.current = null;
+              providerRef.current?.sendUserText(flushText);
               pendingTypedRef.current = null;
             }
           },
@@ -3573,6 +3620,7 @@ export default function App() {
             modelCaption={modelCaption}
             busy={modelBusy}
             grounding={grounding}
+            quickFireEcho={quickFireEcho}
             onRemoveGrounding={(id) => setGrounding(g => g.filter(c => c.id !== id))}
             onSubmit={(text) => {
               lastActivityRef.current = Date.now();

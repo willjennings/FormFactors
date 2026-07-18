@@ -87,6 +87,19 @@ describe('gemini: sends issued from cb.onOpen reach the session', () => {
     expect(hintOrder).toBeLessThan(fakeSession.sendClientContent.mock.invocationCallOrder[0]);
   });
 
+  it('a hint sent while connect() is still awaiting the mic (before sessionPromise exists) is buffered, not dropped', async () => {
+    // providerRef is set BEFORE connect() runs; the deixis pipeline can fire a hint in the
+    // window before getUserMedia resolves, when sessionPromise is still null (live smoke
+    // 2026-07-18: quick-fired "What is this?" arrived without its pointing hint).
+    const provider = createGeminiProvider('test-key');
+    const connecting = provider.connect({ instructions: 'x', tools: [] } as any, { ...baseCallbacks, onOpen: () => {} });
+    provider.sendTextHint('[POINTING AT: Save button]'); // same tick — pre-sessionPromise
+    await connecting;
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    const hint = fakeSession.sendRealtimeInput.mock.calls.find(c => c[0]?.text === '[POINTING AT: Save button]');
+    expect(hint, 'pre-connect hint must be buffered and delivered').toBeTruthy();
+  });
+
   it('drops nothing but sends nothing after close() (ended guard)', async () => {
     const provider = createGeminiProvider('test-key');
     await provider.connect(

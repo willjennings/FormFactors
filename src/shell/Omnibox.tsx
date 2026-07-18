@@ -6,7 +6,7 @@ import { Tip } from '../ui/Tooltip';
 export type Suggestion = { key: string; label: string; phrase: string; color: string };
 export type GroundingChip = { id: string; title: string; color: string };
 
-export function Omnibox({ isLive, isConnecting, error, transcript, suggestions, firstRunHint, restoredDraft, modelCaption, busy = false, grounding = [], onRemoveGrounding, onSubmit, onMicToggle, onChipTap, above }: {
+export function Omnibox({ isLive, isConnecting, error, transcript, suggestions, firstRunHint, restoredDraft, modelCaption, busy = false, grounding = [], quickFireEcho = null, onRemoveGrounding, onSubmit, onMicToggle, onChipTap, above }: {
   isLive: boolean; isConnecting: boolean; error: string | null; transcript: string | null;
   suggestions: Suggestion[]; firstRunHint: boolean;
   restoredDraft?: { text: string; at: number } | null;
@@ -16,6 +16,8 @@ export function Omnibox({ isLive, isConnecting, error, transcript, suggestions, 
   busy?: boolean;
   /** Elements the user selected on screen — mirrored 1:1 as chips; sent with the query. */
   grounding?: GroundingChip[];
+  /** Transient echo of a quick-fired chip: what was just asked, about what (chain visibility). */
+  quickFireEcho?: { n: number; phrase: string; referent: string | null; at: number } | null;
   onRemoveGrounding?: (id: string) => void;
   onSubmit: (text: string) => void; onMicToggle: () => void; onChipTap: (s: Suggestion) => void;
   /** Rendered at the top of the bottom-center column (witness cards) so cards and the
@@ -50,10 +52,19 @@ export function Omnibox({ isLive, isConnecting, error, transcript, suggestions, 
           </p>
         </div>
       )}
+      {quickFireEcho && (
+        <div className="flex justify-center">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-[var(--card-border)] bg-[var(--card-bg)]/90 backdrop-blur text-[11px] font-mono text-[var(--text-primary)] shadow-sm">
+            <kbd className="px-1 rounded border border-[var(--card-border)] bg-[var(--bg-color)] text-[10px] text-[var(--text-secondary)]">{quickFireEcho.n}</kbd>
+            {quickFireEcho.phrase}
+            {quickFireEcho.referent && <span className="text-[var(--text-secondary)]">→ {quickFireEcho.referent}</span>}
+          </span>
+        </div>
+      )}
       {suggestions.length > 0 && (
         <div className="flex gap-1.5 overflow-x-auto custom-scrollbar pb-0.5">
-          {suggestions.map(s => (
-            <Tip key={s.key} label={s.label}>
+          {suggestions.map((s, i) => (
+            <Tip key={s.key} label={i < 9 ? `${s.label} — press ${i + 1}` : s.label}>
               <Button
                 size="chip"
                 variant="outline"
@@ -61,6 +72,9 @@ export function Omnibox({ isLive, isConnecting, error, transcript, suggestions, 
                 className="shrink-0 font-mono bg-[var(--card-bg)]/85 backdrop-blur text-[var(--text-primary)] hover:border-[var(--accent-color)]"
                 style={{ boxShadow: `inset 2px 0 0 rgb(${s.color})` }}
               >
+                {/* Quick-fire keycap: press the digit to send this chip WITHOUT moving the
+                    pointer off the referent (the click would). */}
+                {i < 9 && <kbd className="mr-1.5 px-1 rounded border border-[var(--card-border)] bg-[var(--bg-color)] text-[10px] leading-4 text-[var(--text-secondary)]">{i + 1}</kbd>}
                 {s.phrase}
               </Button>
             </Tip>

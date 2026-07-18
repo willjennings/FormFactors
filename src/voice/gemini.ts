@@ -54,6 +54,14 @@ const toGeminiTools = (tools: VoiceTool[]) =>
 export function createGeminiProvider(apiKey: string, onSessionReady?: (session: any) => void): VoiceProvider {
   let session: any = null;
   let sessionPromise: Promise<any> | null = null;
+  // Sends issued before connect() assigns sessionPromise (providerRef exists first) buffer
+  // here and drain in order once the promise exists. Null after drain — direct .then from
+  // then on.
+  let preConnectSends: ((s: any) => void)[] | null = [];
+  const withSession = (fn: (s: any) => void) => {
+    if (sessionPromise) sessionPromise.then(s => { if (!ended) fn(s); });
+    else preConnectSends?.push(fn);
+  };
   let inputCtx: AudioContext | null = null;
   let micStream: MediaStream | null = null;
   let captureNode: AudioWorkletNode | null = null;
@@ -136,21 +144,26 @@ export function createGeminiProvider(apiKey: string, onSessionReady?: (session: 
           ...toRealtimeInputConfig(config.vad),
         },
       });
+      // Drain sends buffered before sessionPromise existed — registered FIRST on the
+      // promise, so they precede anything the App's onOpen flush queues after open.
+      const buffered = preConnectSends;
+      preConnectSends = null;
+      buffered?.forEach(fn => sessionPromise!.then(s => { if (!ended) fn(s); }));
       session = await sessionPromise;
       onSessionReady?.(session);
     },
 
-    // All sends queue on sessionPromise (like the audio pump above): the SDK invokes
-    // callbacks.onopen BEFORE its connect promise resolves, so `session` is still null
-    // while the app's onOpen handler flushes queued typed text + the stashed deixis
-    // hint — a bare `session?.` silently dropped the first user turn of every cold
-    // start (live smoke 2026-07-16: generic reply + hint-driven spurious teach overlay).
-    // .then() on one promise is FIFO, so hint-before-text ordering is preserved.
-    sendTextHint(text: string) { sessionPromise?.then(s => { if (!ended) s.sendRealtimeInput({ text }); }); },
-    sendUserText(text: string) { sessionPromise?.then(s => { if (!ended) s.sendClientContent(geminiUserTurns(text)); }); },
-    sendVideoFrame(jpegBase64: string) { sessionPromise?.then(s => { if (!ended) s.sendRealtimeInput({ video: { data: jpegBase64, mimeType: 'image/jpeg' } }); }); },
+    // All sends route through withSession: the SDK invokes callbacks.onopen BEFORE its
+    // connect promise resolves (session null during the App's onOpen flush — live smoke
+    // 2026-07-16), AND providerRef is set before connect() even runs, so sends can arrive
+    // while sessionPromise itself is still null (the getUserMedia await) — the deixis hint
+    // of a quick-fired chip died in exactly that window (live smoke 2026-07-18). Pre-promise
+    // sends buffer; everything drains FIFO on the one promise, preserving hint-before-text.
+    sendTextHint(text: string) { withSession(s => s.sendRealtimeInput({ text })); },
+    sendUserText(text: string) { withSession(s => s.sendClientContent(geminiUserTurns(text))); },
+    sendVideoFrame(jpegBase64: string) { withSession(s => s.sendRealtimeInput({ video: { data: jpegBase64, mimeType: 'image/jpeg' } })); },
     sendToolResponse(id: string, name: string, result: any) {
-      sessionPromise?.then(s => { if (!ended) s.sendToolResponse({ functionResponses: [{ id, name, response: result }] }); });
+      withSession(s => s.sendToolResponse({ functionResponses: [{ id, name, response: result }] }));
     },
     close() {
       teardownAudio();
