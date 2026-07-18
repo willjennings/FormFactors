@@ -78,7 +78,7 @@ export function ArtifactWindow({ artifact, index, onClose }: {
           <span className="text-[9px] font-mono uppercase tracking-widest px-1.5 py-0.5 rounded bg-[var(--accent-color)]/15 text-[var(--accent-color)]">{artifact.kind}</span>
           <span className="text-xs font-semibold text-[var(--text-primary)] truncate">{artifact.title}</span>
         </div>
-        <button aria-label="Close artifact" className="text-[var(--text-secondary)] hover:text-[var(--text-primary)] shrink-0" onClick={onClose}><X size={13} /></button>
+        <button aria-label="Close artifact" className="hit-24 text-[var(--text-secondary)] hover:text-[var(--text-primary)] shrink-0" onClick={onClose}><X size={13} /></button>
       </div>
       {/* Provenance is permanent, not a hover tooltip — the honesty floor for a synthesized
           artifact is that its origin is always visible, never buried behind an interaction. */}

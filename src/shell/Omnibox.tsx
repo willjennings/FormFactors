@@ -121,7 +121,7 @@ export function Omnibox({ isLive, isConnecting, error, transcript, suggestions, 
           onChange={(e) => setDraft(e.target.value)}
           placeholder={grounding.length ? 'Ask about your selection…' : 'Ask or tell me anything — point while you type'}
           disabled={isConnecting}
-          className="flex-1 bg-transparent text-[13px] text-[var(--text-primary)] placeholder:text-[var(--text-secondary)] placeholder:opacity-50 focus:outline-none disabled:opacity-40"
+          className="flex-1 min-h-6 bg-transparent text-[13px] text-[var(--text-primary)] placeholder:text-[var(--text-secondary)] placeholder:opacity-50 focus:outline-none disabled:opacity-40"
         />
         <Tip label="Submit">
           <Button

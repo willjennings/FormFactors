@@ -32,7 +32,7 @@ export function Monitor({
         })}
       </div>
       <div className="px-4 py-2 border-t border-slate-100 text-right">
-        <button className="text-[11px] text-slate-400 hover:text-slate-600" onClick={onOpenFullEditor}>open full editor</button>
+        <button className="hit-24 text-xs text-slate-400 hover:text-slate-600" onClick={onOpenFullEditor}>open full editor</button>
       </div>
     </div>
   );

@@ -41,7 +41,7 @@ export function SlotRow({
             className="w-full border border-blue-400 rounded px-1 py-0.5"
           />
         ) : (
-          <button className="text-left w-full" onClick={begin}>
+          <button className="text-left w-full min-h-6 py-0.5" onClick={begin}>
             {fill.status === 'needsInput'
               ? <span className="text-amber-600">asking… "{fill.pendingQuestion}"</span>
               : (fill.value ?? <span className="text-slate-300">·</span>)}

@@ -19,9 +19,9 @@ export function WhiteboardPanel({ state, preview, sketch, open, onClear, onClear
         <span className="text-[10px] font-mono uppercase tracking-widest text-[var(--text-secondary)]">Whiteboard</span>
         <div className="flex items-center gap-2">
           <button aria-label="Clear sketch" disabled={!sketch.strokes.length}
-            className="text-[var(--text-secondary)] hover:text-[var(--text-primary)] disabled:opacity-30"
+            className="hit-24 text-[var(--text-secondary)] hover:text-[var(--text-primary)] disabled:opacity-30"
             onClick={onClearSketch}><Eraser size={13} /></button>
-          <button aria-label="Clear whiteboard" className="text-[var(--text-secondary)] hover:text-[var(--text-primary)]" onClick={onClear}><X size={13} /></button>
+          <button aria-label="Clear whiteboard" className="hit-24 text-[var(--text-secondary)] hover:text-[var(--text-primary)]" onClick={onClear}><X size={13} /></button>
         </div>
       </div>
       <div className="relative w-full h-[calc(100%-2rem)]">

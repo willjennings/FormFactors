@@ -237,7 +237,7 @@ export function RambleLive() {
   return (
     <div className="min-h-screen bg-slate-50 pb-16">
       <div className="max-w-md mx-auto pt-6 px-4 flex items-center justify-between">
-        <a href="/" className="text-xs text-slate-500 hover:text-slate-800">← point-and-speak</a>
+        <a href="/" className="hit-24 inline-flex items-center text-xs text-slate-500 hover:text-slate-800">← point-and-speak</a>
         <div className="flex items-center gap-2">
           <select
             aria-label="Voice backend" value={backend} disabled={isLive || isConnecting}
