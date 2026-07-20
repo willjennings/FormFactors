@@ -2,9 +2,20 @@
 // pointer — clicking a chip forces abandoning the very hover target the question is
 // about (user finding 2026-07-18: pointing and asking must not fight each other).
 
+/** Same-key cooldown: swallow key bounce/hold artifacts, allow deliberate re-fires. */
+export const QUICK_FIRE_COOLDOWN_MS = 400;
+
 /** Digit key → chip index, or null when it must not fire. Pure. */
-export function quickFireIndex(key: string, targetIsEditable: boolean, chipCount: number): number | null {
+export function quickFireIndex(
+  key: string, targetIsEditable: boolean, chipCount: number,
+  opts: { repeat?: boolean; lastFire?: { key: string; at: number } | null; now?: number } = {},
+): number | null {
   if (targetIsEditable) return null;
+  // A held key auto-repeats keydown — one tap must mean ONE send (user 2026-07-19: a held
+  // "2" fired five slide inserts).
+  if (opts.repeat) return null;
+  if (opts.lastFire && opts.now !== undefined && opts.lastFire.key === key
+      && opts.now - opts.lastFire.at < QUICK_FIRE_COOLDOWN_MS) return null;
   if (!/^[1-9]$/.test(key)) return null;
   const i = parseInt(key, 10) - 1;
   return i < chipCount ? i : null;

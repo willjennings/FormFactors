@@ -2041,10 +2041,13 @@ export default function App() {
   const sendTypedInputRef = useRef(sendTypedInput);
   sendTypedInputRef.current = sendTypedInput;
   useEffect(() => {
+    const lastFireRef = { current: null as { key: string; at: number } | null };
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
-      const i = quickFireIndex(e.key, isEditableTarget(e.target), suggestionsRef.current.length);
+      const i = quickFireIndex(e.key, isEditableTarget(e.target), suggestionsRef.current.length,
+        { repeat: e.repeat, lastFire: lastFireRef.current, now: Date.now() });
       if (i === null) return;
+      lastFireRef.current = { key: e.key, at: Date.now() };
       e.preventDefault();
       const sug = suggestionsRef.current[i];
       const hovered = hoveredIdRef.current ? entityById(entitiesRef.current, hoveredIdRef.current) : null;
