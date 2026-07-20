@@ -3435,7 +3435,9 @@ export default function App() {
           {goalState.objective && (
             <div className="absolute top-14 left-1/2 -translate-x-1/2 z-40 pointer-events-auto flex items-center gap-2 px-3 py-1.5 rounded-full border border-[var(--card-border)] bg-[var(--card-bg)]/90 backdrop-blur shadow-sm">
               <span className="text-[10px] font-mono uppercase tracking-wide text-[var(--text-secondary)]">Working toward</span>
-              <span className="text-[11px] font-mono text-[var(--text-primary)] max-w-[280px] truncate">{goalState.objective}</span>
+              {/* Mission briefs are full sentences — clamp to two lines, never one-line-ellipse
+                  them into gibberish (user 2026-07-19: "a user literally cannot read it"). */}
+              <span title={goalState.objective ?? undefined} className="text-[11px] font-mono text-[var(--text-primary)] max-w-[520px] line-clamp-2 leading-tight text-left">{goalState.objective}</span>
               <span className="text-[10px] font-mono text-[var(--text-secondary)]">· {goalState.steps.filter((s) => s.done).length}/{goalState.steps.length}</span>
               <button aria-label="Clear goal" className="hit-24 text-[var(--text-secondary)] hover:text-[var(--text-primary)]" onClick={() => (missionRun && missionRun.completedAt === null ? abandonMission() : goalDispatch({ type: 'goal.clear' }))}><X size={12} /></button>
             </div>
