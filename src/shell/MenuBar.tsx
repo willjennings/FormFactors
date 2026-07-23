@@ -13,7 +13,7 @@ export function MenuBar({ isLive, isConnecting, isDarkMode, traffic, registerLab
   return (
     <div className="absolute top-0 left-0 right-0 z-30 flex items-center justify-between px-4 h-12 border-b border-[var(--card-border)] bg-[var(--card-bg)]/80 backdrop-blur" data-shell onPointerDown={(e) => e.stopPropagation()}>
       <span className="text-[12px] font-semibold text-[var(--text-primary)]">FormFactors</span>
-      <button onClick={onRegisterPill} className="hit-24 flex items-center gap-1 rounded-full border border-[var(--card-border)] px-2 py-0.5 text-[11px] font-medium text-[var(--text-primary)] hover:bg-[var(--bg-color)]" aria-label={`Register: ${registerLabel} — open register band`}>
+      <button data-register-pill onClick={onRegisterPill} className="hit-24 flex items-center gap-1 rounded-full border border-[var(--card-border)] px-2 py-0.5 text-[11px] font-medium text-[var(--text-primary)] hover:bg-[var(--bg-color)]" aria-label={`Register: ${registerLabel} — open register band`}>
         <span aria-hidden>{registerGlyph}</span>{registerLabel}<kbd className="text-[9px] opacity-50">`</kbd>
       </button>
       <div className="flex items-center gap-1">

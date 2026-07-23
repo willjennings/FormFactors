@@ -2383,7 +2383,8 @@ export default function App() {
       if (e.key === 'i') addMarker("it");
       if (e.key === 'h') addMarker("here");
       // G8: number keys 1–9 select a numbered target (pointer-free deixis).
-      if (e.key >= '1' && e.key <= '9') selectTargetByNumber(Number(e.key));
+      // band-open digits belong to the register band (same-window second listener; preventDefault doesn't cross listeners)
+      if (e.key >= '1' && e.key <= '9' && !bandOpenRef.current) selectTargetByNumber(Number(e.key));
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);

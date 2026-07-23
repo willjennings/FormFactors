@@ -22,7 +22,14 @@ export function RegisterBand({ current, dials, onSelect, onCustom, onClose }: {
 
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
-      if (panelRef.current && !panelRef.current.contains(e.target as Node)) onClose();
+      if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
+        // Skip the pill: its own click toggle owns close-on-click. If we also queued a
+        // close here, React 19 batches this mousedown's setBandOpen(false) with the pill's
+        // click setBandOpen(o => !o) against the same pre-click state, netting a no-op —
+        // the band would never close.
+        if ((e.target as HTMLElement).closest?.('[data-register-pill]')) return;
+        onClose();
+      }
     };
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
