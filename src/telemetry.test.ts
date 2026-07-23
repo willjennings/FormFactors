@@ -60,3 +60,17 @@ describe('mission telemetry (spec §7)', () => {
     expect(events.find(e => e.type === 'mission_abandoned')).toMatchObject({ key: 'fix-deck', stepIndex: 0 });
   });
 });
+
+describe('arm in telemetry', () => {
+  it('stamps the arm on session config and register_switch events', () => {
+    const DEFAULT_DIALS = { honest: false, autonomy: 'confirm' as const, feedback: 'earcon' as const, confirmGoals: false, markings: false, chipDensity: 'full' as const, traceView: 'hidden' as const, teaching: 'off' as const, proactivity: 'never' as const };
+    telemetry.start({ backend: 'gemini', autonomy: 'auto-safe', feedback: 'earcon', program: 'word',
+      honest: false, device: { width: 1280, height: 800, touch: false, pointer: 'fine', formFactor: 'desktop' as const, ua: 'test' },
+      arm: { register: 'guided', dials: DEFAULT_DIALS } });
+    telemetry.registerSwitch('guided', 'terminal', true);
+    const json = JSON.parse(telemetry.exportJSON());
+    expect(json.config.arm.register).toBe('guided');
+    expect(json.events.find((e: any) => e.type === 'register_switch'))
+      .toMatchObject({ from: 'guided', to: 'terminal', midSession: true });
+  });
+});

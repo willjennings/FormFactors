@@ -11,6 +11,8 @@
 // Omit that distributes over a discriminated union (so per-variant fields survive).
 type DistributiveOmit<T, K extends keyof any> = T extends any ? Omit<T, K> : never;
 
+import type { DialValues } from './register/types';
+
 export type FormFactor = 'mobile' | 'tablet' | 'desktop';
 export type InputModality = 'voice' | 'typed' | 'direct';
 
@@ -23,6 +25,12 @@ export interface DeviceInfo {
   ua: string;
 }
 
+export interface Arm {
+  register: string;        // named register key, or 'custom'
+  base?: string;           // when custom: the named register the twiddle started from
+  dials: DialValues;       // fully resolved — the cohort definition
+}
+
 export interface SessionConfig {
   backend: string;   // gemini | azure | openai
   autonomy: string;  // manual | confirm | auto-safe | autonomous
@@ -30,6 +38,7 @@ export interface SessionConfig {
   program: string;   // word | excel | ...
   honest: boolean;
   device: DeviceInfo;
+  arm?: Arm;
 }
 
 export type TelemetryEvent =
@@ -49,7 +58,8 @@ export type TelemetryEvent =
   | { t: number; type: 'mission_start'; key: string; run: number }
   | { t: number; type: 'mission_step_done'; key: string; stepKey: string }
   | { t: number; type: 'mission_complete'; key: string; run: number; durationMs: number; steps: number }
-  | { t: number; type: 'mission_abandoned'; key: string; stepIndex: number };
+  | { t: number; type: 'mission_abandoned'; key: string; stepIndex: number }
+  | { t: number; type: 'register_switch'; from: string; to: string; midSession: boolean };
 
 export function detectDevice(): DeviceInfo {
   const width = typeof window !== 'undefined' ? window.innerWidth : 0;
@@ -113,6 +123,7 @@ class Telemetry {
   missionStepDone(key: string, stepKey: string) { this.push({ type: 'mission_step_done', key, stepKey }); }
   missionComplete(key: string, run: number, durationMs: number, steps: number) { this.push({ type: 'mission_complete', key, run, durationMs, steps }); }
   missionAbandoned(key: string, stepIndex: number) { this.push({ type: 'mission_abandoned', key, stepIndex }); }
+  registerSwitch(from: string, to: string, midSession: boolean) { this.push({ type: 'register_switch', from, to, midSession }); }
 
   /** Aggregated, human-readable summary for the live readout + export. */
   metrics() {
@@ -196,7 +207,8 @@ class Telemetry {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       const ff = this.config?.device.formFactor ?? 'unknown';
-      const cfg = this.config ? `${this.config.backend}-${this.config.autonomy}-${this.config.feedback}` : 'session';
+      const arm = this.config?.arm?.register ?? 'unset';
+      const cfg = this.config ? `${arm}-${this.config.backend}-${this.config.autonomy}-${this.config.feedback}` : 'session';
       a.href = url;
       a.download = `testbed-${ff}-${cfg}-${this.startedAt}.json`;
       a.click();

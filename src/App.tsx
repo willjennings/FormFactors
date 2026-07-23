@@ -2178,6 +2178,7 @@ export default function App() {
               program: activeProgram,
               honest: dialsRef.current.honest,
               device: detectDevice(),
+              arm: { register: 'guided', dials: { ...dialsRef.current } }, // Task 5 threads the live register key
             });
             setIsConnecting(false);
             connectInFlightRef.current = false;
