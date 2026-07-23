@@ -84,20 +84,27 @@ describe('PROBE sessionStore.valueUpdate on a user-owned slot', () => {
   });
 });
 
-describe('PROBE sessionStore phase transitions are unconstrained', () => {
-  it('allows an illegal jump straight from conversing to done', () => {
+describe('PROBE sessionStore phase transitions are constrained (legal-transition table)', () => {
+  it('CLOSED (2026-07-21-ramble-phase-machine-design.md §2): an illegal jump straight from conversing to done is rejected (no-op)', () => {
     const st = reduce(start(), { type: 'session.phaseChange', phase: 'done' }, 2000);
-    // FINDING candidate: no phase-machine validation exists in the reducer at all —
-    // any phase to any phase is accepted unconditionally.
-    expect(st.phase).toBe('done');
+    // `conversing -> done` is not in LEGAL_EDGES (only `submitting -> done` is). The reducer's
+    // legalTransition() guard returns state unchanged instead of blindly assigning the phase.
+    expect(st.phase).toBe('conversing');
   });
 
-  it('agent fills still land AFTER phase is done (no phase guard on slot events)', () => {
-    let st = reduce(start(), { type: 'session.phaseChange', phase: 'done' }, 2000);
-    st = reduce(st, { type: 'slot.fillingStart', slotId: 'question' }, 2100);
-    st = reduce(st, { type: 'slot.draft', slotId: 'question', value: 'late fill', confidence: 0.9, source: 'heard' }, 2200);
-    // FINDING candidate: a fill lands into a 'done' session as if nothing happened.
-    expect(slot(st, 'question')).toMatchObject({ value: 'late fill', status: 'draft' });
+  it('CLOSED (2026-07-21-ramble-phase-machine-design.md §3): agent fills do NOT land once phase is legitimately done (phase seal)', () => {
+    // Walk the actual legal path to 'done' — conversing -> recapping -> awaitingConsent ->
+    // submitting -> done — instead of the illegal one-hop jump (now itself a no-op, see above).
+    let st = reduce(start(), { type: 'session.phaseChange', phase: 'recapping' }, 2000);
+    st = reduce(st, { type: 'session.phaseChange', phase: 'awaitingConsent' }, 2100);
+    st = reduce(st, { type: 'session.phaseChange', phase: 'submitting' }, 2200);
+    st = reduce(st, { type: 'session.phaseChange', phase: 'done' }, 2300);
+    expect(st.phase).toBe('done');
+    st = reduce(st, { type: 'slot.fillingStart', slotId: 'question' }, 2400);
+    st = reduce(st, { type: 'slot.draft', slotId: 'question', value: 'late fill', confidence: 0.9, source: 'heard' }, 2500);
+    // fillsAllowedIn('done') is false, so both agent-driven slot events no-op: the seal that
+    // was previously missing now holds — no late fill lands into a finished session.
+    expect(slot(st, 'question')).toMatchObject({ value: null, status: 'empty' });
     expect(st.phase).toBe('done');
   });
 });
@@ -140,19 +147,28 @@ describe('PROBE scribeCallToEvents — enum/constraint validation on discipline'
 // ---------------------------------------------------------------------------
 // 4. selectors
 // ---------------------------------------------------------------------------
-describe('PROBE isStalled outside the conversing phase', () => {
-  it('never reports stalled during recapping, even after a very long silence', () => {
+describe('PROBE isStalled — stall scope (2026-07-21-ramble-phase-machine-design.md §4)', () => {
+  it('CLOSED: DOES report stalled during recapping after a long silence — a stuck recap is now monitored', () => {
     let st = reduce(start(), { type: 'session.phaseChange', phase: 'recapping' }, 2000);
-    // FINDING candidate: isStalled is phase-gated to 'conversing' only. A session
-    // that dies mid-recap (agent crashes, network drops) will NEVER be flagged
-    // stalled by this selector, however long `now` advances.
+    // Previously a FINDING (isStalled was phase-gated to 'conversing' only, so a session
+    // that died mid-recap was never flagged). STALL_PHASES now includes 'recapping', so a
+    // recap that goes silent past STALL_MS is genuinely reported stuck.
     const stalledCheck = isStalled(st, 2000 + 10 * 60 * 1000); // 10 minutes later
-    expect(stalledCheck).toBe(false);
+    expect(stalledCheck).toBe(true);
   });
 
-  it('never reports stalled during awaitingConsent, even after a very long silence', () => {
-    let st = reduce(start(), { type: 'session.phaseChange', phase: 'awaitingConsent' }, 2000);
-    const stalledCheck = isStalled(st, 2000 + 60 * 60 * 1000); // 1 hour later
+  it('never reports stalled during awaitingConsent, even after a very long silence (deliberate: a human-wait, not a stall)', () => {
+    // Reach awaitingConsent via the actual legal path — conversing -> recapping ->
+    // awaitingConsent — since a direct one-hop jump is illegal and now a no-op (see the
+    // legal-transition-table probes above), which previously left this probe silently
+    // testing 'conversing' behavior instead of 'awaitingConsent'.
+    let st = reduce(start(), { type: 'session.phaseChange', phase: 'recapping' }, 2000);
+    st = reduce(st, { type: 'session.phaseChange', phase: 'awaitingConsent' }, 2100);
+    expect(st.phase).toBe('awaitingConsent');
+    const stalledCheck = isStalled(st, 2100 + 60 * 60 * 1000); // 1 hour later
+    // awaitingConsent is a human-wait (Submit / Not yet is the user's call) — deliberately
+    // excluded from STALL_PHASES. Flagging it "stalled" would be dishonest since nothing is
+    // actually stuck; this is unchanged by the spec, by design.
     expect(stalledCheck).toBe(false);
   });
 
