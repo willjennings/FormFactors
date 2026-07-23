@@ -4,7 +4,7 @@ import { reduce } from './sessionStore';
 import { isStalled } from './selectors';
 import type { RambleEvent, SessionState } from './types';
 import { Monitor } from './Monitor';
-import { SCRIBE_TOOLS, scribeCallToEvents } from './scribeTools';
+import { SCRIBE_TOOLS, scribeCallToEvents, phaseGuard } from './scribeTools';
 import { buildScribeInstructions } from './scribePrompt';
 import type { VoiceProvider, ProviderKind } from '../voice/types';
 import { createGeminiProvider } from '../voice/gemini';
@@ -73,6 +73,13 @@ export function RambleLive() {
       return;
     }
     const prev = stateRef.current;
+    // Phase honesty (spec §2-3): a call the sealed reducer would silently drop must be
+    // rejected with the truth — and, like all rejections, never recorded in the deduper.
+    const phaseErr = phaseGuard(call.name, stateRef.current.phase);
+    if (phaseErr) {
+      providerRef.current?.sendToolResponse(call.id, call.name, { success: false, error: phaseErr });
+      return;
+    }
     // Yield guard (defense-in-depth for spec §6.2): the reducer silently drops
     // fill_slot/ask_gap/confirm_slot for a user-owned slot, so a structurally valid
     // call here would otherwise still get acked `{success:true}` with earcons and
@@ -227,6 +234,9 @@ export function RambleLive() {
     }, 700);
   };
   const declineSubmit = () => {
+    // Decline returns to conversing (spec §5): the consent card dismisses, fill
+    // monitoring resumes, the user keeps rambling. The model may recap again when ready.
+    apply({ type: 'session.phaseChange', phase: 'conversing' });
     providerRef.current?.sendTextHint('[SYSTEM: the user DECLINED the submission — nothing was sent. They may edit fields or tell you what to change; recap again before any new submit.]');
   };
 

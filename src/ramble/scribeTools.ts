@@ -1,5 +1,6 @@
 import type { VoiceTool } from '../voice/types';
-import type { RambleEvent, SlotSource, FormSchema } from './types';
+import type { RambleEvent, SlotSource, FormSchema, Phase } from './types';
+import { fillsAllowedIn } from './sessionStore';
 
 export const SCRIBE_TOOLS: VoiceTool[] = [
   {
@@ -98,4 +99,28 @@ export function scribeCallToEvents(
     default:
       return { error: `Unknown scribe tool "${call.name}".` };
   }
+}
+
+/** Model-facing phase honesty (spec 2026-07-21-ramble-phase-machine §2-3): returns the
+ *  error message for a wrong-phase call, or null when phase-legal. The reducer would
+ *  no-op these anyway (defense in depth); this guard exists so the model is TOLD the
+ *  truth instead of getting a success ack for a mutation that never happened. */
+export function phaseGuard(name: string, phase: Phase): string | null {
+  const sealedReason =
+    phase === 'awaitingConsent' ? "the form is awaiting the user's consent — do not modify it; wait for their decision."
+    : phase === 'submitting' ? 'the form is being submitted — do not modify it.'
+    : phase === 'done' ? 'the form was already submitted — the session is done; nothing can be changed.'
+    : null;
+  if (name === 'fill_slot' || name === 'ask_gap' || name === 'confirm_slot') {
+    return fillsAllowedIn(phase) ? null : sealedReason;
+  }
+  if (name === 'recap') {
+    return phase === 'conversing' || phase === 'recapping' ? null : sealedReason;
+  }
+  if (name === 'submit') {
+    if (phase === 'recapping' || phase === 'awaitingConsent') return null;
+    if (phase === 'conversing') return 'recap the collected slots before submitting — the user must hear the readback first.';
+    return sealedReason;
+  }
+  return null;
 }

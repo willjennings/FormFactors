@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { SCRIBE_TOOLS, scribeCallToEvents } from './scribeTools';
+import { SCRIBE_TOOLS, scribeCallToEvents, phaseGuard } from './scribeTools';
 import { RFI_SCHEMA } from './rfiSchema';
 
 describe('SCRIBE_TOOLS', () => {
@@ -57,5 +57,32 @@ describe('enum constraint validation (probe 2026-07-16: "banana" landed as an un
   it('non-enum slots accept any value as before', () => {
     const evs = scribeCallToEvents({ name: 'fill_slot', args: { slotId: 'location', value: 'wherever', confidence: 0.5, source: 'heard' } }, RFI_SCHEMA);
     expect(Array.isArray(evs)).toBe(true);
+  });
+});
+
+describe('phaseGuard', () => {
+  it('fills are legal in conversing/recapping, rejected in sealed phases with the honest reason', () => {
+    for (const name of ['fill_slot', 'ask_gap', 'confirm_slot']) {
+      expect(phaseGuard(name, 'conversing')).toBeNull();
+      expect(phaseGuard(name, 'recapping')).toBeNull();
+      expect(phaseGuard(name, 'awaitingConsent')).toMatch(/awaiting the user's consent/);
+      expect(phaseGuard(name, 'submitting')).toMatch(/being submitted/);
+      expect(phaseGuard(name, 'done')).toMatch(/already submitted/);
+    }
+  });
+  it('submit requires a recap first', () => {
+    expect(phaseGuard('submit', 'conversing')).toMatch(/recap the collected slots before submitting/);
+    expect(phaseGuard('submit', 'recapping')).toBeNull();
+    expect(phaseGuard('submit', 'awaitingConsent')).toBeNull(); // idempotent repeat
+    expect(phaseGuard('submit', 'done')).toMatch(/already submitted/);
+  });
+  it('recap is legal from conversing/recapping only', () => {
+    expect(phaseGuard('recap', 'conversing')).toBeNull();
+    expect(phaseGuard('recap', 'recapping')).toBeNull();
+    expect(phaseGuard('recap', 'done')).toMatch(/already submitted/);
+    expect(phaseGuard('recap', 'awaitingConsent')).toMatch(/awaiting the user's consent/);
+  });
+  it('unknown names pass through (validation owns them)', () => {
+    expect(phaseGuard('not_a_tool', 'done')).toBeNull();
   });
 });
