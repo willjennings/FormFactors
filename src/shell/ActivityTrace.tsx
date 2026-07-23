@@ -16,13 +16,39 @@ const TONE: Record<ActivityEntry['kind'], string> = {
   error: 'text-red-500',
 };
 
-export function ActivityTrace({ state, onOpenStream }: { state: ActivityState; onOpenStream: () => void }) {
-  // Re-render on a coarse tick so rows fade out on time even with no new entries.
+export function ActivityTrace({ state, onOpenStream, variant = 'ticker' }: {
+  state: ActivityState; onOpenStream: () => void; variant?: 'ticker' | 'ledger';
+}) {
+  // Re-render on a coarse tick so ticker rows fade out on time even with no new entries.
+  // The ledger variant shows the whole history with no fade, so it has no need for the tick.
   const [, setTick] = useState(0);
   useEffect(() => {
+    if (variant === 'ledger') return;
     const t = setInterval(() => setTick((n) => n + 1), 1000);
     return () => clearInterval(t);
-  }, []);
+  }, [variant]);
+
+  if (variant === 'ledger') {
+    // Full history, no fade, no VISIBLE_MAX window — a standing audit column, not a ticker.
+    const rows = state.entries;
+    if (!rows.length) return null;
+    return (
+      <div className="fixed right-2 top-14 bottom-24 w-64 overflow-y-auto z-30 flex flex-col items-end gap-1 pointer-events-auto" data-shell aria-label="Model activity ledger">
+        {rows.map((r, i) => (
+          <button
+            key={`${r.at}-${i}`}
+            onClick={onOpenStream}
+            title="Open the full operation stream"
+            className={`hit-24 max-w-[320px] truncate text-left px-2.5 py-1 rounded-full border border-[var(--card-border)] bg-[var(--card-bg)]/90 backdrop-blur shadow-sm text-[11px] font-mono ${TONE[r.kind]} hover:border-[var(--accent-color)]`}
+          >
+            <span aria-hidden className="mr-1.5">{ICON[r.kind]}</span>
+            {r.text}
+          </button>
+        ))}
+      </div>
+    );
+  }
+
   const rows = visibleActivity(state, Date.now());
   if (!rows.length) return null;
   return (

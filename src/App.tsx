@@ -42,6 +42,7 @@ import {
 import type { ProgramId, ElementCategory, MockDoc, Program } from './scenarios';
 import { DEFAULT_DIALS } from './register/registry';
 import type { DialValues } from './register/types';
+import { visibleSuggestions } from './register/gates';
 import type { PerceivedCache } from './perception/perceiveTile';
 import { measureWords, type WordBox } from './perception/measureWords';
 import { buildEntities, entityById, entityByTitle, displayName, resolveEchoedTarget } from './entities/registry';
@@ -337,14 +338,14 @@ export default function App() {
   // The carousel is built from the shared task library, filtered + ordered for this program.
   const TASKS = React.useMemo(() => tasksForProgram(activeProgram), [activeProgram]);
   // Suggestion chips shown in the Omnibox — one per task, color-coded by action category.
-  const suggestions = useMemo(() => TASKS.map(t => ({
+  // Gated below (R1 Task 4) by chipDensity + grounding into `suggestions`; this is the
+  // ungated source list both the chip row and quick-fire derive from.
+  const allSuggestions = useMemo(() => TASKS.map(t => ({
     key: t.key,
     label: t.title,
     phrase: t.hint.match(/"(.*?)"/)?.[1] ?? t.title,
     color: ACTION_CATEGORIES[t.action].color,
   })), [TASKS]);
-  const suggestionsRef = useRef(suggestions);
-  useEffect(() => { suggestionsRef.current = suggestions; }, [suggestions]);
   // Quick-fire chips (user finding 2026-07-18): clicking a chip forces the pointer OFF the
   // referent the question is about. Digits 1-9 fire the matching chip through the SAME typed
   // path (deixis binds to the current hover), pointer never moves. The echo pill shows what
@@ -454,6 +455,15 @@ export default function App() {
   // with the next query. Cleared on submit and on program swap (ids go stale).
   const [grounding, setGrounding] = useState<{ id: EntityId; title: string; color: string }[]>([]);
   useEffect(() => { setGrounding([]); }, [activeProgram]);
+  // R1 Task 4: chipDensity render gate — ONE derivation feeds both the chip row (Omnibox
+  // `suggestions` prop) and quick-fire (via suggestionsRef below), so 'none' can never leave
+  // an invisible hot surface with a live keyboard shortcut.
+  const suggestions = useMemo(
+    () => visibleSuggestions(allSuggestions, dials.chipDensity, grounding.length),
+    [allSuggestions, dials.chipDensity, grounding.length],
+  );
+  const suggestionsRef = useRef(suggestions);
+  useEffect(() => { suggestionsRef.current = suggestions; }, [suggestions]);
   // Model captions: the response window for muted speakers. Persists until replaced.
   const [modelCaption, setModelCaption] = useState<{ text: string; final: boolean } | null>(null);
   // In-flight model turn: the honest "working on it" signal between the user's ask and the
@@ -3438,7 +3448,9 @@ export default function App() {
               <button aria-label="Clear goal" className="hit-24 text-[var(--text-secondary)] hover:text-[var(--text-primary)]" onClick={() => (missionRun && missionRun.completedAt === null ? abandonMission() : goalDispatch({ type: 'goal.clear' }))}><X size={12} /></button>
             </div>
           )}
-          <ActivityTrace state={activity} onOpenStream={() => setDrawerOpen(true)} />
+          {dials.traceView !== 'hidden' && (
+            <ActivityTrace state={activity} variant={dials.traceView} onOpenStream={() => setDrawerOpen(true)} />
+          )}
           <MissionPicker missions={MISSIONS} runs={missionRuns} active={missionRun} activeDef={missionDef} open={missionOpen} onStart={startMissionRun} onAbandon={abandonMission} onClose={() => setMissionOpen(false)} />
           {/* Highlight category legend — explains the colour ↔ category mapping while debug markings are on */}
           {dials.markings && (
