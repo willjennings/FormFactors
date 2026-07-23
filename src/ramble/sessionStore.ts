@@ -1,4 +1,20 @@
-import type { SessionState, SlotFill, RambleEvent } from './types';
+import type { SessionState, SlotFill, RambleEvent, Phase } from './types';
+
+/** Spec 2026-07-21-ramble-phase-machine: the machine's only legal edges. Self-transitions
+ *  are idempotent no-ops (recap while recapping, etc.). Everything else is ignored here
+ *  (defense in depth) — model-facing honesty for illegal calls lives in the HOST guard. */
+const LEGAL_EDGES: ReadonlyArray<readonly [Phase, Phase]> = [
+  ['conversing', 'recapping'],
+  ['recapping', 'conversing'],
+  ['recapping', 'awaitingConsent'],
+  ['awaitingConsent', 'submitting'],
+  ['awaitingConsent', 'conversing'],   // decline returns to conversing
+  ['submitting', 'done'],
+];
+
+export function legalTransition(from: Phase, to: Phase): boolean {
+  return from === to || LEGAL_EDGES.some(([f, t]) => f === from && t === to);
+}
 
 function hasSlot(state: SessionState, slotId: string): boolean {
   return state.fills.some((f) => f.slotId === slotId);
@@ -43,6 +59,7 @@ export function reduce(state: SessionState, event: RambleEvent, now: number): Se
     case 'activity.change':
       return { ...state, activity: event.activity, lastUpdateAt: now };
     case 'session.phaseChange':
+      if (!legalTransition(state.phase, event.phase)) return state;
       return { ...state, phase: event.phase };
     case 'heartbeat':
       return { ...state, lastUpdateAt: now };

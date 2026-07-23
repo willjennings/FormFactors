@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { reduce } from './sessionStore';
+import { reduce, legalTransition } from './sessionStore';
 import { RFI_SCHEMA, initialSessionState } from './rfiSchema';
+import type { Phase } from './types';
 
 const start = () => initialSessionState(RFI_SCHEMA, '6/29/2026', 1000);
 const slot = (st: any, id: string) => st.fills.find((f: any) => f.slotId === id);
@@ -120,5 +121,48 @@ describe('yield stays sticky through cancel (probe 2026-07-16)', () => {
     st = reduce(st, { type: 'user.editStart', slotId: 'drawingRef' }, 1100);
     st = reduce(st, { type: 'user.editCancel', slotId: 'drawingRef' }, 1200);
     expect(slot(st, 'drawingRef')).toMatchObject({ value: 'S-301', owner: 'agent', status: 'draft' });
+  });
+});
+
+describe('phase transition table', () => {
+  const LEGAL: [Phase, Phase][] = [
+    ['conversing', 'recapping'],
+    ['recapping', 'conversing'],
+    ['recapping', 'awaitingConsent'],
+    ['awaitingConsent', 'submitting'],
+    ['awaitingConsent', 'conversing'],
+    ['submitting', 'done'],
+  ];
+  const ALL: Phase[] = ['capturing', 'conversing', 'recapping', 'awaitingConsent', 'submitting', 'done'];
+
+  it('allows exactly the spec edges plus self-transitions', () => {
+    for (const from of ALL) for (const to of ALL) {
+      const expected = from === to || LEGAL.some(([f, t]) => f === from && t === to);
+      expect(legalTransition(from, to), `${from} -> ${to}`).toBe(expected);
+    }
+  });
+
+  it('reducer ignores an illegal jump conversing -> done', () => {
+    const s = { ...start(), phase: 'conversing' as Phase };
+    const out = reduce(s, { type: 'session.phaseChange', phase: 'done' }, 1000);
+    expect(out.phase).toBe('conversing');
+    expect(out).toBe(s); // unchanged reference — a true no-op
+  });
+
+  it('reducer ignores conversing -> awaitingConsent (recap cannot be skipped)', () => {
+    const s = { ...start(), phase: 'conversing' as Phase };
+    expect(reduce(s, { type: 'session.phaseChange', phase: 'awaitingConsent' }, 1000).phase).toBe('conversing');
+  });
+
+  it('reducer ignores any transition out of done', () => {
+    const s = { ...start(), phase: 'done' as Phase };
+    expect(reduce(s, { type: 'session.phaseChange', phase: 'conversing' }, 1000).phase).toBe('done');
+  });
+
+  it('reducer applies a legal edge and a self-transition no-ops cleanly', () => {
+    const s = { ...start(), phase: 'recapping' as Phase };
+    expect(reduce(s, { type: 'session.phaseChange', phase: 'awaitingConsent' }, 1000).phase).toBe('awaitingConsent');
+    const same = reduce(s, { type: 'session.phaseChange', phase: 'recapping' }, 1000);
+    expect(same.phase).toBe('recapping');
   });
 });
