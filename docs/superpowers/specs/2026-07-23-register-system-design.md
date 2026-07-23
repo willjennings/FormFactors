@@ -90,9 +90,9 @@ Follows the honest-mode reconnect precedent exactly (App.tsx ~L482-496):
 3. **The switch is witnessed** through the real activity seam (`reduceActivity`, kind `'done'`): `Register: Guided → Terminal (reconnected · 6 dials changed)`. In trace-hidden registers the pill itself flashes the transition — the floor still answers "did it work?".
 4. `register_switch` telemetry with `midSession`; a mid-mission switch marks the run mixed (consumed by R2).
 
-## 8. Dial Bench (`src/shell/DialBench.tsx`)
+## 8. Dial Bench — DEFERRED TO R2 (master-plan sequencing governs)
 
-The user-facing dials extracted OUT of the DebugDrawer into a panel opened from the band's Custom notch, using the exact labels/hints they have today (`src/ui/` Switch/Select primitives). DebugDrawer keeps only true debug items (voice backend, refresh rate, earcon audition, testbed readout, world state, op-stream, end/reset). Twiddling any dial while in a named register forks to Custom (`base` recorded).
+The dedicated `DialBench.tsx` extraction lands in R2 alongside paired comparison, per the approved master plan's phase list. In R1 the band's **Custom notch opens the existing DebugDrawer** (all five dials are already twiddlable there); twiddling any dial while in a named register forks to Custom (`base` recorded) — that forking DOES land in R1.
 
 ## 9. Testing
 
