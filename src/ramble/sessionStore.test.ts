@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { reduce, legalTransition, fillsAllowedIn } from './sessionStore';
 import { RFI_SCHEMA, initialSessionState } from './rfiSchema';
+import { isStalled } from './selectors';
 import type { Phase } from './types';
 
 const start = () => initialSessionState(RFI_SCHEMA, '6/29/2026', 1000);
@@ -203,5 +204,26 @@ describe('phase seal on fills', () => {
     const f = out.fills.find(x => x.slotId === SLOT);
     expect(f?.value).toBe('mine');
     expect(f?.owner).toBe('user');
+  });
+});
+
+describe('decline-from-consent must restart liveness (no spurious stall on a user action)', () => {
+  it('declining after a long deliberation on the consent card is NOT stalled once the heartbeat lands', () => {
+    // Walk the LEGAL phase chain — conversing -> recapping -> awaitingConsent — no illegal jumps.
+    let st = reduce(start(), { type: 'session.phaseChange', phase: 'recapping' }, 2000);
+    st = reduce(st, { type: 'session.phaseChange', phase: 'awaitingConsent' }, 3000);
+    // lastUpdateAt is frozen back at session start (1000): awaitingConsent is unmonitored,
+    // so nothing since has refreshed it. The user now deliberates on the consent card for
+    // well over STALL_MS before clicking "Not yet" at now=20000.
+    const declineAt = 20_000;
+    const afterPhaseChange = reduce(st, { type: 'session.phaseChange', phase: 'conversing' }, declineAt);
+
+    // Pin WHY the heartbeat is needed: phaseChange ALONE does not refresh lastUpdateAt, so
+    // the very next liveness tick would see this as stalled — a false positive on the user's
+    // own action. A future refactor that drops the heartbeat must break this assertion.
+    expect(isStalled(afterPhaseChange, declineAt)).toBe(true);
+
+    const afterHeartbeat = reduce(afterPhaseChange, { type: 'heartbeat' }, declineAt);
+    expect(isStalled(afterHeartbeat, declineAt)).toBe(false);
   });
 });

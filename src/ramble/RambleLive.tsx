@@ -212,7 +212,7 @@ export function RambleLive() {
   };
   const onEditCancel = (id: string) => apply({ type: 'user.editCancel', slotId: id });
 
-  // Submit consent — unconditionally witnessed (spec §6.3); declined → stays awaitingConsent (§8).
+  // Submit consent — unconditionally witnessed; declined → returns to conversing (spec 2026-07-21-ramble-phase-machine §5).
   const confirmSubmit = () => {
     apply({ type: 'session.phaseChange', phase: 'submitting' });
     playEarcon('commit-mutate');
@@ -237,6 +237,11 @@ export function RambleLive() {
     // Decline returns to conversing (spec §5): the consent card dismisses, fill
     // monitoring resumes, the user keeps rambling. The model may recap again when ready.
     apply({ type: 'session.phaseChange', phase: 'conversing' });
+    // awaitingConsent is unmonitored (selectors.ts STALL_PHASES excludes it), so lastUpdateAt
+    // is frozen from before the consent card appeared. Without this, the very next liveness
+    // tick would see isStalled(conversing) as true — a spurious stall fired right after the
+    // user's own action. Restart liveness from the decline moment.
+    apply({ type: 'heartbeat' });
     providerRef.current?.sendTextHint('[SYSTEM: the user DECLINED the submission — nothing was sent. They may edit fields or tell you what to change; recap again before any new submit.]');
   };
 
