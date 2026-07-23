@@ -16,6 +16,7 @@
 import type { VoiceProvider, VoiceSessionConfig, VoiceCallbacks } from './types';
 import { userTextItemFrame, responseCreateFrame, imageItemFrame } from './frames';
 import { azureRealtimeUrl } from './azureUrl';
+import { fenceHint, stripToken } from './sentinel';
 import { Float32Chunker, floatToPcm16Base64, createPcmCaptureNode } from './pcmCapture';
 
 const SAMPLE_RATE = 24000; // Azure/OpenAI realtime PCM16 mono
@@ -48,6 +49,7 @@ export function createAzureRealtimeProvider(
   let closed = false;
   let latestFrame: string | null = null;
   let lastFrameSentAt = 0;
+  let contextToken: string | null = null;
   const dispatchedCalls = new Set<string>();
 
   const send = (obj: unknown) => {
@@ -72,6 +74,7 @@ export function createAzureRealtimeProvider(
   return {
     async connect(config: VoiceSessionConfig, cb: VoiceCallbacks) {
       closed = false;
+      contextToken = config.contextToken ?? null;
       dispatchedCalls.clear();
       try {
         const url = azureRealtimeUrl(endpoint, deployment, apiKey);
@@ -203,12 +206,12 @@ export function createAzureRealtimeProvider(
 
     sendTextHint(text: string) {
       if (latestFrame) { sendImage(latestFrame); lastFrameSentAt = Date.now(); }
-      send(userTextItemFrame(text));
+      send(userTextItemFrame(contextToken ? fenceHint(contextToken, text) : text));
     },
 
     sendUserText(text: string) {
       if (latestFrame) { sendImage(latestFrame); lastFrameSentAt = Date.now(); }
-      send(userTextItemFrame(text));
+      send(userTextItemFrame(contextToken ? stripToken(contextToken, text) : text));
       send(responseCreateFrame());
     },
 

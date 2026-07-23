@@ -20,6 +20,7 @@
 
 import type { VoiceProvider, VoiceSessionConfig, VoiceCallbacks } from './types';
 import { userTextItemFrame, responseCreateFrame, imageItemFrame } from './frames';
+import { fenceHint, stripToken } from './sentinel';
 
 const FRAME_HEARTBEAT_MS = 1500; // sparse vision: at most one image per this interval
 
@@ -31,6 +32,7 @@ export function createOpenAIRealtimeProvider(): VoiceProvider {
   let latestFrame: string | null = null;
   let lastFrameSentAt = 0;
   let closed = false;
+  let contextToken: string | null = null;
   // De-dupe tool calls: response.output_item.done can be followed by
   // response.done carrying the same function_call output, so we guard by call_id.
   const dispatchedCalls = new Set<string>();
@@ -62,6 +64,7 @@ export function createOpenAIRealtimeProvider(): VoiceProvider {
   return {
     async connect(config: VoiceSessionConfig, cb: VoiceCallbacks) {
       closed = false;
+      contextToken = config.contextToken ?? null;
       // Defensive: tear down any prior connection if connect() is called again without close().
       try { dc?.close(); } catch { /* noop */ }
       try { micStream?.getTracks().forEach((t) => t.stop()); } catch { /* noop */ }
@@ -205,12 +208,12 @@ export function createOpenAIRealtimeProvider(): VoiceProvider {
         sendImage(latestFrame);
         lastFrameSentAt = Date.now();
       }
-      send(userTextItemFrame(text));
+      send(userTextItemFrame(contextToken ? fenceHint(contextToken, text) : text));
     },
 
     sendUserText(text: string) {
       if (latestFrame) { sendImage(latestFrame); lastFrameSentAt = Date.now(); }
-      send(userTextItemFrame(text));
+      send(userTextItemFrame(contextToken ? stripToken(contextToken, text) : text));
       send(responseCreateFrame());
     },
 

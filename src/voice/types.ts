@@ -17,6 +17,10 @@ export interface VoiceSessionConfig {
    *  silenceDurationMs = how much silence ends the user's turn — ramble shortens it so
    *  mid-ramble pauses conclude turns and the scribe can act (human smoke 2026-07-16). */
   vad?: { silenceDurationMs?: number; prefixPaddingMs?: number };
+  /** Per-session fence token (src/voice/sentinel.ts). When set, sendTextHint wraps
+   *  every hint in ⟦ctx:token⟧…⟦/ctx:token⟧ and sendUserText strips literal token
+   *  occurrences. Absent → legacy unfenced behavior. */
+  contextToken?: string;
 }
 
 export interface VoiceCallbacks {

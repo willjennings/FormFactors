@@ -5,6 +5,7 @@
 import { GoogleGenAI, Modality, Type } from '@google/genai';
 import type { VoiceProvider, VoiceSessionConfig, VoiceCallbacks, VoiceTool } from './types';
 import { geminiUserTurns } from './frames';
+import { fenceHint, stripToken } from './sentinel';
 import { Float32Chunker, floatToPcm16Base64, createPcmCaptureNode } from './pcmCapture';
 
 const MODEL = 'gemini-2.5-flash-native-audio-preview-12-2025';
@@ -66,6 +67,7 @@ export function createGeminiProvider(apiKey: string, onSessionReady?: (session: 
   let micStream: MediaStream | null = null;
   let captureNode: AudioWorkletNode | null = null;
   let ended = false;
+  let contextToken: string | null = null;
 
   // Release the mic capture pipeline. MUST run on SERVER-initiated closes too (live smoke
   // 2026-07-16 console: after the server dropped the session, the capture node kept
@@ -82,6 +84,7 @@ export function createGeminiProvider(apiKey: string, onSessionReady?: (session: 
 
   return {
     async connect(config: VoiceSessionConfig, cb: VoiceCallbacks) {
+      contextToken = config.contextToken ?? null;
       const ai = new GoogleGenAI({ apiKey });
       micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
@@ -159,8 +162,12 @@ export function createGeminiProvider(apiKey: string, onSessionReady?: (session: 
     // while sessionPromise itself is still null (the getUserMedia await) — the deixis hint
     // of a quick-fired chip died in exactly that window (live smoke 2026-07-18). Pre-promise
     // sends buffer; everything drains FIFO on the one promise, preserving hint-before-text.
-    sendTextHint(text: string) { withSession(s => s.sendRealtimeInput({ text })); },
-    sendUserText(text: string) { withSession(s => s.sendClientContent(geminiUserTurns(text))); },
+    sendTextHint(text: string) {
+      withSession(s => s.sendRealtimeInput({ text: contextToken ? fenceHint(contextToken, text) : text }));
+    },
+    sendUserText(text: string) {
+      withSession(s => s.sendClientContent(geminiUserTurns(contextToken ? stripToken(contextToken, text) : text)));
+    },
     sendVideoFrame(jpegBase64: string) { withSession(s => s.sendRealtimeInput({ video: { data: jpegBase64, mimeType: 'image/jpeg' } })); },
     sendToolResponse(id: string, name: string, result: any) {
       withSession(s => s.sendToolResponse({ functionResponses: [{ id, name, response: result }] }));
