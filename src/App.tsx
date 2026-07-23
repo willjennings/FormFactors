@@ -18,6 +18,7 @@ import { CursorTrail, CursorResources } from './components/CursorEffects';
 import { createGeminiProvider } from './voice/gemini';
 import { createOpenAIRealtimeProvider } from './voice/openai';
 import { createAzureRealtimeProvider } from './voice/azure';
+import { newContextToken } from './voice/sentinel';
 import {
   PROGRAMS,
   DEFAULT_PROGRAM,
@@ -2157,8 +2158,9 @@ export default function App() {
       // Stale-callback guard: gemini's WS fires onclose unconditionally, so a delayed close
       // event from a REPLACED session must not touch the current one's state.
       const thisProvider = providerRef.current;
+      const contextToken = newContextToken();
       await providerRef.current.connect(
-        { instructions: buildInstructions(honest, program, entitiesRef.current), tools: voiceTools, voice },
+        { instructions: buildInstructions(honest, program, entitiesRef.current, contextToken), tools: voiceTools, voice, contextToken },
         {
           onOpen: () => {
             if (providerRef.current !== thisProvider) { try { thisProvider?.close(); } catch {} return; }
