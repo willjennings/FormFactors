@@ -39,7 +39,9 @@ import {
   REVISE_TOOL,
   ACT_TOOL,
 } from './scenarios';
-import type { ProgramId, ElementCategory, MockDoc, Program, Autonomy } from './scenarios';
+import type { ProgramId, ElementCategory, MockDoc, Program } from './scenarios';
+import { DEFAULT_DIALS } from './register/registry';
+import type { DialValues } from './register/types';
 import type { PerceivedCache } from './perception/perceiveTile';
 import { measureWords, type WordBox } from './perception/measureWords';
 import { buildEntities, entityById, entityByTitle, displayName, resolveEchoedTarget } from './entities/registry';
@@ -55,7 +57,7 @@ import { ANNOTATE_TOOLS, annotateCallToEvent } from './annotations/annotateTools
 import { serializeAnnotations } from './annotations/serialize';
 import { blockedElementNumbers } from './teaching/selectors';
 import { emitFeedbackAudio, FEEDBACK_OPTIONS } from './feedback';
-import type { FeedbackMode, FeedbackEvent } from './feedback';
+import type { FeedbackEvent } from './feedback';
 import { primeEarcons } from './feedback/earcons';
 import { telemetry, detectDevice } from './telemetry';
 import { referents } from './referents';
@@ -412,10 +414,14 @@ export default function App() {
       localStorage.setItem('theme', 'light');
     }
   }, [isDarkMode]);
-  const [showMarkings, setShowMarkings] = useState(false);
-  // honestMode === false → confident Google baseline (byte-for-byte unchanged).
-  // honestMode === true  → honest variant: hints carry confidence, ask when unsure.
-  const [honestMode, setHonestMode] = useState(false);
+  // ALL user-facing interaction dials as one object (R1 spec §3). DIAL A = autonomy
+  // (friction), DIAL B = feedback modality; honest = prompt variant A/B; the rest gate
+  // chips/trace/teaching/proactivity. Debug-only knobs (backend, sendFrequency,
+  // whiteboardMode) stay separate.
+  const [dials, setDials] = useState<DialValues>(DEFAULT_DIALS);
+  const dialsRef = useRef(dials);
+  useEffect(() => { dialsRef.current = dials; }, [dials]);
+  const setDial = (patch: Partial<DialValues>) => setDials(d => ({ ...d, ...patch }));
   const [voiceBackend, setVoiceBackend] = useState<ProviderKind>('gemini');
   const voiceBackendRef = useRef<ProviderKind>(voiceBackend);
   const [enableVoiceFeedback, setEnableVoiceFeedback] = useState(true);
@@ -480,21 +486,19 @@ export default function App() {
     showMobileOverlayRef.current = showMobileOverlay;
   }, [showRotateOverlay, showMobileOverlay]);
 
-  // honestMode is read live by the hint builder (Diff 1) and at connect time by the
-  // prompt selector (Diffs 2/3). Mirror it into a ref so both can read it without
-  // stale closures. If the user flips it mid-session, reconnect so the (system) prompt
-  // variant matches — the hint confidence already updates live.
-  const honestModeRef = useRef(honestMode);
-  const isInitialHonestSync = useRef(true);
+  // Prompt-affecting dials: flipping any of these mid-session reconnects so the (system)
+  // prompt matches — the same contract as the original honest-mode toggle. Register
+  // switches ride this same effect (they change dials wholesale).
+  const promptDialsKey = `${dials.honest}|${dials.teaching}|${dials.proactivity}|${dials.feedback}|${dials.chipDensity}|${dials.traceView}`;
+  const isInitialPromptSync = useRef(true);
   useEffect(() => {
-    honestModeRef.current = honestMode;
-    if (isInitialHonestSync.current) { isInitialHonestSync.current = false; return; }
+    if (isInitialPromptSync.current) { isInitialPromptSync.current = false; return; }
     if (isLive && providerRef.current) {
-      addLog('info', `Honest mode ${honestMode ? 'ON' : 'OFF'} — reconnecting to apply prompt variant...`);
+      addLog('info', `Interaction dials changed — reconnecting to apply prompt variant...`);
       providerRef.current.close(); // onClose sets isLive=false
       setTimeout(() => { startLiveSession(); }, 800);
     }
-  }, [honestMode]);
+  }, [promptDialsKey]);
 
   const isInitialBackendSync = useRef(true);
   useEffect(() => {
@@ -605,22 +609,13 @@ export default function App() {
   // no trap, the desktop stays pointable while confirming.
   const confirmBtnRef = useRef<HTMLButtonElement>(null);
 
-  // --- The two control dials ---
-  // DIAL A (autonomy/friction): how readily verbs commit vs. witness-render first.
-  const [autonomy, setAutonomy] = useState<Autonomy>('auto-safe');
-  const autonomyRef = useRef<Autonomy>(autonomy);
-  useEffect(() => { autonomyRef.current = autonomy; }, [autonomy]);
-  // DIAL B (feedback modality): silent / earcon / app-spoken. The model never self-confirms.
-  const [feedbackMode, setFeedbackMode] = useState<FeedbackMode>('earcon');
-  const feedbackModeRef = useRef<FeedbackMode>(feedbackMode);
-  useEffect(() => { feedbackModeRef.current = feedbackMode; }, [feedbackMode]);
   // Visual feedback channel — always on (the minimum-feedback floor), independent of DIAL B.
   const [feedbackToast, setFeedbackToast] = useState<{ outcome: FeedbackEvent['outcome']; label: string; at: number } | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Single entry point for action feedback: routes audio per DIAL B and always shows a toast.
   const emitFeedback = (ev: FeedbackEvent) => {
-    emitFeedbackAudio(ev, feedbackModeRef.current);
+    emitFeedbackAudio(ev, dialsRef.current.feedback);
     addLog(ev.outcome === 'error' ? 'info' : 'event', `Feedback: ${ev.outcome} — ${ev.label}`);
     setFeedbackToast({ outcome: ev.outcome, label: ev.label, at: Date.now() });
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
@@ -724,9 +719,6 @@ export default function App() {
   useEffect(() => { sketchSnapshotRef.current = sketch; }, [sketch]);
   const whiteboardSnapshotRef = useRef(whiteboard);
   useEffect(() => { whiteboardSnapshotRef.current = whiteboard; }, [whiteboard]);
-  const [confirmGoals, setConfirmGoals] = useState(false); // C3 eval toggle: On = Approach A (confirm set_goal)
-  const confirmGoalsRef = useRef(confirmGoals);
-  useEffect(() => { confirmGoalsRef.current = confirmGoals; }, [confirmGoals]);
   // UI-pending states rendered by the goal surfaces (Task 5):
   const [pendingGoal, setPendingGoal] = useState<{ objective: string; steps: { label: string; verb?: string; target?: string }[] } | null>(null);
   const [pendingSuggestion, setPendingSuggestion] = useState<GoalProposal | null>(null);
@@ -1396,7 +1388,7 @@ export default function App() {
 
       const verbClass = classOf(fc.name);
       const phrase = `${label} ${target}${detail ? ` (${detail})` : ''}`;
-      const decision = decideCommit(verbClass, autonomyRef.current, confirmed);
+      const decision = decideCommit(verbClass, dialsRef.current.autonomy, confirmed);
 
       // G5 GROUNDING RECONCILIATION on stable ids: the app's pointer referent vs the model's
       // echoed target resolved across ALL aliases (title + perceived). Below the resolver's
@@ -1409,7 +1401,7 @@ export default function App() {
       const resolution: 'structural' | 'visual' | 'none' =
         appReferentId ? 'structural' : (resolved ? 'visual' : 'none');
       telemetry.grounding(displayName(appReferentEntity) || null, args.target ?? null, agree, resolution);
-      const disagreement = honestModeRef.current && agree === false && !confirmed;
+      const disagreement = dialsRef.current.honest && agree === false && !confirmed;
       const effectiveDecision: 'commit' | 'witness' = disagreement ? 'witness' : decision;
       const note = disagreement
         ? `You pointed at “${displayName(appReferentEntity)}”, but I read “${displayName(resolved!.entity)}”.`
@@ -1504,7 +1496,7 @@ export default function App() {
         ack({ success: false, error: mapped.error });
       } else if (mapped.kind === 'set') {
         const ev = mapped.event as Extract<import('./goal/goalStore').GoalEvent, { type: 'goal.set' }>;
-        if (confirmGoalsRef.current) {
+        if (dialsRef.current.confirmGoals) {
           setPendingGoal({ objective: ev.objective, steps: ev.steps }); // Approach A: confirm card (Task 5)
           addLog('tool', `Tool Call: set_goal(witness) — "${ev.objective}"`);
         } else {
@@ -1983,7 +1975,7 @@ export default function App() {
           const commandWords = ["show", "go", "directions", "where", "what", "search", "find", "how", "get", "near"];
           const isCommand = commandWords.some(w => lowerText.includes(w));
           // Honest mode threads confidence into the hint; the baseline hint is unchanged.
-          const confidenceTag = honestModeRef.current
+          const confidenceTag = dialsRef.current.honest
             ? (confidence.level === 'high'
                 ? ' (confidence: high)'
                 : otherCandidates.length
@@ -2133,7 +2125,7 @@ export default function App() {
       await audioContextRef.current.resume();
       primeEarcons(); // unlock the earcon audio context on this user gesture
 
-      const honest = honestModeRef.current;
+      const honest = dialsRef.current.honest;
       addLog('info', `Prompt variant: ${honest ? 'HONEST (carries confidence, asks when unsure)' : 'CONFIDENT (Google baseline)'}`);
 
       // GeminiProvider owns the live session + mic; audio playback and response/interruption
@@ -2180,10 +2172,10 @@ export default function App() {
             // TESTBED: snapshot the config + device so this session's metrics are attributable.
             telemetry.start({
               backend: voiceBackendRef.current,
-              autonomy: autonomyRef.current,
-              feedback: feedbackModeRef.current,
+              autonomy: dialsRef.current.autonomy,
+              feedback: dialsRef.current.feedback,
               program: activeProgram,
-              honest: honestModeRef.current,
+              honest: dialsRef.current.honest,
               device: detectDevice(),
             });
             setIsConnecting(false);
@@ -2370,7 +2362,7 @@ export default function App() {
           // PHASE B: in honest mode, a low-confidence resolution is a GUESS, and a guess must
           // never render like a confident success. Uncertain markers are amber, dashed, and
           // carry a "?" + both candidate names; confident markers are today's solid gold.
-          const isUncertain = honestModeRef.current && m.confidence === 'low';
+          const isUncertain = dialsRef.current.honest && m.confidence === 'low';
           const pulse = Math.sin(age * (isUncertain ? 0.006 : 0.008)) * (isUncertain ? 12 : 8);
 
           // HUE = element category (program/os/ui/content); ring STYLE = confidence.
@@ -2521,7 +2513,7 @@ export default function App() {
 
       // Draw Interactive Object Markings if enabled
       // Keep markings visible during processing for context
-      if (showMarkings) {
+      if (dials.markings) {
         // Read from the ref so freshly-swapped programs colour correctly without re-running
         // this animation effect. Each outline is hued by its element category.
         entitiesRef.current.forEach(obj => {
@@ -2554,7 +2546,7 @@ export default function App() {
     };
     render();
     return () => cancelAnimationFrame(frame);
-  }, [showMarkings, isLive]); // Re-run when markings or live state changes
+  }, [dials.markings, isLive]); // Re-run when markings or live state changes
 
   // Idle watchdog: if no pointer, typing, or speech for 5 minutes during a live session,
   // close the provider and surface a reason so the user knows why it stopped.
@@ -3447,7 +3439,7 @@ export default function App() {
           <ActivityTrace state={activity} onOpenStream={() => setDrawerOpen(true)} />
           <MissionPicker missions={MISSIONS} runs={missionRuns} active={missionRun} activeDef={missionDef} open={missionOpen} onStart={startMissionRun} onAbandon={abandonMission} onClose={() => setMissionOpen(false)} />
           {/* Highlight category legend — explains the colour ↔ category mapping while debug markings are on */}
-          {showMarkings && (
+          {dials.markings && (
             <div className="absolute top-3 right-3 z-50 pointer-events-none rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)]/90 backdrop-blur px-3 py-2 shadow-md">
               <div className="text-[9px] font-mono uppercase tracking-wide text-[var(--text-secondary)] mb-1">Highlights</div>
               <div className="flex flex-col gap-1">
@@ -3681,20 +3673,20 @@ export default function App() {
 
         <Sheet open={drawerOpen} onOpenChange={setDrawerOpen} title="Control Center">
           <DebugDrawer
-            honestMode={honestMode}
-            onHonestMode={setHonestMode}
+            honestMode={dials.honest}
+            onHonestMode={(v) => setDial({ honest: v })}
             voiceBackend={voiceBackend}
             onVoiceBackend={setVoiceBackend}
-            autonomy={autonomy}
-            onAutonomy={setAutonomy}
-            feedbackMode={feedbackMode}
-            onFeedbackMode={setFeedbackMode}
+            autonomy={dials.autonomy}
+            onAutonomy={(v) => setDial({ autonomy: v })}
+            feedbackMode={dials.feedback}
+            onFeedbackMode={(v) => setDial({ feedback: v })}
             sendFrequency={sendFrequency}
             onSendFrequency={setSendFrequency}
-            showMarkings={showMarkings}
-            onShowMarkings={setShowMarkings}
-            confirmGoals={confirmGoals}
-            onConfirmGoals={setConfirmGoals}
+            showMarkings={dials.markings}
+            onShowMarkings={(v) => setDial({ markings: v })}
+            confirmGoals={dials.confirmGoals}
+            onConfirmGoals={(v) => setDial({ confirmGoals: v })}
             whiteboardMode={whiteboardMode}
             onWhiteboardMode={(mode) => {
               // Leaving the board mid-card is an implicit DECLINE (same contract as Esc and
