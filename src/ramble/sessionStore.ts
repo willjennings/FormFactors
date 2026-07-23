@@ -16,6 +16,13 @@ export function legalTransition(from: Phase, to: Phase): boolean {
   return from === to || LEGAL_EDGES.some(([f, t]) => f === from && t === to);
 }
 
+/** Agent fills are only meaningful while the session is open for input. recapping stays
+ *  open (readback→patch re-fills land there); awaitingConsent/submitting/done are sealed.
+ *  USER edit events are exempt — the consent card is non-blocking by design. */
+export function fillsAllowedIn(phase: Phase): boolean {
+  return phase === 'conversing' || phase === 'recapping';
+}
+
 function hasSlot(state: SessionState, slotId: string): boolean {
   return state.fills.some((f) => f.slotId === slotId);
 }
@@ -34,25 +41,30 @@ function patchSlot(state: SessionState, slotId: string, patch: Partial<SlotFill>
 export function reduce(state: SessionState, event: RambleEvent, now: number): SessionState {
   switch (event.type) {
     case 'slot.fillingStart': {
+      if (!fillsAllowedIn(state.phase)) return state;
       if (!hasSlot(state, event.slotId) || ownerOf(state, event.slotId) === 'user') return state;
       const s = patchSlot(state, event.slotId, { status: 'filling' }, now);
       return { ...s, activeSlotId: event.slotId, activity: 'filling', lastUpdateAt: now };
     }
     case 'slot.valueUpdate': {
+      if (!fillsAllowedIn(state.phase)) return state;
       if (!hasSlot(state, event.slotId) || ownerOf(state, event.slotId) === 'user') return state;
       return { ...patchSlot(state, event.slotId, { value: event.partialValue }, now), lastUpdateAt: now };
     }
     case 'slot.draft': {
+      if (!fillsAllowedIn(state.phase)) return state;
       if (!hasSlot(state, event.slotId) || ownerOf(state, event.slotId) === 'user') return state;
       const s = patchSlot(state, event.slotId, { value: event.value, status: 'draft', confidence: event.confidence, source: event.source }, now);
       const activeSlotId = state.activeSlotId === event.slotId ? null : state.activeSlotId;
       return { ...s, activeSlotId, activity: 'thinking', lastUpdateAt: now };
     }
     case 'slot.needsInput': {
+      if (!fillsAllowedIn(state.phase)) return state;
       if (!hasSlot(state, event.slotId) || ownerOf(state, event.slotId) === 'user') return state;
       return { ...patchSlot(state, event.slotId, { status: 'needsInput', pendingQuestion: event.question }, now), activity: 'asking', lastUpdateAt: now };
     }
     case 'slot.confirmed': {
+      if (!fillsAllowedIn(state.phase)) return state;
       if (!hasSlot(state, event.slotId) || ownerOf(state, event.slotId) === 'user') return state;
       return { ...patchSlot(state, event.slotId, { status: 'confirmed' }, now), lastUpdateAt: now };
     }

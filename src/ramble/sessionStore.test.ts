@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { reduce, legalTransition } from './sessionStore';
+import { reduce, legalTransition, fillsAllowedIn } from './sessionStore';
 import { RFI_SCHEMA, initialSessionState } from './rfiSchema';
 import type { Phase } from './types';
 
@@ -164,5 +164,44 @@ describe('phase transition table', () => {
     expect(reduce(s, { type: 'session.phaseChange', phase: 'awaitingConsent' }, 1000).phase).toBe('awaitingConsent');
     const same = reduce(s, { type: 'session.phaseChange', phase: 'recapping' }, 1000);
     expect(same.phase).toBe('recapping');
+  });
+});
+
+describe('phase seal on fills', () => {
+  const SLOT = 'location';
+
+  it('fillsAllowedIn: open in conversing+recapping, sealed elsewhere', () => {
+    expect(fillsAllowedIn('conversing')).toBe(true);
+    expect(fillsAllowedIn('recapping')).toBe(true);
+    expect(fillsAllowedIn('awaitingConsent')).toBe(false);
+    expect(fillsAllowedIn('submitting')).toBe(false);
+    expect(fillsAllowedIn('done')).toBe(false);
+  });
+
+  it('a late slot.draft after done leaves state untouched', () => {
+    const s = { ...start(), phase: 'done' as Phase };
+    const out = reduce(s, { type: 'slot.draft', slotId: SLOT, value: 'late', confidence: 0.9, source: 'heard' }, 1000);
+    expect(out).toBe(s);
+  });
+
+  it('slot.needsInput and slot.confirmed sealed in awaitingConsent', () => {
+    const s = { ...start(), phase: 'awaitingConsent' as Phase };
+    expect(reduce(s, { type: 'slot.needsInput', slotId: SLOT, question: 'q?' }, 1000)).toBe(s);
+    expect(reduce(s, { type: 'slot.confirmed', slotId: SLOT }, 1000)).toBe(s);
+  });
+
+  it('re-fills still apply during recapping (readback patches stay open)', () => {
+    const s = { ...start(), phase: 'recapping' as Phase };
+    const out = reduce(s, { type: 'slot.draft', slotId: SLOT, value: 'patched', confidence: 0.8, source: 'heard' }, 1000);
+    expect(out.fills.find(f => f.slotId === SLOT)?.value).toBe('patched');
+  });
+
+  it('user edits are NOT sealed — tap-edit mid-consent must keep working', () => {
+    const s = { ...start(), phase: 'awaitingConsent' as Phase };
+    const started = reduce(s, { type: 'user.editStart', slotId: SLOT }, 1000);
+    const out = reduce(started, { type: 'user.editCommit', slotId: SLOT, value: 'mine' }, 1001);
+    const f = out.fills.find(x => x.slotId === SLOT);
+    expect(f?.value).toBe('mine');
+    expect(f?.owner).toBe('user');
   });
 });
