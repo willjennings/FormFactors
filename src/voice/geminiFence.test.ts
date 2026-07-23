@@ -79,4 +79,25 @@ describe('gemini fence wiring', () => {
     await new Promise(r => setTimeout(r, 10));
     expect(sent.realtime.find(m => typeof m.text === 'string').text).toBe('[ARTIFACTS: none]');
   });
+
+  it('a hint sent BEFORE connect() is buffered and still fences with the token connect() assigns', async () => {
+    // providerRef exists before connect() runs, so a hint can fire in the window before
+    // sessionPromise (or contextToken) is assigned — same pre-connect race as
+    // geminiOpenFlush.test.ts's "still awaiting the mic" case, but here we're pinning that
+    // the FENCE (not just delivery) is computed at drain time. The ternary in sendTextHint
+    // lives inside the withSession callback, so it reads contextToken lazily, at drain —
+    // by which point connect() has assigned it. A regression that hoists the ternary to
+    // call time would capture contextToken while it's still null and ship this hint
+    // unfenced; today's other tests all send after connect() resolves, so none of them
+    // would catch that regression.
+    const p = createGeminiProvider('test-key');
+    p.sendTextHint('[EARLY HINT]'); // same tick — before connect() has even run
+    await p.connect(
+      { instructions: 'sys', tools: [], contextToken: 'tok-early' } as any,
+      baseCallbacks,
+    );
+    await new Promise(r => setTimeout(r, 10)); // let withSession drain
+    const hint = sent.realtime.find(m => typeof m.text === 'string');
+    expect(hint.text).toBe('⟦ctx:tok-early⟧\n[EARLY HINT]\n⟦/ctx:tok-early⟧');
+  });
 });
