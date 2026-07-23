@@ -40,9 +40,11 @@ import {
   ACT_TOOL,
 } from './scenarios';
 import type { ProgramId, ElementCategory, MockDoc, Program } from './scenarios';
-import { DEFAULT_DIALS, resolveDials, matchRegister, diffDials, registerSection } from './register/registry';
+import { DEFAULT_DIALS, REGISTERS, resolveDials, matchRegister, diffDials, registerSection } from './register/registry';
 import type { DialValues } from './register/types';
 import { visibleSuggestions } from './register/gates';
+import { bandKeyAction } from './register/bandKeys';
+import { RegisterBand } from './shell/RegisterBand';
 import type { PerceivedCache } from './perception/perceiveTile';
 import { measureWords, type WordBox } from './perception/measureWords';
 import { buildEntities, entityById, entityByTitle, displayName, resolveEchoedTarget } from './entities/registry';
@@ -428,6 +430,12 @@ export default function App() {
   const [registerKey, setRegisterKey] = useState<string | null>('guided');
   const registerKeyRef = useRef(registerKey);
   useEffect(() => { registerKeyRef.current = registerKey; }, [registerKey]);
+  // The register band (backtick-summoned). Mirrored to a ref because the chord handler
+  // lives in the quick-fire keydown effect below, which is registered with empty deps —
+  // its closure would otherwise never see a state update.
+  const [bandOpen, setBandOpen] = useState(false);
+  const bandOpenRef = useRef(bandOpen);
+  useEffect(() => { bandOpenRef.current = bandOpen; }, [bandOpen]);
   const setDial = (patch: Partial<DialValues>) => {
     setDials(d => {
       const next = { ...d, ...patch };
@@ -2084,6 +2092,20 @@ export default function App() {
     const lastFireRef = { current: null as { key: string; at: number } | null };
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
+      // Register band chord — MUST run before quick-fire: an open band swallows digits
+      // (they pick a notch), a closed band lets them fall through to quick-fire below.
+      // The two grammars never contend because bandKeyAction only claims digits while
+      // bandOpenRef.current is true (see bandKeys.ts's pure contract).
+      const act = bandKeyAction(e.key, isEditableTarget(e.target), bandOpenRef.current, REGISTERS.length + 1);
+      if (act === 'open') { setBandOpen(true); e.preventDefault(); return; }
+      if (act === 'close') { setBandOpen(false); return; }
+      if (typeof act === 'number') {
+        e.preventDefault();
+        setBandOpen(false);
+        if (act === REGISTERS.length) setDrawerOpen(true); // Custom notch → Dial Bench home (drawer for R1)
+        else applyRegister(REGISTERS[act].key);
+        return;
+      }
       const i = quickFireIndex(e.key, isEditableTarget(e.target), suggestionsRef.current.length,
         { repeat: e.repeat, lastFire: lastFireRef.current, now: Date.now() });
       if (i === null) return;
@@ -3414,7 +3436,20 @@ export default function App() {
           className="h-full w-full relative bg-[var(--bg-color)]"
         >
           <div aria-hidden className="absolute inset-0 pointer-events-none opacity-[0.04] bg-[radial-gradient(circle_at_1px_1px,currentColor_1px,transparent_0)] [background-size:24px_24px]" />
-          <MenuBar isLive={isLive} isConnecting={isConnecting} isDarkMode={isDarkMode} traffic={traffic} onToggleTheme={() => setIsDarkMode(!isDarkMode)} onToggleDrawer={() => setDrawerOpen(o => !o)} onRambleMode={() => { window.location.search = 'ramble=live'; }} onSketchBoard={() => setBoardOpen((o) => !o)} onMissions={() => setMissionOpen((v) => !v)} />
+          <MenuBar isLive={isLive} isConnecting={isConnecting} isDarkMode={isDarkMode} traffic={traffic}
+            registerLabel={REGISTERS.find(r => r.key === registerKey)?.label ?? 'Custom'}
+            registerGlyph={REGISTERS.find(r => r.key === registerKey)?.glyph ?? '✎'}
+            onToggleTheme={() => setIsDarkMode(!isDarkMode)} onToggleDrawer={() => setDrawerOpen(o => !o)} onRambleMode={() => { window.location.search = 'ramble=live'; }} onSketchBoard={() => setBoardOpen((o) => !o)} onMissions={() => setMissionOpen((v) => !v)}
+            onRegisterPill={() => setBandOpen(o => !o)} />
+          {bandOpen && (
+            <RegisterBand
+              current={registerKey}
+              dials={dials}
+              onSelect={(key) => { setBandOpen(false); applyRegister(key); }}
+              onCustom={() => { setBandOpen(false); setDrawerOpen(true); }}
+              onClose={() => setBandOpen(false)}
+            />
+          )}
           <Dock active={activeProgram} onSelect={handleProgramChange} onReopen={() => setWindowOpen(true)} />
           <CursorResources mode={isPainting ? 'painting' : 'off'} color="#3b82f6" />
           <CursorTrail isActive={isPainting} mousePos={trailMousePos} color="#3b82f6" />
