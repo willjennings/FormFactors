@@ -2,8 +2,10 @@ import { describe, it, expect } from 'vitest';
 import { activeSlot, recentSlots, isStalled, STALL_MS } from './selectors';
 import { reduce } from './sessionStore';
 import { RFI_SCHEMA, initialSessionState } from './rfiSchema';
+import type { Phase } from './types';
 
 const start = () => initialSessionState(RFI_SCHEMA, '6/29/2026', 1000);
+const base = start();
 
 describe('selectors', () => {
   it('activeSlot returns the filling slot or null', () => {
@@ -31,5 +33,20 @@ describe('selectors', () => {
     done = reduce(done, { type: 'session.phaseChange', phase: 'submitting' }, 1000);
     done = reduce(done, { type: 'session.phaseChange', phase: 'done' }, 1000);
     expect(isStalled(done, 1000 + STALL_MS + 5000)).toBe(false); // not conversing → never stalled
+  });
+
+  describe('stall scope', () => {
+    const late = (phase: Phase) => ({ ...base, phase, lastUpdateAt: 0 });
+    it('stalls in conversing AND recapping past STALL_MS', () => {
+      expect(isStalled(late('conversing'), STALL_MS + 1)).toBe(true);
+      expect(isStalled(late('recapping'), STALL_MS + 1)).toBe(true);
+    });
+    it('awaitingConsent is a human-wait — NEVER stalled, regardless of elapsed', () => {
+      expect(isStalled(late('awaitingConsent'), STALL_MS * 100)).toBe(false);
+    });
+    it('submitting and done never stall', () => {
+      expect(isStalled(late('submitting'), STALL_MS * 100)).toBe(false);
+      expect(isStalled(late('done'), STALL_MS * 100)).toBe(false);
+    });
   });
 });
