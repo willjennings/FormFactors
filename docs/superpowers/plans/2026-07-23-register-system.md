@@ -297,7 +297,8 @@ Replace :487-497 (the `honestModeRef` + effect block — `honestModeRef` is dele
   // Prompt-affecting dials: flipping any of these mid-session reconnects so the (system)
   // prompt matches — the same contract as the original honest-mode toggle. Register
   // switches ride this same effect (they change dials wholesale).
-  const promptDialsKey = `${dials.honest}|${dials.teaching}|${dials.proactivity}|${dials.feedback}|${dials.chipDensity}|${dials.traceView}`;
+  // (feedback joins this key in the register-prompt task — today nothing in the prompt reads it.)
+  const promptDialsKey = `${dials.honest}|${dials.teaching}|${dials.proactivity}|${dials.chipDensity}|${dials.traceView}`;
   const isInitialPromptSync = useRef(true);
   useEffect(() => {
     if (isInitialPromptSync.current) { isInitialPromptSync.current = false; return; }
@@ -550,7 +551,7 @@ In App.tsx:
   };
 ```
 
-Connect site :2162-2163: `buildInstructions(honest, program, entitiesRef.current, contextToken, registerSection(registerKeyRef.current, dialsRef.current))`. Task 3's arm stamp becomes `arm: { register: registerKeyRef.current ?? 'custom', base: registerKeyRef.current ? undefined : 'guided', dials: { ...dialsRef.current } }` — and fix the Task-3 comment. (Reconnect-on-switch needs NO new code — `applyRegister`'s `setDials` changes prompt dials, so Task 2's `promptDialsKey` effect fires. Verify this in the report by tracing.)
+Connect site :2162-2163: `buildInstructions(honest, program, entitiesRef.current, contextToken, registerSection(registerKeyRef.current, dialsRef.current))`. Task 3's arm stamp becomes `arm: { register: registerKeyRef.current ?? 'custom', base: registerKeyRef.current ? undefined : 'guided', dials: { ...dialsRef.current } }` — and fix the Task-3 comment. (Reconnect-on-switch needs NO new code — `applyRegister`'s `setDials` changes prompt dials, so Task 2's `promptDialsKey` effect fires. Verify this in the report by tracing.) Task 5 ALSO adds `|${dials.feedback}` back into promptDialsKey (the prompt now reads feedback via registerSection — reconnect-on-feedback-flip becomes required for honesty).
 
 - [ ] **Step 4: Full gate** — `npx vitest run && npx tsc --noEmit && npx vite build` → green/clean.
 

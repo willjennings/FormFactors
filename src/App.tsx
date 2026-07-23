@@ -489,7 +489,8 @@ export default function App() {
   // Prompt-affecting dials: flipping any of these mid-session reconnects so the (system)
   // prompt matches — the same contract as the original honest-mode toggle. Register
   // switches ride this same effect (they change dials wholesale).
-  const promptDialsKey = `${dials.honest}|${dials.teaching}|${dials.proactivity}|${dials.feedback}|${dials.chipDensity}|${dials.traceView}`;
+  // (feedback joins this key in the register-prompt task — today nothing in the prompt reads it.)
+  const promptDialsKey = `${dials.honest}|${dials.teaching}|${dials.proactivity}|${dials.chipDensity}|${dials.traceView}`;
   const isInitialPromptSync = useRef(true);
   useEffect(() => {
     if (isInitialPromptSync.current) { isInitialPromptSync.current = false; return; }
