@@ -40,7 +40,7 @@ import {
   ACT_TOOL,
 } from './scenarios';
 import type { ProgramId, ElementCategory, MockDoc, Program } from './scenarios';
-import { DEFAULT_DIALS } from './register/registry';
+import { DEFAULT_DIALS, resolveDials, matchRegister, diffDials, registerSection } from './register/registry';
 import type { DialValues } from './register/types';
 import { visibleSuggestions } from './register/gates';
 import type { PerceivedCache } from './perception/perceiveTile';
@@ -422,13 +422,48 @@ export default function App() {
   const [dials, setDials] = useState<DialValues>(DEFAULT_DIALS);
   const dialsRef = useRef(dials);
   useEffect(() => { dialsRef.current = dials; }, [dials]);
-  const setDial = (patch: Partial<DialValues>) => setDials(d => ({ ...d, ...patch }));
+  // The named register this session is riding, or null when a manual dial edit has
+  // walked the dials off every named point (Custom). 'guided' initially — it IS today's
+  // control-arm defaults (DEFAULT_DIALS === REGISTERS.guided.dials).
+  const [registerKey, setRegisterKey] = useState<string | null>('guided');
+  const registerKeyRef = useRef(registerKey);
+  useEffect(() => { registerKeyRef.current = registerKey; }, [registerKey]);
+  const setDial = (patch: Partial<DialValues>) => {
+    setDials(d => {
+      const next = { ...d, ...patch };
+      const m = matchRegister(next);
+      setRegisterKey(m);           // named key if it lands exactly on one, else null = custom
+      return next;
+    });
+  };
   const [voiceBackend, setVoiceBackend] = useState<ProviderKind>('gemini');
   const voiceBackendRef = useRef<ProviderKind>(voiceBackend);
   const [enableVoiceFeedback, setEnableVoiceFeedback] = useState(true);
   const [voiceVolume, setVoiceVolume] = useState(1.0);
   const [audioStatus, setAudioStatus] = useState<'suspended' | 'running' | 'closed'>('suspended');
   const [isLive, setIsLive] = useState(false);
+  const isLiveRef = useRef(isLive);
+  useEffect(() => { isLiveRef.current = isLive; }, [isLive]);
+  // Apply a named register wholesale: resolve its dials, stamp the switch as a
+  // witnessed activity row (so the floor answers "did it work?" even in trace-hidden
+  // registers), and log telemetry. Reconnect-on-dial-change is handled entirely by the
+  // promptDialsKey effect below — setDials here is the only trigger it needs.
+  const applyRegister = (key: string) => {
+    const from = registerKeyRef.current ?? 'custom';
+    if (key === from) return;
+    const nextDials = resolveDials(key);
+    const changedCount = diffDials(dialsRef.current, nextDials).length;
+    setRegisterKey(key);
+    setDials(nextDials);
+    telemetry.registerSwitch(from, key, isLiveRef.current);
+    const callId = `register-switch-${Date.now()}`;
+    traceActivity({ kind: 'call', callId, text: `Register: ${from} → ${key}` });
+    traceActivity({
+      kind: 'done',
+      callId,
+      text: `Register: ${from} → ${key} (reconnecting · ${changedCount} dials changed)`,
+    });
+  };
   const [traffic, setTraffic] = useState<Traffic | null>(null);
   // Detect running inside an embedded preview iframe — such frames usually don't delegate
   // microphone access, so we surface an "open in a new tab" escape hatch.
@@ -498,9 +533,10 @@ export default function App() {
 
   // Prompt-affecting dials: flipping any of these mid-session reconnects so the (system)
   // prompt matches — the same contract as the original honest-mode toggle. Register
-  // switches ride this same effect (they change dials wholesale).
-  // (feedback joins this key in the register-prompt task — today nothing in the prompt reads it.)
-  const promptDialsKey = `${dials.honest}|${dials.teaching}|${dials.proactivity}|${dials.chipDensity}|${dials.traceView}`;
+  // switches ride this same effect (they change dials wholesale). feedback is included
+  // because registerSection() now tells the model which confirmation channel is live
+  // (silent/earcon/speech) — a feedback-only flip must reconnect too, or the prompt lies.
+  const promptDialsKey = `${dials.honest}|${dials.teaching}|${dials.proactivity}|${dials.chipDensity}|${dials.traceView}|${dials.feedback}`;
   const isInitialPromptSync = useRef(true);
   useEffect(() => {
     if (isInitialPromptSync.current) { isInitialPromptSync.current = false; return; }
@@ -2163,7 +2199,18 @@ export default function App() {
       const thisProvider = providerRef.current;
       const contextToken = newContextToken();
       await providerRef.current.connect(
-        { instructions: buildInstructions(honest, program, entitiesRef.current, contextToken), tools: voiceTools, voice, contextToken },
+        {
+          instructions: buildInstructions(
+            honest,
+            program,
+            entitiesRef.current,
+            contextToken,
+            registerSection(registerKeyRef.current, dialsRef.current),
+          ),
+          tools: voiceTools,
+          voice,
+          contextToken,
+        },
         {
           onOpen: () => {
             if (providerRef.current !== thisProvider) { try { thisProvider?.close(); } catch {} return; }
@@ -2188,7 +2235,11 @@ export default function App() {
               program: activeProgram,
               honest: dialsRef.current.honest,
               device: detectDevice(),
-              arm: { register: 'guided', dials: { ...dialsRef.current } }, // Task 5 threads the live register key
+              arm: {
+                register: registerKeyRef.current ?? 'custom',
+                base: registerKeyRef.current ? undefined : 'guided', // Custom always drifted off Guided (today's defaults)
+                dials: { ...dialsRef.current },
+              },
             });
             setIsConnecting(false);
             connectInFlightRef.current = false;

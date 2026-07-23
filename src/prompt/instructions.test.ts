@@ -100,3 +100,13 @@ describe('fence rule', () => {
     expect(s).not.toContain('⟦ctx:');
   });
 });
+
+describe('register section', () => {
+  it('appends the register paragraph when provided; absent → byte-identical legacy output', () => {
+    const legacy = buildInstructions(true, program, [], 'tok-1');
+    const withReg = buildInstructions(true, program, [], 'tok-1', 'REGISTER: Terminal. Be terse.');
+    expect(withReg).toContain('REGISTER: Terminal. Be terse.');
+    expect(buildInstructions(true, program, [], 'tok-1')).toBe(legacy);
+    expect(withReg.replace('\n\nREGISTER: Terminal. Be terse.', '')).toBe(legacy);
+  });
+});

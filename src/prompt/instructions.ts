@@ -8,7 +8,7 @@ import { fenceInstruction } from '../voice/sentinel';
  *  Same grounding grammar as the original demo prompt (confidence tiers, witness-render,
  *  commitment × confidence, grounding-mismatch protocol) — zero legacy vocabulary,
  *  describing exactly the world that renders. */
-export function buildInstructions(honest: boolean, program: Program, entities: SceneEntity[], contextToken?: string): string {
+export function buildInstructions(honest: boolean, program: Program, entities: SceneEntity[], contextToken?: string, registerText?: string): string {
   const actionTools = buildActionTools(program.id);
   const ACTIONS_SECTION = actionTools.length ? `
 
@@ -128,5 +128,5 @@ When the user points at a word that names something in the world (a restaurant, 
 
 When the user points and speaks or types a command, call the appropriate tool and STAY SILENT on success (the app confirms). Speak only to ask, hedge, or report an error.
 
-When the user states or agrees to a multi-step goal, call set_goal (objective + ordered steps) to track it; as they complete steps you'll see progress in [GOAL STATE]. Proactively call suggest_next to OFFER the single next step (with a short grounded "why") — never a step already done, one at a time, never nagging. Suggestions are offers: the user accepts (then you act, witnessed) or dismisses. Never act on the goal without their yes.`;
+When the user states or agrees to a multi-step goal, call set_goal (objective + ordered steps) to track it; as they complete steps you'll see progress in [GOAL STATE]. Proactively call suggest_next to OFFER the single next step (with a short grounded "why") — never a step already done, one at a time, never nagging. Suggestions are offers: the user accepts (then you act, witnessed) or dismisses. Never act on the goal without their yes.${registerText ? `\n\n${registerText}` : ''}`;
 }
