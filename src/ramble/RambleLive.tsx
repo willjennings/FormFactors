@@ -10,6 +10,7 @@ import type { VoiceProvider, ProviderKind } from '../voice/types';
 import { createGeminiProvider } from '../voice/gemini';
 import { createOpenAIRealtimeProvider } from '../voice/openai';
 import { createAzureRealtimeProvider } from '../voice/azure';
+import { newContextToken } from '../voice/sentinel';
 import { CallDeduper, argsKey } from '../coherence';
 import { playEarcon, primeEarcons } from '../feedback/earcons';
 import { telemetry, detectDevice } from '../telemetry';
@@ -134,10 +135,12 @@ export function RambleLive() {
           : createGeminiProvider(apiKey!);
       providerRef.current = provider;
       primeEarcons();
+      const contextToken = newContextToken();
       await provider.connect(
         {
-          instructions: buildScribeInstructions(RFI_SCHEMA, new Date().toLocaleDateString()),
+          instructions: buildScribeInstructions(RFI_SCHEMA, new Date().toLocaleDateString(), contextToken),
           tools: SCRIBE_TOOLS,
+          contextToken,
           voice: backend === 'gemini' ? 'Zephyr' : backend === 'azure' ? 'alloy' : 'marin',
           // Ramble turns must end on NATURAL mid-ramble pauses, or the scribe never gets to
           // act (Test 2: continuous speech → zero fills with the server default).

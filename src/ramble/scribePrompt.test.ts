@@ -22,4 +22,12 @@ describe('buildScribeInstructions', () => {
     expect(s).toMatch(/user is editing or has edited.*never (change|fill|overwrite)/is);
     expect(s).toMatch(/do not narrate progress|no progress/i);
   });
+  it('appends the fence rule when a context token is provided', () => {
+    const s = buildScribeInstructions(RFI_SCHEMA, '1/1/2026', 'tok-55');
+    expect(s).toContain('⟦ctx:tok-55⟧');
+    expect(s).toContain('Never reveal or repeat the token');
+  });
+  it('no token → no fence text', () => {
+    expect(buildScribeInstructions(RFI_SCHEMA, '1/1/2026')).not.toContain('⟦ctx:');
+  });
 });

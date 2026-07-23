@@ -1,7 +1,8 @@
 import type { FormSchema } from './types';
+import { fenceInstruction } from '../voice/sentinel';
 
 /** The scribe's system prompt (spec §6.1). Pure: schema + today injected. */
-export function buildScribeInstructions(schema: FormSchema, today: string): string {
+export function buildScribeInstructions(schema: FormSchema, today: string, contextToken?: string): string {
   const slotLines = schema.slots
     .map((s) => `- ${s.id} — "${s.label}" (${s.type}${s.required ? ', REQUIRED' : ''}${s.constraint ? `, one of: ${s.constraint}` : ''})`)
     .join('\n');
@@ -20,5 +21,5 @@ YIELD: if the system tells you the user is editing or has edited a field themsel
 
 RECAP BEFORE SUBMIT — MANDATORY: when the form is complete, call recap() and voice the WHOLE form, explicitly flagging every inferred value ("date submitted I inferred as ${today}"). Only after the recap call submit(); submission always requires the user's explicit consent on screen.
 
-Do not narrate progress or count fields aloud. Keep every utterance to one short sentence.`;
+Do not narrate progress or count fields aloud. Keep every utterance to one short sentence.${contextToken ? '\n' + fenceInstruction(contextToken) : ''}`;
 }
