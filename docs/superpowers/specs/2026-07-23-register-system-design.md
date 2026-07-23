@@ -45,7 +45,7 @@ Named registers + Custom on ONE legible axis — scaffold density. R1 ships four
 | dial | **Terminal** | **Ambient** | **Guided** (control) | **Cockpit** |
 |---|---|---|---|---|
 | era / ethos | old — CLI: the trace is the interface | old-emerging — calm computing | today | maximal scaffold |
-| honest | true | true | true | true |
+| honest | true | true | **false** (today's A/B default — control arm is literally today's app) | true |
 | autonomy | autonomous | auto-safe | auto-safe | manual |
 | feedback | silent | earcon | earcon | speech |
 | confirmGoals | false | false | false | true |
@@ -96,7 +96,7 @@ The user-facing dials extracted OUT of the DebugDrawer into a panel opened from 
 
 ## 9. Testing
 
-- Pure TDD: registry (every register's dials complete + distinct; resolve/match round-trip; Guided === today's defaults — the control-arm invariant), `diffDials`, `registerSection` (per-register content; token-fence rule unaffected), band chord logic, arm stamping (telemetry export idiom).
+- Pure TDD: registry (every register's dials complete + distinct; resolve/match round-trip; Guided === today's defaults VERBATIM incl. honest:false — the control-arm invariant; the other three pin honest:true as deliberate new arms), `diffDials`, `registerSection` (per-register content; token-fence rule unaffected), band chord logic, arm stamping (telemetry export idiom).
 - `instructions.test.ts`: registerSection composes with the existing prompt (de-tourism + fence regressions untouched).
 - Component paths (pill, band, bench, gates) build-verified + human smoke per repo convention: switch mid-session live → reconnect + model acknowledges new register terms; chipDensity 'none' → no chips AND digits inert; Ambient → trace hidden but witness cards still render.
 
