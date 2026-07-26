@@ -2,6 +2,7 @@ import React from 'react';
 import { X } from 'lucide-react';
 import type { Artifact } from './types';
 import { FEEDS } from './feeds';
+import { splitParagraphs } from './parts';
 
 // Status of one widget field bound to a feed: `failed` never clears a previously-fetched
 // value/stamp — the renderer shows "feed unavailable" plus the stale value labeled as stale
@@ -86,8 +87,8 @@ export function ArtifactWindow({ artifact, index, onClose }: {
         from: {artifact.sources.join(' + ')}
       </div>
       <div data-entity-id={`artifact-${artifact.id}`} className="flex-1 min-h-0 overflow-y-auto px-3 py-2 text-[12px] text-[var(--text-primary)] leading-relaxed">
-        {artifact.kind === 'doc' && (artifact.content ?? '').split(/\n+/).filter(Boolean).map((p, i) => (
-          <p key={i} className="mb-2 last:mb-0">{p}</p>
+        {artifact.kind === 'doc' && splitParagraphs(artifact.content).map((p, i) => (
+          <p key={i} data-entity-id={`artifact-${artifact.id}-para-${i + 1}`} className="mb-2 last:mb-0">{p}</p>
         ))}
         {artifact.kind === 'widget' && (
           <div className="flex flex-col gap-2">
@@ -98,7 +99,7 @@ export function ArtifactWindow({ artifact, index, onClose }: {
                 ? (status?.failed ? 'feed unavailable' : status?.value ?? '…')
                 : (f.value ?? '');
               return (
-                <div key={i} className="flex flex-col gap-0.5 text-[11px] font-mono">
+                <div key={i} data-entity-id={`artifact-${artifact.id}-field-${i + 1}`} className="flex flex-col gap-0.5 text-[11px] font-mono">
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-[var(--text-secondary)]">{f.label}</span>
                     <span className="flex items-center gap-1.5 shrink-0">
