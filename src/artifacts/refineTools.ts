@@ -113,6 +113,16 @@ export function validateRefineCall(
       if (a.kind === 'doc' && label !== undefined) {
         return { error: 'a doc has no field labels — use text to rewrite the paragraph, or op "retitle" for the artifact title.' };
       }
+      // These two must be caught HERE, before applyPatch: applyPatch's own empty-after-trim
+      // guards (parts.ts) return null indistinguishably from a genuine no-op, and an empty
+      // string is never equal to existing non-empty content — so without this check the
+      // fallback message below would lie, claiming the part "already reads" empty text.
+      if (text !== undefined && !text) {
+        return { error: `refine_artifact op "replace-part" needs non-empty text — to clear ${a.id} ${noun} ${index} entirely, use op "remove-part" instead.` };
+      }
+      if (label !== undefined && !label) {
+        return { error: `refine_artifact op "replace-part" needs a non-empty label to name ${a.id} ${noun} ${index} — an empty label cannot be pointed at.` };
+      }
       const field = a.kind === 'widget' ? a.fields?.[index - 1] : undefined;
       if (text !== undefined && field?.feed) {
         // The chips say LIVE/SIMULATED. Authoring that value would launder authored text as

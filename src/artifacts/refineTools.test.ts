@@ -68,6 +68,29 @@ describe('validateRefineCall', () => {
     expect(v.error).toContain('already reads');
   });
 
+  it('empty text on replace-part is refused as empty, not misreported as a no-op', () => {
+    const v = validateRefineCall(call({ text: '' }), state([art()]), 5000) as { error: string };
+    expect(v.error).toContain('non-empty text');
+    expect(v.error).toContain('remove-part');
+    expect(v.error).not.toContain('already reads');
+  });
+
+  it('whitespace-only text on replace-part is refused as empty, not misreported as a no-op', () => {
+    const v = validateRefineCall(call({ text: '   ' }), state([art()]), 5000) as { error: string };
+    expect(v.error).toContain('non-empty text');
+    expect(v.error).toContain('remove-part');
+    expect(v.error).not.toContain('already reads');
+  });
+
+  it('an empty label on a widget field is refused as empty, not misreported as a no-op', () => {
+    const w = art({ id: 'a2', kind: 'widget', content: undefined,
+      fields: [{ label: 'Time', value: '9:00' }] });
+    const v = validateRefineCall(call({ artifactId: 'a2', index: 1, text: undefined, label: '  ' }),
+      state([w]), 5000) as { error: string };
+    expect(v.error).toContain('non-empty label');
+    expect(v.error).not.toContain('already reads');
+  });
+
   it('removing the last part refuses rather than emptying the artifact', () => {
     const v = validateRefineCall(call({ op: 'remove-part', index: 1 }),
       state([art({ content: 'only one' })]), 5000) as { error: string };
