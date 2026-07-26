@@ -30,16 +30,44 @@ export function ArtifactWindow({ artifact, index, onClose, onRevert, onEditPart 
 
   // Direct editing: the user changing their own material needs no witness — the witness gate
   // exists for the agent's INTERPRETATION being wrong. A commit mints a revision owned by the
-  // user. `editing` holds the 1-based part index.
-  const [editing, setEditing] = React.useState<number | null>(null);
+  // user. `editing` SNAPSHOTS the 1-based part index, the original text, AND the artifact's rev
+  // at edit-START time — never read live from the `artifact` prop at commit time. The editor
+  // reconciles in place (same React key), so if an agent revise or a revert lands while it's
+  // open, the component re-renders with a bumped `artifact.rev` and new content while the open
+  // editor and the user's draft sit undisturbed with no visible sign. Reading `artifact.rev` at
+  // commit time (round 1 review finding) would hand the reducer's `baseRev !== a.rev` check an
+  // ALREADY-CURRENT rev, defeating the staleness guard entirely and letting a stale draft
+  // silently overwrite the agent's work.
+  const [editing, setEditing] = React.useState<{ index1: number; original: string; baseRev: number } | null>(null);
   const [draft, setDraft] = React.useState('');
 
-  const startEdit = (index1: number, text: string) => { setEditing(index1); setDraft(text); };
-  const commitEdit = (index1: number, original: string) => {
+  // Derived, not stored — true the instant the artifact moves out from under an open editor,
+  // whether or not the user has attempted to commit yet, and independent of whether the part
+  // being edited still exists in the (possibly now-shorter) part list. The banner driven by this
+  // is rendered OUTSIDE the per-part .map below (round 1 review finding) so a `remove-part` that
+  // deletes the very paragraph being edited can't unmount the note along with it — it lives at
+  // window level, keyed off this component's own state, never off one array slot.
+  const conflicted = editing !== null && editing.baseRev !== artifact.rev;
+
+  const startEdit = (index1: number, text: string) => {
+    setEditing({ index1, original: text, baseRev: artifact.rev });
+    setDraft(text);
+  };
+  const commitEdit = () => {
+    if (!editing) return;
     const text = draft.trim();
+    if (!text || text === editing.original) { setEditing(null); return; } // no-op edits mint no revision
+    if (editing.baseRev !== artifact.rev) {
+      // Stale snapshot: the artifact changed underneath while the editor was open. Do NOT
+      // apply, do NOT touch the draft, keep the editor open — the conflict banner is already
+      // showing via `conflicted`. Re-snapshot the rev so a second, deliberate commit (the user
+      // having now SEEN the conflict and chosen to proceed) goes through the normal path below
+      // against whatever is current at that moment — that is the user witnessing the overwrite.
+      setEditing((e) => (e ? { ...e, baseRev: artifact.rev } : e));
+      return;
+    }
+    onEditPart({ op: 'replace-part', index: editing.index1, text }, editing.baseRev);
     setEditing(null);
-    if (!text || text === original) return;          // no-op edits mint no revision
-    onEditPart({ op: 'replace-part', index: index1, text }, artifact.rev);
   };
 
   // Per-window ticker (spec §8): one interval per window, cadence = the fastest bound feed's
@@ -154,9 +182,17 @@ export function ArtifactWindow({ artifact, index, onClose, onRevert, onEditPart 
           </div>
         </div>
       )}
+      {/* Window-level, not per-part: this must survive a `remove-part` that deletes the very
+          paragraph/field being edited, which unmounts that .map iteration entirely. Anchored to
+          `conflicted` (component state), so it can't disappear along with a deleted array slot. */}
+      {conflicted && (
+        <div className="px-3 py-1.5 text-[9px] font-mono text-amber-600 border-b border-[var(--card-border)] bg-amber-500/10">
+          This artifact changed while you were editing (now at rev {artifact.rev}) — your edit was not applied. Edit again to apply it on top of the latest version, or press Escape to discard your draft.
+        </div>
+      )}
       <div data-entity-id={`artifact-${artifact.id}`} className="flex-1 min-h-0 overflow-y-auto px-3 py-2 text-[12px] text-[var(--text-primary)] leading-relaxed">
         {artifact.kind === 'doc' && splitParagraphs(artifact.content).map((p, i) => (
-          editing === i + 1 ? (
+          editing?.index1 === i + 1 ? (
             // A textarea is an editable target, so isEditableTarget (src/shell/quickFire.ts:25)
             // already stops the backtick register chord and quick-fire digits from firing here.
             <textarea
@@ -166,10 +202,10 @@ export function ArtifactWindow({ artifact, index, onClose, onRevert, onEditPart 
               className="w-full mb-2 min-h-6 rounded border border-[var(--accent-color)] bg-transparent p-1 text-[12px] leading-relaxed text-[var(--text-primary)]"
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
-              onBlur={() => commitEdit(i + 1, p)}
+              onBlur={() => commitEdit()}
               onKeyDown={(e) => {
                 if (e.key === 'Escape') { e.stopPropagation(); setEditing(null); }
-                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commitEdit(i + 1, p); }
+                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commitEdit(); }
               }}
             />
           ) : (
@@ -206,17 +242,17 @@ export function ArtifactWindow({ artifact, index, onClose, onRevert, onEditPart 
                           {descriptor.provenance === 'live' ? 'LIVE' : 'SIMULATED'}
                         </span>
                       )}
-                      {editing === i + 1 && !descriptor ? (
+                      {editing?.index1 === i + 1 && !descriptor ? (
                         <input
                           autoFocus
                           aria-label={`Edit ${f.label}`}
                           className="min-h-6 w-24 rounded border border-[var(--accent-color)] bg-transparent px-1 text-[11px] text-[var(--text-primary)]"
                           value={draft}
                           onChange={(e) => setDraft(e.target.value)}
-                          onBlur={() => commitEdit(i + 1, f.value ?? '')}
+                          onBlur={() => commitEdit()}
                           onKeyDown={(e) => {
                             if (e.key === 'Escape') { e.stopPropagation(); setEditing(null); }
-                            if (e.key === 'Enter') { e.preventDefault(); commitEdit(i + 1, f.value ?? ''); }
+                            if (e.key === 'Enter') { e.preventDefault(); commitEdit(); }
                           }}
                         />
                       ) : (
