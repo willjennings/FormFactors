@@ -16,9 +16,10 @@ function fmtStamp(ts: number): string {
 }
 
 // A synthesized artifact rendered as a floating window (whiteboard-panel styling family).
-// Create-only: the agent has no tool that maps to closing one — the × below is the ONLY
-// close path (spec §7). Cascades by index so several artifacts don't stack exactly on top
-// of each other or cover the program window.
+// Revisable in place by both the agent (refine_artifact) and the user (double-click to edit),
+// with a revert-capable history — but closing stays USER-ONLY: the agent has no tool that maps
+// to closing one, the × below is the ONLY close path (spec §7). Cascades by index so several
+// artifacts don't stack exactly on top of each other or cover the program window.
 export function ArtifactWindow({ artifact, index, onClose, onRevert, onEditPart }: {
   artifact: Artifact; index: number; onClose: () => void;
   onRevert: (toRev: number) => void;
