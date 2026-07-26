@@ -1,8 +1,16 @@
 // The model's standing view of the combinable world: gists only (full text via read_sources).
 import type { MockDoc, ProgramId } from '../scenarios';
-import type { ArtifactState } from './types';
+import type { Artifact, ArtifactState } from './types';
 import { MAX_ARTIFACTS } from './artifactStore';
 import { feedsSummary } from './feeds';
+
+// Shared by serializeArtifacts (the standing [ARTIFACTS] hint) and combineTools.sourceDetail
+// (the [CORPUS DETAIL]-style read) — one template for the id/title/kind/rev/provenance header
+// so the two model-facing surfaces can never drift on the rev value the handshake depends on.
+export function artifactHeader(a: Artifact): string {
+  const feeds = a.kind === 'widget' ? feedsSummary(a.fields) : null;
+  return `${a.id} "${a.title}" (${a.kind}, rev ${a.rev}, from: ${a.sources.join(' + ')}${feeds ? `; feeds: ${feeds}` : ''})`;
+}
 
 function gist(id: string, doc: MockDoc): string {
   switch (doc.kind) {
@@ -29,10 +37,7 @@ export function serializeArtifacts(state: ArtifactState): string | null {
   }
   // Widget entries append per-field feed provenance (spec §8): the hint carries the same
   // LIVE/SIMULATED labels the chips render, so the model never claims simulated data is real.
-  const items = state.artifacts.map((a) => {
-    const feeds = a.kind === 'widget' ? feedsSummary(a.fields) : null;
-    return `${a.id} "${a.title}" (${a.kind}, rev ${a.rev}, from: ${a.sources.join(' + ')}${feeds ? `; feeds: ${feeds}` : ''})`;
-  });
+  const items = state.artifacts.map(artifactHeader);
   const capNote = state.rejectedAtCap > 0 ? ` ${state.rejectedAtCap} creation${state.rejectedAtCap === 1 ? ' was' : 's were'} rejected at the ${MAX_ARTIFACTS}-artifact cap — the user must close one first.` : '';
   // The rev in each item IS the handshake: refine_artifact must echo it back as baseRev, which
   // is what makes positional part ids ("paragraph 2") safe across revisions.

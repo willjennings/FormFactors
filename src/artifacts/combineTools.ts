@@ -5,7 +5,8 @@ import type { MockDoc, ProgramId } from '../scenarios';
 import { serializeMockDoc } from '../scenarios';
 import type { Artifact, ArtifactState, ArtifactEvent, FeedId, WidgetField } from './types';
 import { reduce as artifactReduce, MAX_ARTIFACTS } from './artifactStore';
-import { FEEDS, feedsSummary } from './feeds';
+import { FEEDS } from './feeds';
+import { artifactHeader } from './serialize';
 
 export const COMBINE_TOOL: VoiceTool = {
   name: 'combine',
@@ -58,15 +59,14 @@ export function sourceDetail(
 ): string | null {
   const art = artifacts.artifacts.find((a) => a.id === id);
   if (art) {
-    // Widget details carry the same per-feed provenance as the hint/ack/chips (feedsSummary
-    // is the single source) — read_sources was the one surface the provenance pass missed.
-    const feeds = art.kind === 'widget' ? feedsSummary(art.fields) : null;
     // The history reader: every version, who made it, and why. read_sources already exists and
     // the model already knows to call it before acting on content — no new tool needed.
     const revs = [...art.history.map((v) => v.meta), art.meta]
       .map((m) => `rev ${m.rev} (${m.owner}${m.note ? `, "${m.note}"` : ''})`)
       .join(' · ');
-    return `${art.id} "${art.title}" (${art.kind}, rev ${art.rev}, from: ${art.sources.join(' + ')}${feeds ? `; feeds: ${feeds}` : ''}): ${art.content ?? art.fields?.map((f) => `${f.label}: ${f.value ?? f.feed}`).join('; ') ?? ''} [revisions: ${revs}]`;
+    // artifactHeader is shared with serializeArtifacts (spec: the [ARTIFACTS] hint and this
+    // detail read must never disagree about id/title/kind/rev/provenance for the same artifact).
+    return `${artifactHeader(art)}: ${art.content ?? art.fields?.map((f) => `${f.label}: ${f.value ?? f.feed}`).join('; ') ?? ''} [revisions: ${revs}]`;
   }
   const doc = corpus[id as ProgramId];
   if (!doc) return null;
