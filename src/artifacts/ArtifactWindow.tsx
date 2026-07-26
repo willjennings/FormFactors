@@ -212,6 +212,12 @@ export function ArtifactWindow({ artifact, index, onClose, onRevert, onEditPart 
               key={i}
               autoFocus
               aria-label={`Edit paragraph ${i + 1}`}
+              // Spec §8: "parts keep their data-entity-id while editable, so an edited paragraph
+              // stays pointable" — same value the resting <p> below carries, so a point-and-talk
+              // reference resolves identically whether or not the paragraph happens to be open
+              // for editing right now. The measurement scan (App.tsx updateLayout) selects
+              // `.artifact-window [data-entity-id]`, which this satisfies exactly like the <p>.
+              data-entity-id={`artifact-${artifact.id}-para-${i + 1}`}
               className="w-full mb-2 min-h-6 rounded border border-[var(--accent-color)] bg-transparent p-1 text-[12px] leading-relaxed text-[var(--text-primary)]"
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
