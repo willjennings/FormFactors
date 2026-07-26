@@ -188,8 +188,19 @@ export function ArtifactWindow({ artifact, index, onClose, onRevert, onEditPart 
           paragraph/field being edited, which unmounts that .map iteration entirely. Anchored to
           `conflicted` (component state), so it can't disappear along with a deleted array slot. */}
       {conflicted && (
-        <div className="px-3 py-1.5 text-[9px] font-mono text-amber-600 border-b border-[var(--card-border)] bg-amber-500/10">
-          This artifact changed while you were editing (now at rev {artifact.rev}) — your edit was not applied. Edit again to apply it on top of the latest version, or press Escape to discard your draft.
+        // M1 (final review): "press Escape to discard" was only true while the edited part's
+        // textarea/input was still mounted and focused. If the conflicting revision REMOVED that
+        // very part, the editor unmounts along with it — nothing is focused, no key handler is
+        // listening, and the banner had no way to clear itself. A dedicated button works
+        // regardless of whether the editor is still on screen, so the wording no longer depends
+        // on it either.
+        <div className="px-3 py-1.5 text-[9px] font-mono text-amber-600 border-b border-[var(--card-border)] bg-amber-500/10 flex items-center justify-between gap-2">
+          <span>This artifact changed while you were editing (now at rev {artifact.rev}) — your edit was not applied. Edit again to apply it on top of the latest version, or discard your draft below.</span>
+          <button
+            aria-label="Discard draft"
+            className="hit-24 shrink-0 px-1.5 text-amber-700 hover:underline"
+            onClick={() => setEditing(null)}
+          >discard</button>
         </div>
       )}
       <div data-entity-id={`artifact-${artifact.id}`} className="flex-1 min-h-0 overflow-y-auto px-3 py-2 text-[12px] text-[var(--text-primary)] leading-relaxed">
