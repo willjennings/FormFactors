@@ -137,7 +137,7 @@ export function validateRefineCall(
         // content), so naming it here would recommend a call guaranteed to fail (final review I3).
         return { error: parts.length > 1
           ? `refine_artifact op "replace-part" needs non-empty text — to clear ${a.id} ${noun} ${index} entirely, use op "remove-part" instead.`
-          : `refine_artifact op "replace-part" needs non-empty text — ${a.id} has only one ${noun}, so it can't be left empty; close the artifact instead, or supply real text.` };
+          : `refine_artifact op "replace-part" needs non-empty text — ${a.id} has only one ${noun}, so it can't be left empty; supply real text, or ask the user to close the artifact.` };
       }
       if (label !== undefined && !label) {
         return { error: `refine_artifact op "replace-part" needs a non-empty label to name ${a.id} ${noun} ${index} — an empty label cannot be pointed at.` };

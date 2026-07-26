@@ -195,7 +195,7 @@ export function ArtifactWindow({ artifact, index, onClose, onRevert, onEditPart 
         // regardless of whether the editor is still on screen, so the wording no longer depends
         // on it either.
         <div className="px-3 py-1.5 text-[9px] font-mono text-amber-600 border-b border-[var(--card-border)] bg-amber-500/10 flex items-center justify-between gap-2">
-          <span>This artifact changed while you were editing (now at rev {artifact.rev}) — your edit was not applied. Edit again to apply it on top of the latest version, or discard your draft below.</span>
+          <span>This artifact changed while you were editing (now at rev {artifact.rev}) — your edit was not applied. Edit again to apply it on top of the latest version, or discard your draft.</span>
           <button
             aria-label="Discard draft"
             className="hit-24 shrink-0 px-1.5 text-amber-700 hover:underline"
