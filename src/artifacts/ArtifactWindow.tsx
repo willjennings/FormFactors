@@ -173,6 +173,7 @@ export function ArtifactWindow({ artifact, index, onClose, onRevert, onEditPart 
                 rev {v.rev} · {v.meta.owner === 'user' ? 'you' : 'agent'}{v.meta.note ? ` · ${v.meta.note}` : ''}
               </span>
               <button
+                aria-label={`Revert to revision ${v.rev}`}
                 className="hit-24 shrink-0 px-1.5 text-[var(--accent-color)] hover:underline"
                 onClick={() => { onRevert(v.rev); setHistoryOpen(false); }}
               >revert</button>
