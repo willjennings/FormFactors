@@ -3434,7 +3434,15 @@ export default function App() {
       return;
     }
     const last = undoStack[undoStack.length - 1];
-    if (last.kind === 'artifact') return; // Task 7 wires the revert
+    if (last.kind === 'artifact') {
+      const ev: ArtifactEvent = { type: 'artifact.revertTo', id: last.id, toRev: last.toRev, at: Date.now() };
+      artifactDispatch(ev);
+      artifactStateRef.current = artifactReduce(artifactStateRef.current, ev);
+      setUndoStack(undoStack.slice(0, -1));
+      addLog('info', `Undo — ${last.label} (reverted to rev ${last.toRev})`);
+      emitFeedback({ outcome: 'committed', verbClass: 'mutate', label: `Undid ${last.label}` });
+      return;
+    }
     setMockDoc(last.doc);
     mockDocRef.current = last.doc;
     setUndoStack(undoStack.slice(0, -1));
