@@ -10,9 +10,19 @@ type Layout = Record<string, [number, number, number, number]>;
 
 const ORDINALS = ['', 'first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth', 'tenth'];
 
-/** First few words, for "the part about the budget". resolveEchoedTarget's ≥2-token overlap
- *  floor (R2) is what stops a one-word coincidence from grounding here. */
-function firstWords(text: string): string { return text.split(/\s+/).slice(0, 5).join(' '); }
+/** First few words, for "the part about the budget" — but only when there are enough of them to
+ *  be a safe handle. resolveEchoedTarget's ≥2-token overlap floor (registry.ts MIN_OVERLAP_TOKENS)
+ *  does NOT protect a short alias here: that floor only guards the bare-overlap FALLBACK branch,
+ *  reached when neither "alias is a token-subset of the echo" nor "echo is a token-subset of the
+ *  alias" holds. A one-word alias like "approved" IS a token-subset of a one-word echo "approved",
+ *  so it scores via the subset branch (or exact-match, score 1000) and wins outright — the
+ *  ≥2-token floor is never consulted. So this function enforces its own floor: fewer than 2
+ *  tokens and it emits no alias at all. The part stays reachable via "paragraph N" and its
+ *  ordinal form, which are unambiguous by construction and need no such guard. */
+function firstWords(text: string): string | null {
+  const words = text.split(/\s+/).filter(Boolean).slice(0, 5);
+  return words.length >= 2 ? words.join(' ') : null;
+}
 
 export function artifactEntities(state: ArtifactState, layout: Layout): SceneEntity[] {
   // "the doc"/"the widget" only while unambiguous: with two artifacts of one kind the alias
@@ -42,11 +52,12 @@ export function artifactEntities(state: ArtifactState, layout: Layout): SceneEnt
     for (const p of artifactParts(a)) {
       const partId = `${id}-${p.id}`;
       const noun = a.kind === 'widget' ? 'field' : 'paragraph';
+      const fw = p.text ? firstWords(p.text) : null;
       const partAliases = a.kind === 'widget'
         ? [normText(p.label ?? ''), normText(`${noun} ${p.index}`)]
         : [normText(`${noun} ${p.index}`),
            ...(ORDINALS[p.index] ? [normText(`${ORDINALS[p.index]} ${noun}`)] : []),
-           ...(p.text ? [normText(firstWords(p.text))] : [])];
+           ...(fw ? [normText(fw)] : [])];
       parts.push({
         id: asId(partId),
         title: a.kind === 'widget' ? `${p.label} — "${a.title}"` : `Paragraph ${p.index} — "${a.title}"`,

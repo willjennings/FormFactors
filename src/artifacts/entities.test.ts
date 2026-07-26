@@ -74,6 +74,23 @@ describe('artifact sub-entities (paragraphs and fields)', () => {
     expect(p2.aliases.some((a) => a.includes('harbor'))).toBe(true);
   });
 
+  // Fix round 1: resolveEchoedTarget's ≥2-token overlap floor guards only the bare-overlap
+  // fallback branch — a one-word alias exact-matches (or subset-matches) a one-word echo and
+  // wins outright, unprotected. A single common word like "Approved" must not become a
+  // silently-grounding alias; the honest outcome for that ambiguity is no first-words alias at
+  // all, not a coin flip. The part must stay reachable via "paragraph N" and its ordinal form.
+  it('a single-word paragraph gets no first-words alias, but keeps ordinal + ordinal-word forms', () => {
+    const st = { artifacts: [{ id: 'a1', kind: 'doc' as const, title: 'Brief',
+      sources: ['word'], content: 'Approved',
+      createdAt: 1, rev: 1, meta: { rev: 1, at: 1, owner: 'agent' as const }, history: [] }],
+      nextId: 2, rejectedAtCap: 0, rejectedStale: 0 };
+    const p1 = artifactEntities(st, {}).find((e) => e.id === 'artifact-a1-para-1')!;
+    expect(p1.aliases).toContain('paragraph 1');
+    expect(p1.aliases).toContain('first paragraph');
+    expect(p1.aliases).not.toContain('approved');
+    expect(p1.aliases.some((a) => a.includes('approved'))).toBe(false);
+  });
+
   it('derives widget fields aliased by their label', () => {
     const st = { artifacts: [{ id: 'a2', kind: 'widget' as const, title: 'Board',
       sources: ['word'], fields: [{ label: 'Lead project', value: 'Harbor' }],
