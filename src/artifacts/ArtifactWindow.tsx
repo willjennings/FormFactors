@@ -19,19 +19,21 @@ function fmtStamp(ts: number): string {
 // Create-only: the agent has no tool that maps to closing one — the × below is the ONLY
 // close path (spec §7). Cascades by index so several artifacts don't stack exactly on top
 // of each other or cover the program window.
-export function ArtifactWindow({ artifact, index, onClose }: {
-  artifact: Artifact; index: number; onClose: () => void;
+export function ArtifactWindow({ artifact, index, onClose, onRevert }: {
+  artifact: Artifact; index: number; onClose: () => void; onRevert: (toRev: number) => void;
 }) {
   const fields = artifact.fields ?? [];
   const [statuses, setStatuses] = React.useState<Record<number, FieldStatus>>({});
+  const [historyOpen, setHistoryOpen] = React.useState(false);
 
   // Per-window ticker (spec §8): one interval per window, cadence = the fastest bound feed's
   // refreshMs (floored at 1s), cleaned up on unmount. The interval is the heartbeat, not a
   // per-field read cadence — each field is only actually re-read once ITS OWN refreshMs has
   // elapsed (lastAttemptRef), so e.g. a 10-minute weather feed isn't hit every second just
-  // because it shares a window with a 1s clock. Fields are create-only (the agent never
-  // mutates an artifact after creation — spec §7), so the bound-feed set is stable for the
-  // window's lifetime.
+  // because it shares a window with a 1s clock.
+  // Fields are NO LONGER create-only (2026-07-26 revise core): refine_artifact and direct user
+  // edits can add or remove a feed-bound field, so the ticker must re-establish on every
+  // revision — keying on id alone would leave a new feed unread or a removed one still polling.
   const lastAttemptRef = React.useRef<Record<number, number>>({});
   React.useEffect(() => {
     if (artifact.kind !== 'widget') return;
@@ -63,7 +65,7 @@ export function ArtifactWindow({ artifact, index, onClose }: {
     const id = setInterval(tick, intervalMs);
     return () => { cancelled = true; clearInterval(id); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [artifact.kind, artifact.id]);
+  }, [artifact.kind, artifact.id, artifact.rev]);
 
   // No root stopPropagation (unlike WhiteboardPanel): pointer events must reach <main> so the
   // plane's data-entity-id carve-out can make the CONTENT region pointable. data-shell still
@@ -79,13 +81,44 @@ export function ArtifactWindow({ artifact, index, onClose }: {
           <span className="text-[9px] font-mono uppercase tracking-widest px-1.5 py-0.5 rounded bg-[var(--accent-color)]/15 text-[var(--accent-color)]">{artifact.kind}</span>
           <span className="text-xs font-semibold text-[var(--text-primary)] truncate">{artifact.title}</span>
         </div>
-        <button aria-label="Close artifact" className="hit-24 text-[var(--text-secondary)] hover:text-[var(--text-primary)] shrink-0" onClick={onClose}><X size={13} /></button>
+        <div className="flex items-center gap-1.5 shrink-0">
+          {/* The rev chip is the user-facing half of the (baseRev, index) handshake the model
+              uses — and the entry to the history. It is always visible, like provenance. */}
+          <button
+            aria-label={`Revision ${artifact.rev} — show history`}
+            aria-expanded={historyOpen}
+            className="hit-24 text-[9px] font-mono px-1.5 py-0.5 rounded bg-[var(--card-border)]/40 text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+            onClick={() => setHistoryOpen((o) => !o)}
+          >rev {artifact.rev}</button>
+          <button aria-label="Close artifact" className="hit-24 text-[var(--text-secondary)] hover:text-[var(--text-primary)]" onClick={onClose}><X size={13} /></button>
+        </div>
       </div>
       {/* Provenance is permanent, not a hover tooltip — the honesty floor for a synthesized
           artifact is that its origin is always visible, never buried behind an interaction. */}
       <div className="px-3 py-1 text-[9px] font-mono text-[var(--text-secondary)] border-b border-[var(--card-border)] truncate" title={`from: ${artifact.sources.join(' + ')}`}>
         from: {artifact.sources.join(' + ')}
       </div>
+      {historyOpen && (
+        <div data-shell className="px-3 py-1.5 border-b border-[var(--card-border)] flex flex-col gap-1 max-h-28 overflow-y-auto">
+          {artifact.history.length === 0 && (
+            <div className="text-[9px] font-mono text-[var(--text-secondary)]">No earlier revisions — this is the original.</div>
+          )}
+          {artifact.history.map((v) => (
+            <div key={v.rev} className="flex items-center justify-between gap-2 text-[9px] font-mono">
+              <span className="text-[var(--text-secondary)] truncate">
+                rev {v.rev} · {v.meta.owner === 'user' ? 'you' : 'agent'}{v.meta.note ? ` · ${v.meta.note}` : ''}
+              </span>
+              <button
+                className="hit-24 shrink-0 px-1.5 text-[var(--accent-color)] hover:underline"
+                onClick={() => { onRevert(v.rev); setHistoryOpen(false); }}
+              >revert</button>
+            </div>
+          ))}
+          <div className="text-[9px] font-mono text-[var(--text-primary)]">
+            rev {artifact.rev} · {artifact.meta.owner === 'user' ? 'you' : 'agent'}{artifact.meta.note ? ` · ${artifact.meta.note}` : ''} · now
+          </div>
+        </div>
+      )}
       <div data-entity-id={`artifact-${artifact.id}`} className="flex-1 min-h-0 overflow-y-auto px-3 py-2 text-[12px] text-[var(--text-primary)] leading-relaxed">
         {artifact.kind === 'doc' && splitParagraphs(artifact.content).map((p, i) => (
           <p key={i} data-entity-id={`artifact-${artifact.id}-para-${i + 1}`} className="mb-2 last:mb-0">{p}</p>

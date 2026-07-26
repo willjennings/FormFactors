@@ -3583,7 +3583,15 @@ export default function App() {
           {/* Combinatory artifacts (spec §3/§7): synthesized windows on the desktop plane, one
               per artifact — create-only, the × below is the sole close path. */}
           {artifactState.artifacts.map((a, i) => (
-            <ArtifactWindow key={a.id} artifact={a} index={i} onClose={() => artifactDispatch({ type: 'artifact.close', id: a.id })} />
+            <ArtifactWindow key={a.id} artifact={a} index={i}
+              onClose={() => artifactDispatch({ type: 'artifact.close', id: a.id })}
+              onRevert={(toRev) => {
+                const ev: ArtifactEvent = { type: 'artifact.revertTo', id: a.id, toRev, at: Date.now() };
+                artifactDispatch(ev);
+                artifactStateRef.current = artifactReduce(artifactStateRef.current, ev);
+                addLog('info', `Reverted ${a.id} to rev ${toRev}`);
+                emitFeedback({ outcome: 'committed', verbClass: 'mutate', label: `Reverted ${a.id} to rev ${toRev}` });
+              }} />
           ))}
           {whiteboardMode === 'board' && pendingBeautify && (
             <BeautifyCard
