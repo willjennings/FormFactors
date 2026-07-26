@@ -3631,8 +3631,10 @@ export default function App() {
               demoCaption={sketchDemoMode ? serializeSketch(sketch) : null}
             />
           )}
-          {/* Combinatory artifacts (spec §3/§7): synthesized windows on the desktop plane, one
-              per artifact — create-only, the × below is the sole close path. */}
+          {/* Combinatory artifacts (spec §3/§7/§9): synthesized windows on the desktop plane, one
+              per artifact — creatable by the agent (combine), revisable by both the agent
+              (refine_artifact) and the user (double-click to edit), revertible via the history
+              list, and closable only by the × below (no tool maps to close). */}
           {artifactState.artifacts.map((a, i) => (
             <ArtifactWindow key={a.id} artifact={a} index={i}
               onClose={() => artifactDispatch({ type: 'artifact.close', id: a.id })}
@@ -3656,10 +3658,13 @@ export default function App() {
                 artifactStateRef.current = artifactReduce(artifactStateRef.current, ev);
                 setUndoStack((s) => [...s, { kind: 'artifact' as const, id: a.id, toRev: baseRev, label: `Edit ${a.id}` }]);
                 addLog('info', `You edited ${a.id} (rev ${baseRev} → ${baseRev + 1})`);
-                // The model must learn the material changed under it — otherwise its next
-                // baseRev is stale and it will be refused without knowing why.
-                const hint = serializeArtifacts(artifactStateRef.current);
-                if (hint) providerRef.current?.sendTextHint(hint);
+                // The model must learn the material changed under it — otherwise its next baseRev
+                // is stale and it will be refused without knowing why. That hint is sent by the
+                // `[isLive, artifactState]` effect below (spec: a revision produces exactly ONE
+                // update) — a direct send here was fully redundant (M3, final review): this
+                // dispatch already bumps `artifactState`, which re-runs that effect with the
+                // identical string, and its change-gate has no way to know THIS send happened, so
+                // it fires again with the same content the model already received.
               }} />
           ))}
           {whiteboardMode === 'board' && pendingBeautify && (
