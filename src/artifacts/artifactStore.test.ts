@@ -104,4 +104,17 @@ describe('artifactStore — revisions', () => {
     const st0 = seed();
     expect(reduce(st0, { type: 'artifact.revertTo', id: 'a1', toRev: 7, at: 4000 })).toEqual(st0);
   });
+
+  it('each history entry carries the meta of the revision that PRODUCED it, not the incoming event\'s meta', () => {
+    let st = reduce(seed(), revise('a1', 1, { op: 'replace-part', index: 1, text: 'ALPHA' }, 2000, 'user', 'first'));
+    st = reduce(st, revise('a1', 2, { op: 'replace-part', index: 1, text: 'ALPHA2' }, 3000, 'agent', 'second'));
+    const a = st.artifacts[0];
+    // history[0] is rev 1 — the CREATING meta (owner 'agent', no note, at the seed's createdAt),
+    // never the first revise's event meta (owner 'user', note 'first', at 2000).
+    expect(a.history[0].meta).toEqual({ rev: 1, at: 1000, owner: 'agent' });
+    // history[1] is rev 2 — the meta stamped BY the first revise, not the second revise's event meta.
+    expect(a.history[1].meta).toEqual({ rev: 2, at: 2000, owner: 'user', note: 'first' });
+    // the artifact's own current meta is the second revise's — sanity check the setup is real.
+    expect(a.meta).toEqual({ rev: 3, at: 3000, owner: 'agent', note: 'second' });
+  });
 });
