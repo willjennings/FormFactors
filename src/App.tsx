@@ -972,10 +972,21 @@ export default function App() {
   // their DOM bboxes picked up immediately without requiring a window resize.
   useEffect(() => { updateLayout(); }, [updateLayout, windowRect, windowOpen, mockDoc]);
 
-  // Re-measure when an artifact window mounts/unmounts — effects run post-commit, so the new
-  // ArtifactWindow's data-entity-id region is in the DOM and measurable. Without this a fresh
-  // artifact stays zero-bbox (unpointable) until an unrelated layout pass happens to run.
-  useEffect(() => { updateLayout(); }, [artifactState.artifacts.length, updateLayout]);
+  // Re-measure when an artifact window mounts/unmounts OR any artifact's content changes —
+  // effects run post-commit, so the new/revised DOM is already painted and measurable. Keying
+  // on `artifacts.length` alone (final review C2) missed every REVISION: a refine that adds,
+  // removes, or rewrites a part changes what's on screen (and, for add/remove, how many
+  // `data-entity-id`s exist under one artifact) without changing the artifact COUNT, so nothing
+  // re-ran `composeEntities`/`setEntities` and `entitiesRef` kept describing deleted paragraphs
+  // at stale bboxes over newly-rendered text. `rev` bumps on every revise/revert (never on an
+  // in-place mutation of the same object — the reducer always returns a new artifact), so a
+  // signature of `id:rev` pairs changes exactly when content changes and is stable otherwise —
+  // narrower than depending on `artifactState` itself, which would also fire on
+  // rejectedAtCap/rejectedStale counter bumps that touch no DOM. `updateLayout` only calls
+  // `setEntities`/`setLayoutBounds`/`setMainSize`, none of which feed back into this signature,
+  // so this cannot retrigger itself.
+  const artifactRevSignature = artifactState.artifacts.map((a) => `${a.id}:${a.rev}`).join(',');
+  useEffect(() => { updateLayout(); }, [artifactRevSignature, updateLayout]);
 
   // Mount/reattach observers — re-runs when windowOpen flips so the new .program-window
   // element (which the old observer never saw) gets observed immediately on reopen.
