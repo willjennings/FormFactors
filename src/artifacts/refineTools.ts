@@ -132,7 +132,12 @@ export function validateRefineCall(
       // string is never equal to existing non-empty content — so without this check the
       // fallback message below would lie, claiming the part "already reads" empty text.
       if (text !== undefined && !text) {
-        return { error: `refine_artifact op "replace-part" needs non-empty text — to clear ${a.id} ${noun} ${index} entirely, use op "remove-part" instead.` };
+        // "use remove-part instead" is only a real remedy when another part would survive it —
+        // on a single-part artifact remove-part itself refuses (never leave an artifact with no
+        // content), so naming it here would recommend a call guaranteed to fail (final review I3).
+        return { error: parts.length > 1
+          ? `refine_artifact op "replace-part" needs non-empty text — to clear ${a.id} ${noun} ${index} entirely, use op "remove-part" instead.`
+          : `refine_artifact op "replace-part" needs non-empty text — ${a.id} has only one ${noun}, so it can't be left empty; close the artifact instead, or supply real text.` };
       }
       if (label !== undefined && !label) {
         return { error: `refine_artifact op "replace-part" needs a non-empty label to name ${a.id} ${noun} ${index} — an empty label cannot be pointed at.` };
@@ -141,7 +146,9 @@ export function validateRefineCall(
       if (text !== undefined && field?.feed) {
         // The chips say LIVE/SIMULATED. Authoring that value would launder authored text as
         // fetched data — the one thing the feed provenance surface exists to prevent.
-        return { error: `field ${index} "${field.label}" is bound to the ${field.feed} feed — its value is live and cannot be authored. You can rename it with label, or remove it.` };
+        // "or remove it" is only offered when the widget has another field to survive the
+        // removal — same single-part guarantee as above (final review I3).
+        return { error: `field ${index} "${field.label}" is bound to the ${field.feed} feed — its value is live and cannot be authored. You can rename it with label${parts.length > 1 ? ', or remove it' : ''}.` };
       }
       patch = { op: 'replace-part', index, text, label };
     }

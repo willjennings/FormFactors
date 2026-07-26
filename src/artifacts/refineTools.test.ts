@@ -82,6 +82,30 @@ describe('validateRefineCall', () => {
     expect(v.error).not.toContain('already reads');
   });
 
+  it('a single-part artifact refusing empty text does NOT recommend remove-part — that would itself fail', () => {
+    const a = art({ content: 'only one' });
+    const v = validateRefineCall(call({ text: '' }), state([a]), 5000) as { error: string };
+    expect(v.error).toContain('non-empty text');
+    expect(v.error).not.toContain('remove-part');
+    // The remedy it DOES name must actually work: closing the artifact, not a doomed op.
+    expect(v.error).toContain('close the artifact');
+  });
+
+  it('a single-field feed-bound widget refuses authoring without offering "remove it" — that would itself fail', () => {
+    const w = art({ id: 'a2', kind: 'widget', content: undefined,
+      fields: [{ label: 'Time', feed: 'clock' }] });
+    const v = validateRefineCall(call({ artifactId: 'a2', index: 1, text: '9:00' }), state([w]), 5000) as { error: string };
+    expect(v.error).toContain('rename');
+    expect(v.error).not.toContain('remove');
+  });
+
+  it('a multi-field feed-bound widget DOES offer "remove it" — that remedy would succeed', () => {
+    const w = art({ id: 'a2', kind: 'widget', content: undefined,
+      fields: [{ label: 'Time', feed: 'clock' }, { label: 'Notes', value: 'hi' }] });
+    const v = validateRefineCall(call({ artifactId: 'a2', index: 1, text: '9:00' }), state([w]), 5000) as { error: string };
+    expect(v.error).toContain('remove it');
+  });
+
   it('an empty label on a widget field is refused as empty, not misreported as a no-op', () => {
     const w = art({ id: 'a2', kind: 'widget', content: undefined,
       fields: [{ label: 'Time', value: '9:00' }] });
