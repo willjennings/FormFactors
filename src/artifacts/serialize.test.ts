@@ -25,7 +25,7 @@ describe('serializeArtifacts', () => {
     let st = reduce(initialArtifactState(), { type: 'artifact.create', artifact: { kind: 'doc', title: 'Exec summary', sources: ['word', 'excel'], content: 'x', createdAt: 1 } });
     const s = serializeArtifacts(st)!;
     expect(s).toMatch(/^\[ARTIFACTS: /);
-    expect(s).toContain('a1 "Exec summary" (doc, from: word + excel)');
+    expect(s).toContain('a1 "Exec summary" (doc, rev 1, from: word + excel)');
     const rejected = { ...st, rejectedAtCap: 2 };
     expect(serializeArtifacts(rejected)).toContain('2 creations were rejected at the 6-artifact cap');
   });
@@ -35,7 +35,7 @@ describe('serializeArtifacts', () => {
       fields: [{ label: 'Lead project', value: 'Riverside Tower' }, { label: 'Local time', feed: 'clock' }, { label: 'MERI', feed: 'stock' }],
     } });
     const s = serializeArtifacts(st)!;
-    expect(s).toContain('a1 "Status Board" (widget, from: a1 + excel; feeds: clock LIVE, stock SIMULATED)');
+    expect(s).toContain('a1 "Status Board" (widget, rev 1, from: a1 + excel; feeds: clock LIVE, stock SIMULATED)');
   });
   it('a widget with only static fields gets no feeds clause', () => {
     const st = reduce(initialArtifactState(), { type: 'artifact.create', artifact: {
@@ -43,7 +43,7 @@ describe('serializeArtifacts', () => {
       fields: [{ label: 'Project', value: 'Riverside Tower' }],
     } });
     const s = serializeArtifacts(st)!;
-    expect(s).toContain('a1 "Static Board" (widget, from: word + excel)');
+    expect(s).toContain('a1 "Static Board" (widget, rev 1, from: word + excel)');
     expect(s).not.toContain('feeds:');
   });
 });
@@ -63,5 +63,25 @@ describe('[ARTIFACTS] retraction + cap-note grammar (final review M1 + nit)', ()
   it('a single rejection reads "1 creation was rejected", not "1 creations were"', () => {
     const st = { ...initialArtifactState(), rejectedAtCap: 1 };
     expect(serializeArtifacts(st)).toContain('1 creation was rejected');
+  });
+});
+
+describe('serializeArtifacts — rev handshake (task-3)', () => {
+  it('carries rev N so the model can hand it back as baseRev', () => {
+    const st = { artifacts: [{ id: 'a1', kind: 'doc' as const, title: 'Brief',
+      sources: ['word', 'excel'], content: 'alpha', createdAt: 1,
+      rev: 3, meta: { rev: 3, at: 9, owner: 'agent' as const }, history: [] }],
+      nextId: 2, rejectedAtCap: 0, rejectedStale: 0 };
+    expect(serializeArtifacts(st)).toContain('a1 "Brief" (doc, rev 3, from: word + excel)');
+  });
+
+  it('surfaces rejectedStale with the remedy', () => {
+    const st = { artifacts: [{ id: 'a1', kind: 'doc' as const, title: 'Brief',
+      sources: ['word', 'excel'], content: 'alpha', createdAt: 1,
+      rev: 2, meta: { rev: 2, at: 9, owner: 'agent' as const }, history: [] }],
+      nextId: 2, rejectedAtCap: 0, rejectedStale: 2 };
+    const out = serializeArtifacts(st)!;
+    expect(out).toContain('2 revisions were rejected as stale');
+    expect(out).toContain('read the current rev before revising');
   });
 });

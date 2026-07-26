@@ -185,3 +185,17 @@ describe('sourceDetail feed provenance (final review M2 — the one surface the 
     expect(d).toContain('feeds: clock LIVE, stock SIMULATED');
   });
 });
+
+describe('sourceDetail — revision history (task-3)', () => {
+  it('sourceDetail doubles as the history reader — no separate tool', () => {
+    const artifacts = { artifacts: [{ id: 'a1', kind: 'doc' as const, title: 'Brief',
+      sources: ['word'], content: 'ALPHA', createdAt: 1, rev: 2,
+      meta: { rev: 2, at: 9, owner: 'agent' as const, note: 'tightened intro' },
+      history: [{ rev: 1, title: 'Brief', content: 'alpha',
+                  meta: { rev: 1, at: 1, owner: 'agent' as const } }] }],
+      nextId: 2, rejectedAtCap: 0, rejectedStale: 0 };
+    const out = sourceDetail('a1', {}, artifacts)!;
+    expect(out).toContain('rev 1 (agent)');
+    expect(out).toContain('rev 2 (agent, "tightened intro")');
+  });
+});

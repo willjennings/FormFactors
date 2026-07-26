@@ -61,7 +61,12 @@ export function sourceDetail(
     // Widget details carry the same per-feed provenance as the hint/ack/chips (feedsSummary
     // is the single source) — read_sources was the one surface the provenance pass missed.
     const feeds = art.kind === 'widget' ? feedsSummary(art.fields) : null;
-    return `${art.id} "${art.title}" (${art.kind}, from: ${art.sources.join(' + ')}${feeds ? `; feeds: ${feeds}` : ''}): ${art.content ?? art.fields?.map((f) => `${f.label}: ${f.value ?? f.feed}`).join('; ') ?? ''}`;
+    // The history reader: every version, who made it, and why. read_sources already exists and
+    // the model already knows to call it before acting on content — no new tool needed.
+    const revs = [...art.history.map((v) => v.meta), art.meta]
+      .map((m) => `rev ${m.rev} (${m.owner}${m.note ? `, "${m.note}"` : ''})`)
+      .join(' · ');
+    return `${art.id} "${art.title}" (${art.kind}, rev ${art.rev}, from: ${art.sources.join(' + ')}${feeds ? `; feeds: ${feeds}` : ''}): ${art.content ?? art.fields?.map((f) => `${f.label}: ${f.value ?? f.feed}`).join('; ') ?? ''} [revisions: ${revs}]`;
   }
   const doc = corpus[id as ProgramId];
   if (!doc) return null;

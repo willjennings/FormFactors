@@ -31,8 +31,11 @@ export function serializeArtifacts(state: ArtifactState): string | null {
   // LIVE/SIMULATED labels the chips render, so the model never claims simulated data is real.
   const items = state.artifacts.map((a) => {
     const feeds = a.kind === 'widget' ? feedsSummary(a.fields) : null;
-    return `${a.id} "${a.title}" (${a.kind}, from: ${a.sources.join(' + ')}${feeds ? `; feeds: ${feeds}` : ''})`;
+    return `${a.id} "${a.title}" (${a.kind}, rev ${a.rev}, from: ${a.sources.join(' + ')}${feeds ? `; feeds: ${feeds}` : ''})`;
   });
   const capNote = state.rejectedAtCap > 0 ? ` ${state.rejectedAtCap} creation${state.rejectedAtCap === 1 ? ' was' : 's were'} rejected at the ${MAX_ARTIFACTS}-artifact cap — the user must close one first.` : '';
-  return `[ARTIFACTS: ${items.join('; ') || 'none'}.${capNote} Artifacts are valid combine sources. DO NOT acknowledge this update.]`;
+  // The rev in each item IS the handshake: refine_artifact must echo it back as baseRev, which
+  // is what makes positional part ids ("paragraph 2") safe across revisions.
+  const staleNote = state.rejectedStale > 0 ? ` ${state.rejectedStale} revision${state.rejectedStale === 1 ? ' was' : 's were'} rejected as stale — read the current rev before revising.` : '';
+  return `[ARTIFACTS: ${items.join('; ') || 'none'}.${capNote}${staleNote} Artifacts are valid combine sources; refine_artifact changes one in place. DO NOT acknowledge this update.]`;
 }
