@@ -114,7 +114,7 @@ import { REFINE_TOOL, validateRefineCall, describePatch } from './artifacts/refi
 import { feedsSummary } from './artifacts/feeds';
 import { artifactEntities } from './artifacts/entities';
 import { ArtifactWindow } from './artifacts/ArtifactWindow';
-import { ARTIFACT_DEMO_ARGS, ARTIFACT_DEMO_WIDGET_ARGS } from './artifacts/demo';
+import { ARTIFACT_DEMO_ARGS, ARTIFACT_DEMO_WIDGET_ARGS, ARTIFACT_DEMO_REFINE_ARGS } from './artifacts/demo';
 import type { ArtifactEvent, ArtifactPatch } from './artifacts/types';
 import { MissionPicker } from './missions/MissionPicker';
 import { MISSIONS } from './missions/defs';
@@ -3319,6 +3319,22 @@ export default function App() {
         artifactStateRef.current = afterWidget;
         const widgetHint = serializeArtifacts(afterWidget);
         if (widgetHint) addLog('info', widgetHint);
+
+        // Scripted revise (Task 10): rewrites a1 paragraph 1, so the whole revise loop — rev
+        // chip, history disclosure, revert — is reachable with no API key and no model call.
+        setTimeout(() => {
+          const vr = validateRefineCall(ARTIFACT_DEMO_REFINE_ARGS, artifactStateRef.current, Date.now());
+          if ('error' in vr) {
+            addLog('tool', `Tool Call: refine_artifact (demo) REJECTED — ${vr.error}`);
+            return;
+          }
+          artifactDispatch(vr.event);
+          artifactStateRef.current = artifactReduce(artifactStateRef.current, vr.event);
+          addLog('tool', `Tool Call: refine_artifact (demo) — a1 paragraph 1 (rev 1 → 2)`);
+          emitFeedback({ outcome: 'committed', verbClass: 'mutate', label: 'Refined a1 paragraph 1' });
+          const refineHint = serializeArtifacts(artifactStateRef.current);
+          if (refineHint) addLog('info', refineHint);
+        }, 900);
       }, 900);
     }, 900);
     return () => { clearTimeout(timer); if (!artifactsDemoPlayed.current) artifactsDemoScheduled.current = false; };
@@ -3586,9 +3602,15 @@ export default function App() {
             <ArtifactWindow key={a.id} artifact={a} index={i}
               onClose={() => artifactDispatch({ type: 'artifact.close', id: a.id })}
               onRevert={(toRev) => {
+                const beforeRev = a.rev;
                 const ev: ArtifactEvent = { type: 'artifact.revertTo', id: a.id, toRev, at: Date.now() };
                 artifactDispatch(ev);
                 artifactStateRef.current = artifactReduce(artifactStateRef.current, ev);
+                // Symmetric with refine/edit (spec §9 — "undoing is itself undoable"): a revert
+                // is itself a revision, so ⌘Z must be able to step it back too, same as any other
+                // mutation. toRev is the rev the artifact was AT before this revert — undoing
+                // means reverting TO that pre-revert state (a fresh revision, nothing erased).
+                setUndoStack((s) => [...s, { kind: 'artifact' as const, id: a.id, toRev: beforeRev, label: `Revert ${a.id}` }]);
                 addLog('info', `Reverted ${a.id} to rev ${toRev}`);
                 emitFeedback({ outcome: 'committed', verbClass: 'mutate', label: `Reverted ${a.id} to rev ${toRev}` });
               }}

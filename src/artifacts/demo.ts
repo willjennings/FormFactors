@@ -33,3 +33,18 @@ export const ARTIFACT_DEMO_WIDGET_ARGS = {
     { label: 'Weather', feed: 'weather' as const },
   ],
 };
+
+/**
+ * The scripted refine (spec §13): rewrites paragraph 1 of the doc artifact created by
+ * ARTIFACT_DEMO_ARGS, replayed through the REAL validateRefineCall + reducer. This is what
+ * makes the whole revise loop drivable with no API key — rev chip, history, and revert all
+ * become reachable offline.
+ */
+export const ARTIFACT_DEMO_REFINE_ARGS = {
+  artifactId: 'a1',
+  baseRev: 1,
+  op: 'replace-part' as const,
+  index: 1,
+  text: `Revenue reached ${MERIDIAN.revenue} at an ${MERIDIAN.margin} margin — ahead of plan, led by ${MERIDIAN.projects[0]}.`,
+  note: 'tightened the opening',
+};

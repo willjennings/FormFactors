@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import * as demo from './demo';
-import { ARTIFACT_DEMO_ARGS, ARTIFACT_DEMO_WIDGET_ARGS } from './demo';
+import { ARTIFACT_DEMO_ARGS, ARTIFACT_DEMO_WIDGET_ARGS, ARTIFACT_DEMO_REFINE_ARGS } from './demo';
 import { validateCombineCall } from './combineTools';
+import { validateRefineCall } from './refineTools';
 import { initialArtifactState, reduce } from './artifactStore';
 import { seedCorpus } from './seeds';
 
@@ -25,5 +26,19 @@ describe('?artifacts=1 demo replay against the boot corpus (spec §3/§10)', () 
   });
   it('the excel hand-injection crutch is gone — the boot corpus makes it unnecessary', () => {
     expect('ARTIFACT_DEMO_EXCEL_SOURCE' in demo).toBe(false);
+  });
+  it('the scripted refine validates and applies against the demo artifact', () => {
+    // Brief's literal fixture named only 'word', but ARTIFACT_DEMO_ARGS.sources is
+    // ['word', 'excel'] — resolveSources would reject 'excel' as unknown. Added it here
+    // (minimal stub, matching the shape used elsewhere) so the combine actually resolves.
+    const corpus = { word: { kind: 'word' as const, text: 'x' }, excel: { kind: 'excel' as const, cells: {}, currency: [], chart: false, saved: false } } as any;
+    const created = validateCombineCall(ARTIFACT_DEMO_ARGS, corpus, initialArtifactState(), 1000);
+    expect('event' in created).toBe(true);
+    let st = reduce(initialArtifactState(), (created as any).event);
+    const v = validateRefineCall(ARTIFACT_DEMO_REFINE_ARGS, st, 2000);
+    expect('event' in v).toBe(true);
+    st = reduce(st, (v as any).event);
+    expect(st.artifacts[0].rev).toBe(2);
+    expect(st.artifacts[0].history).toHaveLength(1);
   });
 });
