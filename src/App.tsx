@@ -1402,18 +1402,32 @@ export default function App() {
       }
       ack({ success: true, sent: confirmed });
     } else if (fc.name === 'combine') {
-      // Combinatory artifacts (spec §4): create-only — validation is all-or-error, capacity is
-      // checked by SIMULATING the real reducer (never partial, never a silent eviction).
+      // combine (spec §4): always CREATES a new artifact — never revises an existing one, that's
+      // refine_artifact's job (spec §7) — validation is all-or-error, capacity is checked by
+      // SIMULATING the real reducer (never partial, never a silent eviction).
       const v = validateCombineCall(fc.args, { ...corpusRef.current, [activeProgram]: mockDocRef.current }, artifactStateRef.current, Date.now());
       if ('error' in v) {
         // Cap rejections still dispatch the refused event: the reducer refuses it (nothing is
         // evicted, state otherwise unchanged) and increments rejectedAtCap, so the [ARTIFACTS]
-        // cap note is reachable from the live path as spec §7 promises.
-        if (v.atCap && v.event) artifactDispatch(v.event);
+        // cap note is reachable from the live path as spec §7 promises. Fold into the ref too
+        // (I1, final review): gemini.ts's tool-call loop is synchronous over every call in one
+        // message, so a combine-then-refine turn must see this rejectedAtCap bump on the SAME
+        // pass, not after React flushes.
+        if (v.atCap && v.event) {
+          artifactDispatch(v.event);
+          artifactStateRef.current = artifactReduce(artifactStateRef.current, v.event);
+        }
         addLog('tool', `Tool Call: combine REJECTED — ${v.error}`);
         ack({ success: false, error: v.error });
       } else {
         artifactDispatch(v.event);
+        // Fold into the ref immediately (I1, final review): a model calling combine then
+        // refine_artifact in the SAME message hits validateRefineCall synchronously before
+        // React can flush the dispatch above, so without this the refine sees a stale ref and
+        // rejects the brand-new artifact as unknown — enumerating a live-artifacts list that
+        // doesn't include the thing it just created. Matches the five other call sites that
+        // already fold their own dispatch into this ref.
+        artifactStateRef.current = artifactReduce(artifactStateRef.current, v.event);
         const createdArtifact = (v.event as Extract<ArtifactEvent, { type: 'artifact.create' }>).artifact;
         addLog('tool', `Tool Call: combine — "${createdArtifact.title}" ${v.provenance}`);
         emitFeedback({ outcome: 'committed', verbClass: 'create', label: `Created: ${createdArtifact.title}` });
