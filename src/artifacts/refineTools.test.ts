@@ -122,4 +122,27 @@ describe('describePatch', () => {
     expect(describePatch(art(), { op: 'retitle', title: 'Short' }))
       .toEqual({ partLabel: 'title', before: 'Brief', after: 'Short' });
   });
+
+  // C1: a label-only rename must render the LABEL changing, not the value fall back to the OLD
+  // label — the pre-fix bug rendered {before:"42", after:"Cost"} for a value->label mismatch.
+  const widget = (): Artifact => ({
+    id: 'w1', kind: 'widget', title: 'Stats', sources: ['excel'],
+    fields: [{ label: 'Cost', value: '42' }], createdAt: 1000, rev: 3,
+    meta: { rev: 3, at: 1000, owner: 'agent' }, history: [],
+  });
+
+  it('a label-only rename describes the LABEL changing, both sides true', () => {
+    expect(describePatch(widget(), { op: 'replace-part', index: 1, label: 'Total cost' }))
+      .toEqual({ partLabel: 'field 1', before: 'Cost', after: 'Total cost' });
+  });
+
+  it('a value-only change describes the VALUE changing, unaffected by the current label', () => {
+    expect(describePatch(widget(), { op: 'replace-part', index: 1, text: '99' }))
+      .toEqual({ partLabel: 'field 1', before: '42', after: '99' });
+  });
+
+  it('a patch changing both text and label renders a representation true of both', () => {
+    expect(describePatch(widget(), { op: 'replace-part', index: 1, text: '99', label: 'Total cost' }))
+      .toEqual({ partLabel: 'field 1', before: 'Cost: 42', after: 'Total cost: 99' });
+  });
 });

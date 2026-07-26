@@ -40,9 +40,23 @@ export function describePatch(a: Artifact, p: ArtifactPatch): { partLabel: strin
     return { partLabel: `${noun} ${at}`, before: '', after: (p.text ?? '').trim() };
   }
   const current = parts[p.index - 1];
-  const before = current?.text ?? '';
-  if (p.op === 'remove-part') return { partLabel: `${noun} ${p.index}`, before, after: '' };
-  return { partLabel: `${noun} ${p.index}`, before, after: (p.text ?? current?.label ?? '').trim() };
+  if (p.op === 'remove-part') return { partLabel: `${noun} ${p.index}`, before: current?.text ?? '', after: '' };
+  // replace-part: `text` changes the part's VALUE, `label` changes a widget field's LABEL — two
+  // different fields on the artifact. Reading "after" from `text` but falling back to the OLD
+  // `label` when only the label changes (the pre-fix bug, final review C1) describes a label
+  // rename as if nothing but the value moved, and shows the value's OLD content as "before" a
+  // label change too — both sides false. Render each field from itself.
+  const hasText = p.text !== undefined;
+  const hasLabel = p.label !== undefined;
+  if (hasText && hasLabel) {
+    // A patch touching both in one call has no single string true of only one side, so render
+    // the pair that IS true of the whole patch: "label: value" on both before and after.
+    const before = `${current?.label ?? ''}: ${current?.text ?? ''}`;
+    const after = `${p.label}: ${p.text}`.trim();
+    return { partLabel: `${noun} ${p.index}`, before, after };
+  }
+  if (hasLabel) return { partLabel: `${noun} ${p.index}`, before: current?.label ?? '', after: (p.label ?? '').trim() };
+  return { partLabel: `${noun} ${p.index}`, before: current?.text ?? '', after: (p.text ?? '').trim() };
 }
 
 export function validateRefineCall(
