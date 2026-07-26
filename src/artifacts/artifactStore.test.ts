@@ -32,4 +32,10 @@ describe('artifactStore', () => {
     st = reduce(st, mk('fits-now'));
     expect(st.artifacts.map((a) => a.title)).toContain('fits-now');
   });
+  it('creation starts at rev 1 with empty history', () => {
+    const st = reduce(initialArtifactState(), mk('One'));
+    expect(st.artifacts[0].rev).toBe(1);
+    expect(st.artifacts[0].history).toEqual([]);
+    expect(st.artifacts[0].meta).toEqual({ rev: 1, at: 1000, owner: 'agent' });
+  });
 });

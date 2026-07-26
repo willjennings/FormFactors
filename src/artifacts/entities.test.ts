@@ -5,11 +5,12 @@ import type { ArtifactState } from './types';
 
 const state: ArtifactState = {
   artifacts: [
-    { id: 'a1', kind: 'doc', title: 'Q3 Status Brief', sources: ['word', 'excel'], content: 'x', createdAt: 1 },
-    { id: 'a2', kind: 'widget', title: 'Status Board', sources: ['a1'], fields: [], createdAt: 2 },
+    { id: 'a1', kind: 'doc', title: 'Q3 Status Brief', sources: ['word', 'excel'], content: 'x', createdAt: 1, rev: 1, meta: { rev: 1, at: 1, owner: 'agent' }, history: [] },
+    { id: 'a2', kind: 'widget', title: 'Status Board', sources: ['a1'], fields: [], createdAt: 2, rev: 1, meta: { rev: 1, at: 2, owner: 'agent' }, history: [] },
   ],
   nextId: 3,
   rejectedAtCap: 0,
+  rejectedStale: 0,
 };
 
 describe('artifactEntities', () => {
@@ -34,7 +35,7 @@ describe('artifactEntities', () => {
   });
 
   it('empty artifact state yields no entities', () => {
-    expect(artifactEntities({ artifacts: [], nextId: 1, rejectedAtCap: 0 }, {})).toEqual([]);
+    expect(artifactEntities({ artifacts: [], nextId: 1, rejectedAtCap: 0, rejectedStale: 0 }, {})).toEqual([]);
   });
 });
 

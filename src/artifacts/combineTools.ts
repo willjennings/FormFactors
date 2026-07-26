@@ -92,7 +92,7 @@ export function validateCombineCall(
     return { error: `${dup.id} "${dup.title}" already exists with exactly these sources — it is on screen now. Do not create it again; vary the title or sources only if the user asked for something different.` };
   }
 
-  let artifact: Omit<Artifact, 'id'>;
+  let artifact: Omit<Artifact, 'id' | 'rev' | 'meta' | 'history'>;
   if (kind === 'widget') {
     const fields = validateWidgetFields(args?.fields);
     if ('error' in fields) return fields;
