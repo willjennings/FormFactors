@@ -110,11 +110,12 @@ import { saveAndLoad } from './artifacts/corpus';
 import { serializeCorpus, serializeArtifacts } from './artifacts/serialize';
 import { initialArtifactState, reduce as artifactReduce } from './artifacts/artifactStore';
 import { COMBINE_TOOL, READ_SOURCES_TOOL, validateCombineCall, sourceDetail, validSourceIds } from './artifacts/combineTools';
+import { REFINE_TOOL, validateRefineCall, describePatch } from './artifacts/refineTools';
 import { feedsSummary } from './artifacts/feeds';
 import { artifactEntities } from './artifacts/entities';
 import { ArtifactWindow } from './artifacts/ArtifactWindow';
 import { ARTIFACT_DEMO_ARGS, ARTIFACT_DEMO_WIDGET_ARGS } from './artifacts/demo';
-import type { ArtifactEvent } from './artifacts/types';
+import type { ArtifactEvent, ArtifactPatch } from './artifacts/types';
 import { MissionPicker } from './missions/MissionPicker';
 import { MISSIONS } from './missions/defs';
 import { startMission, advanceMission } from './missions/runStore';
@@ -365,7 +366,7 @@ export default function App() {
   // Tools offered to the voice model = the kept verbs (explain, share) + the action verbs this
   // program exposes. Read at connect time; program swap reconnects (see handleProgramChange).
   const voiceTools = React.useMemo(
-    () => [...VOICE_TOOLS, ...buildActionTools(activeProgram), ...ANNOTATE_TOOLS, ...(activeProgram === 'word' ? [REVISE_TOOL] : []), ACT_TOOL, ...GOAL_TOOLS, ...WB_TOOLS, BEAUTIFY_TOOL, ...TEACH_TOOLS, COMBINE_TOOL, READ_SOURCES_TOOL],
+    () => [...VOICE_TOOLS, ...buildActionTools(activeProgram), ...ANNOTATE_TOOLS, ...(activeProgram === 'word' ? [REVISE_TOOL] : []), ACT_TOOL, ...GOAL_TOOLS, ...WB_TOOLS, BEAUTIFY_TOOL, ...TEACH_TOOLS, COMBINE_TOOL, READ_SOURCES_TOOL, REFINE_TOOL],
     [activeProgram],
   );
   const CONFUSABLE_PAIRS = React.useMemo(() => {
@@ -630,8 +631,13 @@ export default function App() {
   // artifact entities (pointable windows) never drift out of sync with the program's own scene.
   const composeEntities = (built: SceneEntity[]): SceneEntity[] =>
     [...built, ...artifactEntities(artifactStateRef.current, artifactLayoutRef.current)];
-  // Undo stack: pre-commit document snapshots (mementos). applyAction is pure, so undo = restore.
-  const [undoStack, setUndoStack] = useState<{ doc: MockDoc; label: string }[]>([]);
+  // Undo stack: pre-commit mementos. Doc entries restore a snapshot (applyAction is pure);
+  // artifact entries revert to a revision — which the store records as a NEW revision, so
+  // undoing is itself undoable and nothing is ever erased.
+  const [undoStack, setUndoStack] = useState<(
+    | { kind: 'doc'; doc: MockDoc; label: string }
+    | { kind: 'artifact'; id: string; toRev: number; label: string }
+  )[]>([]);
   // G9: dedup duplicate tool calls. G7: a layout version stamped onto deixis hints so the
   // model has temporal context (bumped on structural layout changes, e.g. program swap).
   const callDeduperRef = useRef(new CallDeduper());
@@ -655,7 +661,7 @@ export default function App() {
     }
     return best;
   };
-  const [pendingAction, setPendingAction] = useState<{ verb: string; label: string; target: string; detail?: string; confirmed: boolean; note?: string; charStart?: number; charEnd?: number; newText?: string; oldText?: string } | null>(null);
+  const [pendingAction, setPendingAction] = useState<{ verb: string; label: string; target: string; detail?: string; confirmed: boolean; note?: string; charStart?: number; charEnd?: number; newText?: string; oldText?: string; artifactId?: string; baseRev?: number; patch?: ArtifactPatch } | null>(null);
   // Mirror in a ref so voice callbacks (stale closures) can read the live value.
   const pendingActionRef = useRef<typeof pendingAction>(null);
   useEffect(() => { pendingActionRef.current = pendingAction; }, [pendingAction]);
@@ -1421,6 +1427,40 @@ export default function App() {
         addLog('tool', `Tool Call: read_sources(${ids.join(', ')})`);
         ack({ success: true, note: 'Full content sent as a [CORPUS DETAIL] update.' });
       }
+    } else if (fc.name === 'refine_artifact') {
+      // Refine changes an artifact IN PLACE (spec §7). Unlike revise_text — which is hardcoded
+      // to always witness — refine routes through the dials: its friction is a measured
+      // variable across the register arms, and every revision is reversible either way.
+      const v = validateRefineCall(fc.args, artifactStateRef.current, Date.now());
+      if ('error' in v) {
+        addLog('tool', `Tool Call: refine_artifact REJECTED — ${v.error}`);
+        // ack() already calls callDeduper.forget() on success:false, so a corrected retry is
+        // re-processed rather than acked as a fake deduped success (the G9 wrapper, App.tsx:1325).
+        ack({ success: false, error: v.error });
+      } else {
+        const ev = v.event as Extract<ArtifactEvent, { type: 'artifact.revise' }>;
+        const target = artifactStateRef.current.artifacts.find((a) => a.id === ev.id)!;
+        const { partLabel, before, after } = describePatch(target, ev.patch);
+        const decision = decideCommit('mutate', dialsRef.current.autonomy, false);
+        telemetry.action('refine_artifact', 'mutate', decision, lastInputModalityRef.current);
+        if (decision === 'witness') {
+          addLog('tool', `Tool Call: refine_artifact(witness) — ${ev.id} ${partLabel}: "${before}" → "${after}"`);
+          setPendingAction({ verb: 'refine_artifact', label: 'Refine', target: `${ev.id} ${partLabel}`,
+            detail: `"${before}" → "${after}"`, confirmed: false,
+            artifactId: ev.id, baseRev: ev.baseRev, patch: ev.patch, oldText: before, newText: after });
+          emitFeedback({ outcome: 'needs-confirm', verbClass: 'mutate', label: `Confirm refine: ${ev.id} ${partLabel}` });
+          ack({ success: true, witnessed: true });
+        } else {
+          artifactDispatch(ev);
+          const nextState = artifactReduce(artifactStateRef.current, ev);
+          artifactStateRef.current = nextState;
+          setUndoStack((s) => [...s, { kind: 'artifact' as const, id: ev.id, toRev: ev.baseRev, label: `Refine ${ev.id}` }]);
+          addLog('tool', `Tool Call: refine_artifact — ${ev.id} ${partLabel} (rev ${ev.baseRev} → ${ev.baseRev + 1})`);
+          emitFeedback({ outcome: 'committed', verbClass: 'mutate', label: `Refined ${ev.id} ${partLabel}` });
+          recordMissionCommit('refine_artifact', 'mutate');
+          ack({ success: true, rev: ev.baseRev + 1, note: `${ev.id} is now at rev ${ev.baseRev + 1}.` });
+        }
+      }
     } else if (ACTION_VERB_NAMES.includes(fc.name)) {
       // ACTION VERBS (save/edit/format/insert/photo). The Policy layer (DIAL A: autonomy ×
       // verb class) decides commit-vs-witness; the Feedback layer (DIAL B) signals the
@@ -1474,7 +1514,7 @@ export default function App() {
         const nextDoc = applyAction(prevDoc, fc.name, args);
         mockDocRef.current = nextDoc;
         setMockDoc(nextDoc);
-        setUndoStack(s => [...s, { doc: prevDoc, label: phrase }]); // memento for undo
+        setUndoStack(s => [...s, { kind: 'doc' as const, doc: prevDoc, label: phrase }]); // memento for undo
         goalDispatch({ type: 'goal.actionCommitted', verb: fc.name, target: args.target });
         setPendingAction({ verb: fc.name, label, target, detail, confirmed: true });
         emitFeedback({ outcome: 'committed', verbClass, label: phrase });
@@ -1683,7 +1723,7 @@ export default function App() {
     setMockDoc(nextDoc);
     goalDispatch({ type: 'goal.actionCommitted', verb, target: args.target });
     const d = describeAction(verb, args);
-    setUndoStack(s => [...s, { doc: prevDoc, label: `${d.label} ${d.target}` }]);
+    setUndoStack(s => [...s, { kind: 'doc' as const, doc: prevDoc, label: `${d.label} ${d.target}` }]);
     lastInputModalityRef.current = 'direct';
     telemetry.action(verb, classOf(verb), 'commit', 'direct');
     recordMissionCommit(verb, classOf(verb));
@@ -1695,6 +1735,33 @@ export default function App() {
   const confirmPendingAction = () => {
     const p = pendingAction;
     if (!p || p.confirmed) return;
+    if (p.verb === 'refine_artifact' && p.artifactId && p.patch && p.baseRev !== undefined) {
+      const live = artifactStateRef.current.artifacts.find((a) => a.id === p.artifactId);
+      const currentPart = live ? describePatch(live, p.patch).before : null;
+      // DOUBLE STALENESS GUARD (spec §7.4). Layer 2 of 3. Both conditions matter: the rev
+      // catches another revision landing, the text catches the user hand-editing the very
+      // paragraph under the witnessed card. Mirrors the revise stale-span guard below, which
+      // came out of the 2026-07-16 smoke where confirms spliced ".ary.ary.y." into the doc.
+      if (!live || live.rev !== p.baseRev || currentPart !== p.oldText) {
+        setPendingAction(null);
+        addLog('info', `Refine DROPPED — ${p.artifactId} changed since it was witnessed.`);
+        emitFeedback({ outcome: 'error', label: 'Refine dropped — the artifact changed since it was witnessed' });
+        const hint = serializeArtifacts(artifactStateRef.current);
+        providerRef.current?.sendTextHint(`[SYSTEM: the pending refine was DROPPED — ${p.artifactId} changed since you addressed it, so applying it would have overwritten someone else's change. ${hint ?? ''} Re-read the artifact and call refine_artifact again with the current baseRev. DO NOT acknowledge this message.]`);
+        return;
+      }
+      const ev: ArtifactEvent = { type: 'artifact.revise', id: p.artifactId, baseRev: p.baseRev,
+        patch: p.patch, owner: 'agent', at: Date.now() };
+      artifactDispatch(ev);
+      artifactStateRef.current = artifactReduce(artifactStateRef.current, ev);
+      setUndoStack((s) => [...s, { kind: 'artifact' as const, id: p.artifactId!, toRev: p.baseRev!, label: `Refine ${p.artifactId}` }]);
+      telemetry.action('refine_artifact', 'mutate', 'commit', 'direct');
+      recordMissionCommit('refine_artifact', 'mutate');
+      emitFeedback({ outcome: 'committed', verbClass: 'mutate', label: `Refined ${p.artifactId}` });
+      setPendingAction({ ...p, confirmed: true });
+      providerRef.current?.sendTextHint(`[SYSTEM: the user confirmed via button — ${p.artifactId} is now at rev ${p.baseRev + 1}. Do not re-call the tool; do not acknowledge.]`);
+      return;
+    }
     const prevDoc = mockDocRef.current;
     // STALE-SPAN GUARD (human smoke 2026-07-16: repeated voice revises spliced garbage —
     // ".ary.ary.y." — because a confirm applied offsets computed against an OLDER document).
@@ -1711,7 +1778,7 @@ export default function App() {
     const nextDoc = applyAction(prevDoc, p.verb, { target: p.target, detail: p.detail, charStart: p.charStart, charEnd: p.charEnd, newText: p.newText });
     mockDocRef.current = nextDoc;
     setMockDoc(nextDoc);
-    setUndoStack(s => [...s, { doc: prevDoc, label: `${p.label} ${p.target}` }]);
+    setUndoStack(s => [...s, { kind: 'doc' as const, doc: prevDoc, label: `${p.label} ${p.target}` }]);
     goalDispatch({ type: 'goal.actionCommitted', verb: p.verb, target: p.target });
     telemetry.action(p.verb, classOf(p.verb), 'commit', 'direct');
     recordMissionCommit(p.verb, classOf(p.verb));
@@ -3367,6 +3434,7 @@ export default function App() {
       return;
     }
     const last = undoStack[undoStack.length - 1];
+    if (last.kind === 'artifact') return; // Task 7 wires the revert
     setMockDoc(last.doc);
     mockDocRef.current = last.doc;
     setUndoStack(undoStack.slice(0, -1));

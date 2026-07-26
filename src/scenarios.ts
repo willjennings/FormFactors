@@ -502,6 +502,7 @@ export const VERB_CLASS: Record<string, VerbClass> = {
   photo_edit: 'transform',
   save_file: 'mutate',
   revise_text: 'mutate',
+  refine_artifact: 'mutate',
   explain: 'query',
   share: 'share',
   act_on: 'share',
