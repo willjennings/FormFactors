@@ -1127,7 +1127,34 @@ and add `REFINE_TOOL` to the tool list at line 368, after `READ_SOURCES_TOOL`:
     () => [...VOICE_TOOLS, ...buildActionTools(activeProgram), ...ANNOTATE_TOOLS, ...(activeProgram === 'word' ? [REVISE_TOOL] : []), ACT_TOOL, ...GOAL_TOOLS, ...WB_TOOLS, BEAUTIFY_TOOL, ...TEACH_TOOLS, COMBINE_TOOL, READ_SOURCES_TOOL, REFINE_TOOL],
 ```
 
-- [ ] **Step 3: Widen the pendingAction type**
+- [ ] **Step 3a: Widen the undoStack type**
+
+This task pushes artifact entries onto the stack, so the type widens here. Task 7 adds the ⌘Z
+behaviour that consumes them. At `src/App.tsx:634`:
+
+```tsx
+  // Undo stack: pre-commit mementos. Doc entries restore a snapshot (applyAction is pure);
+  // artifact entries revert to a revision — which the store records as a NEW revision, so
+  // undoing is itself undoable and nothing is ever erased.
+  const [undoStack, setUndoStack] = useState<(
+    | { kind: 'doc'; doc: MockDoc; label: string }
+    | { kind: 'artifact'; id: string; toRev: number; label: string }
+  )[]>([]);
+```
+
+Then tag the two existing doc pushes — `App.tsx:1477` and the one inside `confirmPendingAction`
+(`:1714`) — changing `{ doc: prevDoc, label: … }` to `{ kind: 'doc' as const, doc: prevDoc, label: … }`.
+Run `npx tsc --noEmit` and tag any other push site it names the same way.
+
+`handleUndo` still reads `last.doc` unconditionally and will now fail to typecheck. Add this
+narrowing guard at the top of the pop branch, right after `const last = undoStack[undoStack.length - 1];`,
+so this task stays green; Task 7 replaces it with the real revert behaviour:
+
+```tsx
+    if (last.kind === 'artifact') return; // Task 7 wires the revert
+```
+
+- [ ] **Step 3b: Widen the pendingAction type**
 
 At `src/App.tsx:658`, add the artifact fields:
 
@@ -1215,7 +1242,7 @@ In `src/App.tsx`, inside `confirmPendingAction` at line 1695, insert immediately
 - [ ] **Step 6: Typecheck**
 
 Run: `npx tsc --noEmit`
-Expected: PASS. The `setUndoStack` calls will fail until Task 7 widens the stack type — if so, **do Task 7's Step 1 now** and return here. (They are split because Task 7 carries the ⌘Z behaviour and its own test.)
+Expected: PASS.
 
 - [ ] **Step 7: Run the full suite and build**
 
@@ -1234,36 +1261,19 @@ git commit -m "feat(artifacts): refine_artifact live — dial-gated, double stal
 ### Task 7: Tagged undo stack
 
 **Files:**
-- Modify: `src/App.tsx:634` (state type), `:3355-3372` (`handleUndo`), `:3576` + `:3804` (undo count reads)
+- Modify: `src/App.tsx:3355-3372` (`handleUndo`)
 
 **Interfaces:**
-- Consumes: `artifactDispatch`, `artifact.revertTo` (Task 2)
-- Produces: `undoStack` entries typed `{ kind: 'doc'; doc: MockDoc; label: string } | { kind: 'artifact'; id: string; toRev: number; label: string }`
+- Consumes: `artifactDispatch`, `artifact.revertTo` (Task 2); the widened `undoStack` type (Task 6)
+- Produces: ⌘Z reverting an artifact revision
 
-- [ ] **Step 1: Widen the stack type**
+The stack type was already widened in Task 6, which pushes artifact entries. This task replaces
+the placeholder guard `if (last.kind === 'artifact') return;` with the real behaviour.
 
-At `src/App.tsx:634`:
+- [ ] **Step 1: Branch in handleUndo**
 
-```tsx
-  // Undo stack: pre-commit mementos. Doc entries restore a snapshot (applyAction is pure);
-  // artifact entries revert to a revision — which the store records as a NEW revision, so
-  // undoing is itself undoable and nothing is ever erased.
-  const [undoStack, setUndoStack] = useState<(
-    | { kind: 'doc'; doc: MockDoc; label: string }
-    | { kind: 'artifact'; id: string; toRev: number; label: string }
-  )[]>([]);
-```
-
-- [ ] **Step 2: Tag the existing doc pushes**
-
-There are two: `App.tsx:1477` and inside `confirmPendingAction` (`:1714`). Change both from
-`{ doc: prevDoc, label: … }` to `{ kind: 'doc' as const, doc: prevDoc, label: … }`.
-
-Run `npx tsc --noEmit` and fix any other push sites it names the same way.
-
-- [ ] **Step 3: Branch in handleUndo**
-
-In `handleUndo` (`App.tsx:3355`), after `const last = undoStack[undoStack.length - 1];`, insert:
+In `handleUndo` (`App.tsx:3355`), replace the placeholder line
+`if (last.kind === 'artifact') return; // Task 7 wires the revert` with:
 
 ```tsx
     if (last.kind === 'artifact') {
@@ -1277,14 +1287,14 @@ In `handleUndo` (`App.tsx:3355`), after `const last = undoStack[undoStack.length
     }
 ```
 
-The remaining body reads `last.doc`, which now typechecks because the artifact case returned.
+The remaining body reads `last.doc`, which still typechecks because the artifact case returns.
 
-- [ ] **Step 4: Typecheck and run the full suite**
+- [ ] **Step 2: Typecheck and run the full suite**
 
 Run: `npx tsc --noEmit && npx vitest run && npx vite build`
 Expected: PASS, **630 tests**.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
 git add src/App.tsx
