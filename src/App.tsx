@@ -3463,9 +3463,10 @@ export default function App() {
   // Undo the most recent committed document mutation (restore the memento).
   const handleUndo = () => {
     if (undoStack.length === 0) {
-      // Combinatory artifacts have no doc-memento (create-only, no agent close path) — the
-      // simplest honest ⌘Z form: with nothing else to undo, it closes the newest artifact.
-      // This is a USER action (the × path), never something a tool call can trigger.
+      // Combinatory artifacts have no doc-memento — refine/revert/edit are all covered by their
+      // own 'artifact' undo-stack entries above; this branch only fires with NOTHING on the
+      // stack. The simplest honest ⌘Z form then: close the newest artifact. Closing itself is
+      // still a USER action (the × path) — no tool call can trigger it.
       const artifacts = artifactStateRef.current.artifacts;
       if (artifacts.length === 0) return;
       const newest = artifacts[artifacts.length - 1];
@@ -3476,10 +3477,19 @@ export default function App() {
     }
     const last = undoStack[undoStack.length - 1];
     if (last.kind === 'artifact') {
+      // I2 (final review): pop the entry regardless — a stale entry (its artifact closed, or the
+      // target rev pruned) is never going to become valid, so leaving it on top would jam every
+      // future ⌘Z on the same no-op. But only CLAIM the undo (log + feedback) if it actually
+      // changed something. `reduce` returns the exact same `state` reference for both a missing
+      // artifact and a missing target rev (artifactStore.ts, both early-return `state`), so a
+      // reference comparison is an exact, non-heuristic "did this apply" check.
+      const before = artifactStateRef.current;
       const ev: ArtifactEvent = { type: 'artifact.revertTo', id: last.id, toRev: last.toRev, at: Date.now() };
-      artifactDispatch(ev);
-      artifactStateRef.current = artifactReduce(artifactStateRef.current, ev);
+      const after = artifactReduce(before, ev);
       setUndoStack(undoStack.slice(0, -1));
+      if (after === before) return; // orphaned entry: nothing to undo, drop it silently
+      artifactDispatch(ev);
+      artifactStateRef.current = after;
       addLog('info', `Undo — ${last.label} (reverted to rev ${last.toRev})`);
       emitFeedback({ outcome: 'committed', verbClass: 'mutate', label: `Undid ${last.label}` });
       return;
