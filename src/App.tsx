@@ -3591,6 +3591,18 @@ export default function App() {
                 artifactStateRef.current = artifactReduce(artifactStateRef.current, ev);
                 addLog('info', `Reverted ${a.id} to rev ${toRev}`);
                 emitFeedback({ outcome: 'committed', verbClass: 'mutate', label: `Reverted ${a.id} to rev ${toRev}` });
+              }}
+              onEditPart={(patch, baseRev) => {
+                const ev: ArtifactEvent = { type: 'artifact.revise', id: a.id, baseRev, patch,
+                  owner: 'user', at: Date.now(), note: 'edited by hand' };
+                artifactDispatch(ev);
+                artifactStateRef.current = artifactReduce(artifactStateRef.current, ev);
+                setUndoStack((s) => [...s, { kind: 'artifact' as const, id: a.id, toRev: baseRev, label: `Edit ${a.id}` }]);
+                addLog('info', `You edited ${a.id} (rev ${baseRev} → ${baseRev + 1})`);
+                // The model must learn the material changed under it — otherwise its next
+                // baseRev is stale and it will be refused without knowing why.
+                const hint = serializeArtifacts(artifactStateRef.current);
+                if (hint) providerRef.current?.sendTextHint(hint);
               }} />
           ))}
           {whiteboardMode === 'board' && pendingBeautify && (

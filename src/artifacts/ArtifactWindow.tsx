@@ -1,6 +1,6 @@
 import React from 'react';
 import { X } from 'lucide-react';
-import type { Artifact } from './types';
+import type { Artifact, ArtifactPatch } from './types';
 import { FEEDS } from './feeds';
 import { splitParagraphs } from './parts';
 
@@ -19,12 +19,28 @@ function fmtStamp(ts: number): string {
 // Create-only: the agent has no tool that maps to closing one — the × below is the ONLY
 // close path (spec §7). Cascades by index so several artifacts don't stack exactly on top
 // of each other or cover the program window.
-export function ArtifactWindow({ artifact, index, onClose, onRevert }: {
-  artifact: Artifact; index: number; onClose: () => void; onRevert: (toRev: number) => void;
+export function ArtifactWindow({ artifact, index, onClose, onRevert, onEditPart }: {
+  artifact: Artifact; index: number; onClose: () => void;
+  onRevert: (toRev: number) => void;
+  onEditPart: (patch: ArtifactPatch, baseRev: number) => void;
 }) {
   const fields = artifact.fields ?? [];
   const [statuses, setStatuses] = React.useState<Record<number, FieldStatus>>({});
   const [historyOpen, setHistoryOpen] = React.useState(false);
+
+  // Direct editing: the user changing their own material needs no witness — the witness gate
+  // exists for the agent's INTERPRETATION being wrong. A commit mints a revision owned by the
+  // user. `editing` holds the 1-based part index.
+  const [editing, setEditing] = React.useState<number | null>(null);
+  const [draft, setDraft] = React.useState('');
+
+  const startEdit = (index1: number, text: string) => { setEditing(index1); setDraft(text); };
+  const commitEdit = (index1: number, original: string) => {
+    const text = draft.trim();
+    setEditing(null);
+    if (!text || text === original) return;          // no-op edits mint no revision
+    onEditPart({ op: 'replace-part', index: index1, text }, artifact.rev);
+  };
 
   // Per-window ticker (spec §8): one interval per window, cadence = the fastest bound feed's
   // refreshMs (floored at 1s), cleaned up on unmount. The interval is the heartbeat, not a
@@ -140,7 +156,31 @@ export function ArtifactWindow({ artifact, index, onClose, onRevert }: {
       )}
       <div data-entity-id={`artifact-${artifact.id}`} className="flex-1 min-h-0 overflow-y-auto px-3 py-2 text-[12px] text-[var(--text-primary)] leading-relaxed">
         {artifact.kind === 'doc' && splitParagraphs(artifact.content).map((p, i) => (
-          <p key={i} data-entity-id={`artifact-${artifact.id}-para-${i + 1}`} className="mb-2 last:mb-0">{p}</p>
+          editing === i + 1 ? (
+            // A textarea is an editable target, so isEditableTarget (src/shell/quickFire.ts:25)
+            // already stops the backtick register chord and quick-fire digits from firing here.
+            <textarea
+              key={i}
+              autoFocus
+              aria-label={`Edit paragraph ${i + 1}`}
+              className="w-full mb-2 min-h-6 rounded border border-[var(--accent-color)] bg-transparent p-1 text-[12px] leading-relaxed text-[var(--text-primary)]"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onBlur={() => commitEdit(i + 1, p)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') { e.stopPropagation(); setEditing(null); }
+                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commitEdit(i + 1, p); }
+              }}
+            />
+          ) : (
+            <p
+              key={i}
+              data-entity-id={`artifact-${artifact.id}-para-${i + 1}`}
+              className="mb-2 last:mb-0 cursor-text hover:bg-[var(--card-border)]/20 rounded"
+              onDoubleClick={() => startEdit(i + 1, p)}
+              title="Double-click to edit"
+            >{p}</p>
+          )
         ))}
         {artifact.kind === 'widget' && (
           <div className="flex flex-col gap-2">
@@ -166,7 +206,26 @@ export function ArtifactWindow({ artifact, index, onClose, onRevert }: {
                           {descriptor.provenance === 'live' ? 'LIVE' : 'SIMULATED'}
                         </span>
                       )}
-                      <span className="text-[var(--text-primary)]">{displayValue}</span>
+                      {editing === i + 1 && !descriptor ? (
+                        <input
+                          autoFocus
+                          aria-label={`Edit ${f.label}`}
+                          className="min-h-6 w-24 rounded border border-[var(--accent-color)] bg-transparent px-1 text-[11px] text-[var(--text-primary)]"
+                          value={draft}
+                          onChange={(e) => setDraft(e.target.value)}
+                          onBlur={() => commitEdit(i + 1, f.value ?? '')}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Escape') { e.stopPropagation(); setEditing(null); }
+                            if (e.key === 'Enter') { e.preventDefault(); commitEdit(i + 1, f.value ?? ''); }
+                          }}
+                        />
+                      ) : (
+                        <span
+                          className={descriptor ? 'text-[var(--text-primary)]' : 'text-[var(--text-primary)] cursor-text hover:bg-[var(--card-border)]/20 rounded px-0.5'}
+                          onDoubleClick={descriptor ? undefined : () => startEdit(i + 1, f.value ?? '')}
+                          title={descriptor ? 'Live feed value — not editable' : 'Double-click to edit'}
+                        >{displayValue}</span>
+                      )}
                     </span>
                   </div>
                   {descriptor && status?.updatedAt !== undefined && (
