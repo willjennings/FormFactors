@@ -31,17 +31,36 @@ export function ArtifactWindow({ artifact, index, onClose, onRevert }: {
   // per-field read cadence — each field is only actually re-read once ITS OWN refreshMs has
   // elapsed (lastAttemptRef), so e.g. a 10-minute weather feed isn't hit every second just
   // because it shares a window with a 1s clock.
-  // Fields are NO LONGER create-only (2026-07-26 revise core): refine_artifact and direct user
-  // edits can add or remove a feed-bound field, so the ticker must re-establish on every
-  // revision — keying on id alone would leave a new feed unread or a removed one still polling.
+  //
+  // Keyed on `feedSignature` (2026-07-26 revise core, round 1 fix) — the ordered `index:feedId`
+  // pairs of currently bound fields, joined to a string — NOT on `artifact.rev`. `statuses` is
+  // keyed by field ARRAY INDEX, so re-running this effect on every revision (keying on rev) made
+  // two things wrong: (1) a revision that reindexes a bound feed without changing the set — e.g.
+  // remove-part on a field before it — would still be "the same rev-triggered reset", but a
+  // revision that DIDN'T touch feeds at all (a retitle, an edit to an unrelated field) also
+  // forced `lastAttemptRef` to clear and `tick()` to fire immediately, refetching every bound
+  // feed — including a real network call like weather (refreshMs: 600000) — far more often than
+  // its own cadence promises. Keying on the bound-feed signature instead means unrelated
+  // revisions leave it unchanged (no reset, no refetch, cadence honored), while ANY change to
+  // the set of (index, feed) pairs — a feed field added, removed, or shifted to a new index by a
+  // neighboring field's removal — changes the signature and re-runs the effect, which resets
+  // BOTH `lastAttemptRef` and `statuses` so a reindexed slot starts from the honest "…"
+  // placeholder instead of rendering a stale value from whatever used to sit at that index under
+  // a LIVE badge that isn't really that field's. Do not "simplify" this back to `artifact.rev` —
+  // that reintroduces both the wrong-feed-stale-value bug and the cadence-defeating refetch.
   const lastAttemptRef = React.useRef<Record<number, number>>({});
+  const feedSignature = fields
+    .map((f, i) => (f.feed ? `${i}:${f.feed}` : null))
+    .filter((s): s is string => s !== null)
+    .join('|');
   React.useEffect(() => {
     if (artifact.kind !== 'widget') return;
     const bound = fields
       .map((f, i) => ({ i, feed: f.feed ? FEEDS[f.feed] : undefined }))
       .filter((b): b is { i: number; feed: typeof FEEDS[keyof typeof FEEDS] } => !!b.feed);
-    if (!bound.length) return;
     lastAttemptRef.current = {};
+    setStatuses({});
+    if (!bound.length) return;
 
     let cancelled = false;
     const tick = () => {
@@ -65,7 +84,7 @@ export function ArtifactWindow({ artifact, index, onClose, onRevert }: {
     const id = setInterval(tick, intervalMs);
     return () => { cancelled = true; clearInterval(id); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [artifact.kind, artifact.id, artifact.rev]);
+  }, [artifact.kind, artifact.id, feedSignature]);
 
   // No root stopPropagation (unlike WhiteboardPanel): pointer events must reach <main> so the
   // plane's data-entity-id carve-out can make the CONTENT region pointable. data-shell still
