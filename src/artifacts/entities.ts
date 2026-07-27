@@ -5,6 +5,7 @@
 import { asId, normText, type SceneEntity } from '../entities/registry';
 import type { ArtifactState } from './types';
 import { artifactParts } from './parts';
+import { PROGRAM_IDS } from '../scenarios';
 
 type Layout = Record<string, [number, number, number, number]>;
 
@@ -72,13 +73,8 @@ export function artifactEntities(state: ArtifactState, layout: Layout): SceneEnt
 }
 
 // The SINGLE answer to "can this be combined?" (spec §5.1). Every combinability decision and
-// every message naming valid sources derives from this — never a hardcoded list.
-//
-// There is no program-WINDOW entity in this codebase (buildEntities mints one entity per
-// control plus sub-entities), so any element of the mounted program stands for its document:
-// the combinable unit is the doc, and shift-clicking the Save button means "this Word doc".
-const PROGRAM_IDS = ['word', 'excel', 'powerpoint', 'photo'];
-
+// every message naming valid sources derives from this — never a hardcoded list. PROGRAM_IDS
+// is imported from scenarios.ts, the single source of truth for the valid program list.
 export function entityToSourceId(entity: { id: string; sub?: boolean }): string | null {
   const id = String(entity.id);
   // Artifact PARTS (paragraphs, fields) are not sources; the artifact is. `artifact-a1` has

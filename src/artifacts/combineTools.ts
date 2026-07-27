@@ -4,7 +4,7 @@
 // through the real reducer (spec §7).
 import type { VoiceTool } from '../voice/types';
 import type { MockDoc, ProgramId } from '../scenarios';
-import { serializeMockDoc } from '../scenarios';
+import { serializeMockDoc, PROGRAM_IDS } from '../scenarios';
 import type { Artifact, ArtifactState, ArtifactEvent, FeedId, WidgetField } from './types';
 import { reduce as artifactReduce, MAX_ARTIFACTS } from './artifactStore';
 import { FEEDS } from './feeds';
@@ -31,8 +31,6 @@ export const READ_SOURCES_TOOL: VoiceTool = {
   parameters: { type: 'object', properties: {
     sources: { type: 'array', items: { type: 'string' } } }, required: ['sources'] },
 };
-
-const PROGRAM_IDS: ProgramId[] = ['word', 'excel', 'powerpoint', 'photo'];
 
 /**
  * The ids that would actually resolve right now: corpus-present programs + live artifact ids.

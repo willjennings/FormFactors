@@ -22,6 +22,11 @@ import type { VoiceTool } from './voice/types';
 
 export type ProgramId = 'word' | 'excel' | 'powerpoint' | 'photo';
 
+/** The SINGLE list of valid program identifiers. Used by both entityToSourceId and validSourceIds
+ *  to ensure combinability decisions stay in sync — every tool that names valid sources derives
+ *  from this (spec §5.1). */
+export const PROGRAM_IDS = ['word', 'excel', 'powerpoint', 'photo'] as const satisfies readonly ProgramId[];
+
 // ── Axis 1: element category (highlight hue) ───────────────────────────────────────
 export type ElementCategory = 'program' | 'os' | 'ui' | 'content';
 
