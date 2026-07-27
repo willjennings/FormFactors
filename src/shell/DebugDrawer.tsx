@@ -34,13 +34,14 @@ type DrawerProps = {
   whiteboardMode: 'board' | 'overlay'; onWhiteboardMode: (v: 'board' | 'overlay') => void;
   worldState: string;
   undoCount: number; onUndo: () => void;
-  onEndSession: () => void; onReset: () => void; isLive: boolean;
+  onEndSession: () => void; onReset: () => void; onNewDesk: () => void; isLive: boolean;
   logs: { time: string; type: string; message: string }[];
   isEmbedded: boolean;
 };
 
 export function DebugDrawer(props: DrawerProps) {
   const [tick, setTick] = useState(0);
+  const [confirmNewDesk, setConfirmNewDesk] = useState(false);
 
   // Runs only while the drawer is mounted: Radix Dialog unmounts Portal content on close, so the interval's cleanup fires then (no open-guard needed).
   useEffect(() => {
@@ -215,6 +216,40 @@ export function DebugDrawer(props: DrawerProps) {
             onClick={props.onReset}
           >
             <RotateCcw size={18} className="mr-2" /> Reset
+          </Button>
+        </div>
+      )}
+
+      {/* 10b. New desk (user-only eraser of persistence) */}
+      {!confirmNewDesk ? (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="hit-24 w-full"
+          onClick={() => setConfirmNewDesk(true)}
+        >
+          New desk…
+        </Button>
+      ) : (
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] text-[var(--text-secondary)]">Erase all saved material?</span>
+          <Button
+            variant="primary"
+            size="sm"
+            className="hit-24"
+            aria-label="Confirm: erase the desk"
+            onClick={props.onNewDesk}
+          >
+            Erase
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="hit-24"
+            aria-label="Cancel: keep the desk"
+            onClick={() => setConfirmNewDesk(false)}
+          >
+            Keep
           </Button>
         </div>
       )}

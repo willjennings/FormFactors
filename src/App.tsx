@@ -829,7 +829,7 @@ export default function App() {
   } | null>(null);
   const defaultWindowRect = (): WindowRect => clampWindow({ x: 48, y: 48, w: 680, h: 620 },
     { width: mainContainerRef.current?.clientWidth ?? 1200, height: mainContainerRef.current?.clientHeight ?? 800 });
-  const [windowRect, setWindowRect] = useState<WindowRect>(() => clampWindow(loadWindowRect(DEFAULT_PROGRAM) ?? { x: 48, y: 48, w: 680, h: 620 }, { width: window.innerWidth, height: window.innerHeight }));
+  const [windowRect, setWindowRect] = useState<WindowRect>(() => clampWindow(loadWindowRect(bootStates?.workspace?.activeProgram ?? DEFAULT_PROGRAM) ?? { x: 48, y: 48, w: 680, h: 620 }, { width: window.innerWidth, height: window.innerHeight }));
   const [windowOpen, setWindowOpen] = useState(true);
   useEffect(() => {
     const plane = { width: mainContainerRef.current?.clientWidth ?? 1200, height: mainContainerRef.current?.clientHeight ?? 800 };
@@ -3861,6 +3861,16 @@ export default function App() {
     addLog('info', 'Desktop reset to original state.');
   };
 
+  // NEW DESK (spec §8): the ONLY eraser of persistence. User-only, confirm-gated — the
+  // artifact.close discipline applied to the whole desk. Clears storage then reloads: a reload
+  // is the honest restart (every store, ref, gate and session rebuilds from seed — no risk of
+  // a half-reset in-memory desk disagreeing with the now-empty journal).
+  const handleNewDesk = () => {
+    clearJournal();
+    resetBootMemo();
+    window.location.reload();
+  };
+
   if (!isWideEnough) {
     return (
       <div className="fixed inset-0 z-[9999] flex flex-col items-center justify-center bg-[var(--bg-color)] bg-dots text-[var(--text-primary)] p-6 text-center">
@@ -4385,6 +4395,7 @@ export default function App() {
             onUndo={handleUndo}
             onEndSession={() => providerRef.current?.close()}
             onReset={handleReset}
+            onNewDesk={handleNewDesk}
             isLive={isLive}
             logs={logs}
             isEmbedded={isEmbedded}
