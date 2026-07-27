@@ -2,7 +2,7 @@ import React from 'react';
 import { X } from 'lucide-react';
 import type { Artifact, ArtifactPatch } from './types';
 import { FEEDS } from './feeds';
-import { splitParagraphs } from './parts';
+import { artifactParts, splitParagraphs } from './parts';
 
 // Status of one widget field bound to a feed: `failed` never clears a previously-fetched
 // value/stamp — the renderer shows "feed unavailable" plus the stale value labeled as stale
@@ -48,7 +48,15 @@ export function ArtifactWindow({ artifact, index, onClose, onRevert, onEditPart 
   // is rendered OUTSIDE the per-part .map below (round 1 review finding) so a `remove-part` that
   // deletes the very paragraph being edited can't unmount the note along with it — it lives at
   // window level, keyed off this component's own state, never off one array slot.
-  const conflicted = editing !== null && editing.baseRev !== artifact.rev;
+  // Conflict = the material moved under the open editor. Two independent ways that happens:
+  // the revision advanced, OR the slot the editor is attached to no longer holds the text it
+  // was opened on. The second matters because part indices DRIFT: removing an earlier
+  // paragraph shifts every later one down, so index 2 can still be in range while now
+  // referring to a different paragraph. Without the occupant check, a retry would silently
+  // replace-part over a paragraph the user never opened.
+  const occupantText = editing ? artifactParts(artifact)[editing.index1 - 1]?.text : undefined;
+  const conflicted = editing !== null
+    && (editing.baseRev !== artifact.rev || occupantText !== editing.original);
 
   const startEdit = (index1: number, text: string) => {
     setEditing({ index1, original: text, baseRev: artifact.rev });
@@ -58,13 +66,15 @@ export function ArtifactWindow({ artifact, index, onClose, onRevert, onEditPart 
     if (!editing) return;
     const text = draft.trim();
     if (!text || text === editing.original) { setEditing(null); return; } // no-op edits mint no revision
-    if (editing.baseRev !== artifact.rev) {
+    if (conflicted) {
       // Stale snapshot: the artifact changed underneath while the editor was open. Do NOT
       // apply, do NOT touch the draft, keep the editor open — the conflict banner is already
-      // showing via `conflicted`. Re-snapshot the rev so a second, deliberate commit (the user
-      // having now SEEN the conflict and chosen to proceed) goes through the normal path below
-      // against whatever is current at that moment — that is the user witnessing the overwrite.
-      setEditing((e) => (e ? { ...e, baseRev: artifact.rev } : e));
+      // showing via `conflicted`. Re-snapshot BOTH the rev and the occupant text so a second,
+      // deliberate commit (the user having now SEEN the conflict and chosen to proceed) goes
+      // through the normal path below against whatever is current at that moment — that is the
+      // user witnessing the overwrite. Re-snapshotting only the rev would leave a drifted slot
+      // permanently conflicted, since its occupant would never match the original again.
+      setEditing((e) => (e ? { ...e, baseRev: artifact.rev, original: occupantText ?? e.original } : e));
       return;
     }
     onEditPart({ op: 'replace-part', index: editing.index1, text }, editing.baseRev);

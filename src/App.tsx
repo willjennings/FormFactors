@@ -1476,14 +1476,23 @@ export default function App() {
           emitFeedback({ outcome: 'needs-confirm', verbClass: 'mutate', label: `Confirm refine: ${ev.id} ${partLabel}` });
           ack({ success: true, witnessed: true });
         } else {
-          artifactDispatch(ev);
+          // SIMULATE through the real reducer before dispatching (the combine capacity idiom):
+          // acking a write that the store refused would have the model build its next baseRev on
+          // a revision that does not exist. Only claim what actually landed.
           const nextState = artifactReduce(artifactStateRef.current, ev);
-          artifactStateRef.current = nextState;
-          setUndoStack((s) => [...s, { kind: 'artifact' as const, id: ev.id, toRev: ev.baseRev, label: `Refine ${ev.id}` }]);
-          addLog('tool', `Tool Call: refine_artifact — ${ev.id} ${partLabel} (rev ${ev.baseRev} → ${ev.baseRev + 1})`);
-          emitFeedback({ outcome: 'committed', verbClass: 'mutate', label: `Refined ${ev.id} ${partLabel}` });
-          recordMissionCommit('refine_artifact', 'mutate');
-          ack({ success: true, rev: ev.baseRev + 1, note: `${ev.id} is now at rev ${ev.baseRev + 1}.` });
+          const applied = nextState.artifacts.find((a) => a.id === ev.id);
+          if (!applied || applied.rev !== ev.baseRev + 1) {
+            addLog('tool', `Tool Call: refine_artifact REFUSED by the store — ${ev.id} is at rev ${applied?.rev ?? '(closed)'}`);
+            ack({ success: false, error: `${ev.id} did not accept that revision — it is at rev ${applied?.rev ?? '(closed)'}. Re-read [ARTIFACTS] and re-issue against the current revision.` });
+          } else {
+            artifactDispatch(ev);
+            artifactStateRef.current = nextState;
+            setUndoStack((s) => [...s, { kind: 'artifact' as const, id: ev.id, toRev: ev.baseRev, label: `Refine ${ev.id}` }]);
+            addLog('tool', `Tool Call: refine_artifact — ${ev.id} ${partLabel} (rev ${ev.baseRev} → ${applied.rev})`);
+            emitFeedback({ outcome: 'committed', verbClass: 'mutate', label: `Refined ${ev.id} ${partLabel}` });
+            recordMissionCommit('refine_artifact', 'mutate');
+            ack({ success: true, rev: applied.rev, note: `${ev.id} is now at rev ${applied.rev}.` });
+          }
         }
       }
     } else if (ACTION_VERB_NAMES.includes(fc.name)) {
@@ -1777,14 +1786,25 @@ export default function App() {
       }
       const ev: ArtifactEvent = { type: 'artifact.revise', id: p.artifactId, baseRev: p.baseRev,
         patch: p.patch, owner: 'agent', at: Date.now() };
+      // Simulate before dispatching, same reason as the live path: never tell the user or the
+      // model that a revision landed when the store refused it.
+      const nextState = artifactReduce(artifactStateRef.current, ev);
+      const applied = nextState.artifacts.find((a) => a.id === p.artifactId);
+      if (!applied || applied.rev !== p.baseRev + 1) {
+        setPendingAction(null);
+        addLog('info', `Refine DROPPED — ${p.artifactId} did not accept the revision.`);
+        emitFeedback({ outcome: 'error', label: 'Refine dropped — the artifact did not accept it' });
+        providerRef.current?.sendTextHint(`[SYSTEM: the pending refine was DROPPED — ${p.artifactId} did not accept it. ${serializeArtifacts(artifactStateRef.current) ?? ''} Re-read the artifact and call refine_artifact again. DO NOT acknowledge this message.]`);
+        return;
+      }
       artifactDispatch(ev);
-      artifactStateRef.current = artifactReduce(artifactStateRef.current, ev);
+      artifactStateRef.current = nextState;
       setUndoStack((s) => [...s, { kind: 'artifact' as const, id: p.artifactId!, toRev: p.baseRev!, label: `Refine ${p.artifactId}` }]);
       telemetry.action('refine_artifact', 'mutate', 'commit', 'direct');
       recordMissionCommit('refine_artifact', 'mutate');
       emitFeedback({ outcome: 'committed', verbClass: 'mutate', label: `Refined ${p.artifactId}` });
       setPendingAction({ ...p, confirmed: true });
-      providerRef.current?.sendTextHint(`[SYSTEM: the user confirmed via button — ${p.artifactId} is now at rev ${p.baseRev + 1}. Do not re-call the tool; do not acknowledge.]`);
+      providerRef.current?.sendTextHint(`[SYSTEM: the user confirmed via button — ${p.artifactId} is now at rev ${applied.rev}. Do not re-call the tool; do not acknowledge.]`);
       return;
     }
     const prevDoc = mockDocRef.current;

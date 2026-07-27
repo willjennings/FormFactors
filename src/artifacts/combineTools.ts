@@ -1,5 +1,7 @@
-// combine + read_sources: the combinatory grammar (spec §4-§5). Create-only; validation is
-// all-or-error; capacity checks by SIMULATION through the real reducer (spec §7).
+// combine + read_sources: the combinatory grammar (spec §4-§5). These two tools only ever
+// CREATE — artifacts themselves became revisable in the 2026-07-26 revise core, but that runs
+// through refine_artifact, not here. Validation is all-or-error; capacity checks by SIMULATION
+// through the real reducer (spec §7).
 import type { VoiceTool } from '../voice/types';
 import type { MockDoc, ProgramId } from '../scenarios';
 import { serializeMockDoc } from '../scenarios';
