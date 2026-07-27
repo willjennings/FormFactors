@@ -39,3 +39,19 @@ export function replay(entries: JournalEntry[], registry: JournalRegistry): Reco
   }
   return states;
 }
+
+/** Deterministic compaction (spec §7): when over cap, replay everything and rebuild the
+ *  journal as ONE snapshot entry per store. The trade is stated, not hidden: fine-grained
+ *  history older than the snapshot is discarded (cross-reload archaeology, which nothing
+ *  consumes yet); artifact rev history survives INSIDE the state snapshot. `t` values carry
+ *  over from the last entry so compaction invents no clock reads. */
+export function compact(entries: JournalEntry[], registry: JournalRegistry, cap: number): JournalEntry[] {
+  if (entries.length <= cap) return entries;
+  const states = replay(entries, registry);
+  const t = entries[entries.length - 1]?.t ?? 0;
+  let out: JournalEntry[] = [];
+  for (const key of Object.keys(registry)) {
+    out = appendEntry(out, key, registry[key].snapshotEvent(states[key]), t, `compacted ${entries.length} entries`);
+  }
+  return out;
+}

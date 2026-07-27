@@ -42,7 +42,10 @@ export type ArtifactEvent =
   | { type: 'artifact.close'; id: string }                                        // user-only
   | { type: 'artifact.revise'; id: string; baseRev: number; patch: ArtifactPatch;
       owner: 'agent' | 'user'; at: number; note?: string }
-  | { type: 'artifact.revertTo'; id: string; toRev: number; at: number };         // user-only
+  | { type: 'artifact.revertTo'; id: string; toRev: number; at: number }          // user-only
+  // JOURNAL-ONLY (spec §7): emitted solely by journal compaction to reconstruct state in one
+  // step. No tool maps to it and no UI dispatches it — same discipline as artifact.close.
+  | { type: 'artifact.restore'; state: ArtifactState }
 
 export interface ArtifactState {
   artifacts: Artifact[];

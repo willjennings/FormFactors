@@ -71,6 +71,10 @@ export function reduce(state: ArtifactState, event: ArtifactEvent): ArtifactStat
       };
       return { ...state, artifacts: state.artifacts.map((x, j) => (j === i ? next : x)) };
     }
+    case 'artifact.restore':
+      // Journal compaction only. Restores verbatim — including nextId (ids are never reused;
+      // see the a${n} minting comment above) and rejectedAtCap/rejectedStale counters.
+      return event.state;
     default:
       return state;
   }

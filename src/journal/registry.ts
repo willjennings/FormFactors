@@ -36,7 +36,7 @@ export function workspaceReduce(s: WorkspaceState, e: WorkspaceEvent): Workspace
 export interface DialsState { dials: DialValues; registerKey: string | null }
 export type DialsEvent = { type: 'dials.set'; dials: DialValues; registerKey: string | null };
 
-export const initialDialsState = (): DialsState => ({ dials: DEFAULT_DIALS, registerKey: 'guided' });
+export const initialDialsState = (): DialsState => ({ dials: { ...DEFAULT_DIALS }, registerKey: 'guided' });
 
 export function dialsReduce(s: DialsState, e: DialsEvent): DialsState {
   return e.type === 'dials.set' ? { dials: e.dials, registerKey: e.registerKey } : s;
@@ -47,8 +47,8 @@ export const JOURNAL_REGISTRY: JournalRegistry = {
   artifacts: {
     initial: initialArtifactState,
     reduce: artifactReduce,
-    // Task 3 replaces with artifact.restore; unreachable until compact() exists.
-    snapshotEvent: (_s: ArtifactState) => { throw new Error('artifact snapshotEvent lands in Task 3'); },
+    // Task 3: journal-only restore event, emitted by compaction only.
+    snapshotEvent: (s: ArtifactState) => ({ type: 'artifact.restore' as const, state: s }),
   } satisfies StoreSpec<ArtifactState, any>,
   workspace: {
     initial: initialWorkspaceState,
@@ -58,8 +58,8 @@ export const JOURNAL_REGISTRY: JournalRegistry = {
   goal: {
     initial: initialGoalState,
     reduce: goalReduce,
-    // Task 3 replaces with goal.restore; unreachable until compact() exists.
-    snapshotEvent: (_s: GoalState) => { throw new Error('goal snapshotEvent lands in Task 3'); },
+    // Task 3: journal-only restore event, emitted by compaction only.
+    snapshotEvent: (s: GoalState) => ({ type: 'goal.restore' as const, state: s }),
   } satisfies StoreSpec<GoalState, any>,
   dials: {
     initial: initialDialsState,

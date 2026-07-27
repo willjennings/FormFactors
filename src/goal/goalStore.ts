@@ -19,7 +19,10 @@ export type GoalEvent =
   | { type: 'goal.set'; objective: string; steps: { label: string; verb?: string; target?: string }[] }
   | { type: 'goal.stepDone'; id: string }
   | { type: 'goal.actionCommitted'; verb: string; target?: string }
-  | { type: 'goal.clear' };
+  | { type: 'goal.clear' }
+  // JOURNAL-ONLY (spec §7): emitted solely by journal compaction to reconstruct state in one
+  // step. No tool maps to it and no UI dispatches it — same discipline as artifact.close.
+  | { type: 'goal.restore'; state: GoalState };
 
 export function initialGoalState(): GoalState {
   return { objective: null, steps: [], nextId: 1 };
@@ -46,6 +49,9 @@ export function reduce(state: GoalState, event: GoalEvent): GoalState {
     }
     case 'goal.clear':
       return { objective: null, steps: [], nextId: state.nextId };
+    case 'goal.restore':
+      // Journal compaction only. Restores verbatim — including nextId so goal ids are never reused.
+      return event.state;
     default:
       return state;
   }
