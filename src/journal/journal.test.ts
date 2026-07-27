@@ -67,6 +67,11 @@ describe('compact', () => {
     expect(c.every((e) => e.label?.includes('compacted'))).toBe(true);
   });
 
+  it('t carries over from the LAST pre-compact entry — compaction invents no clock reads', () => {
+    const c = compact(seed(), JOURNAL_REGISTRY, 2);
+    expect(c.every((e) => e.t === 5)).toBe(true);
+  });
+
   it('nextId survives compaction — artifact ids are NEVER reused', () => {
     const j = seed();                              // a1 created+closed, a2 live → nextId 3
     const c = compact(j, JOURNAL_REGISTRY, 2);
