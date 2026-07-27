@@ -6,7 +6,7 @@ import { Tip } from '../ui/Tooltip';
 export type Suggestion = { key: string; label: string; phrase: string; color: string };
 export type GroundingChip = { id: string; title: string; color: string };
 
-export function Omnibox({ isLive, isConnecting, error, transcript, suggestions, firstRunHint, restoredDraft, modelCaption, busy = false, grounding = [], quickFireEcho = null, onRemoveGrounding, onSubmit, onMicToggle, onChipTap, above }: {
+export function Omnibox({ isLive, isConnecting, error, transcript, suggestions, firstRunHint, restoredDraft, modelCaption, busy = false, grounding = [], quickFireEcho = null, tray, onRemoveGrounding, onRemoveTray, onFireTray, onSubmit, onMicToggle, onChipTap, above }: {
   isLive: boolean; isConnecting: boolean; error: string | null; transcript: string | null;
   suggestions: Suggestion[]; firstRunHint: boolean;
   restoredDraft?: { text: string; at: number } | null;
@@ -18,7 +18,12 @@ export function Omnibox({ isLive, isConnecting, error, transcript, suggestions, 
   grounding?: GroundingChip[];
   /** Transient echo of a quick-fired chip: what was just asked, about what (chain visibility). */
   quickFireEcho?: { n: number; phrase: string; referent: string | null; at: number } | null;
+  /** The combine tray (spec §5.2/5.3) — distinct from grounding: this is "make a new artifact
+   *  from these", filled by shift-click, not "my next utterance is about these". */
+  tray?: { sourceId: string; title: string; color: string }[];
   onRemoveGrounding?: (id: string) => void;
+  onRemoveTray?: (sourceId: string) => void;
+  onFireTray?: (kind: 'doc' | 'widget') => void;
   onSubmit: (text: string) => void; onMicToggle: () => void; onChipTap: (s: Suggestion) => void;
   /** Rendered at the top of the bottom-center column (witness cards) so cards and the
    *  caption/chips STACK instead of overlapping (human smoke 2026-07-16). */
@@ -85,6 +90,27 @@ export function Omnibox({ isLive, isConnecting, error, transcript, suggestions, 
         <p className={`text-center text-[11px] font-mono ${error ? 'text-red-500' : 'text-[var(--text-secondary)] italic'}`}>
           {error ?? transcript}
         </p>
+      )}
+      {tray && tray.length > 0 && (
+        <div className="flex items-center gap-1.5 flex-wrap px-1 pb-1">
+          <span className="text-[9px] font-mono uppercase tracking-widest text-[var(--text-secondary)]">combine</span>
+          {tray.map((t) => (
+            <span key={t.sourceId} className="flex items-center gap-1 rounded-full border border-[var(--card-border)] px-2 py-0.5 text-[11px]"
+              style={{ borderColor: t.color }}>
+              {t.title}
+              <button aria-label={`Remove ${t.title} from the combine tray`} className="hit-24 text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                onClick={() => onRemoveTray?.(t.sourceId)}>×</button>
+            </span>
+          ))}
+          {tray.length >= 2 && (
+            <>
+              <button className="hit-24 rounded-full bg-[var(--accent-color)]/15 px-2 text-[11px] text-[var(--accent-color)]"
+                onClick={() => onFireTray?.('doc')}>combine these → doc</button>
+              <button className="hit-24 rounded-full bg-[var(--accent-color)]/15 px-2 text-[11px] text-[var(--accent-color)]"
+                onClick={() => onFireTray?.('widget')}>→ widget</button>
+            </>
+          )}
+        </div>
       )}
       <form
         className="flex items-center gap-2 px-3 py-2 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)]/90 backdrop-blur shadow-lg"

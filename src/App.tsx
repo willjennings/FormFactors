@@ -115,7 +115,9 @@ import { pinEventFor } from './artifacts/pin';
 import { COMBINE_TOOL, READ_SOURCES_TOOL, validateCombineCall, sourceDetail, validSourceIds } from './artifacts/combineTools';
 import { REFINE_TOOL, validateRefineCall, describePatch } from './artifacts/refineTools';
 import { feedsSummary } from './artifacts/feeds';
-import { artifactEntities } from './artifacts/entities';
+import { artifactEntities, entityToSourceId } from './artifacts/entities';
+import { toggleTray, removeTray, clearTray, canFire, isTrayFull, type TrayMember } from './artifacts/combineTray';
+import { buildCombineRequest } from './artifacts/combineRequest';
 import { ArtifactWindow } from './artifacts/ArtifactWindow';
 import { ARTIFACT_DEMO_ARGS, ARTIFACT_DEMO_WIDGET_ARGS, ARTIFACT_DEMO_REFINE_ARGS } from './artifacts/demo';
 import type { ArtifactEvent, ArtifactPatch } from './artifacts/types';
@@ -502,6 +504,10 @@ export default function App() {
   // with the next query. Cleared on submit and on program swap (ids go stale).
   const [grounding, setGrounding] = useState<{ id: EntityId; title: string; color: string }[]>([]);
   useEffect(() => { setGrounding([]); }, [activeProgram]);
+  // The combine tray (spec §5.2) — distinct from grounding: grounding is "my next utterance is
+  // about these", the tray is "make a new artifact from these". Cleared on program swap.
+  const [tray, setTray] = useState<TrayMember[]>([]);
+  useEffect(() => { setTray(clearTray()); }, [activeProgram]);
   // R1 Task 4: chipDensity render gate — ONE derivation feeds both the chip row (Omnibox
   // `suggestions` prop) and quick-fire (via suggestionsRef below), so 'none' can never leave
   // an invisible hot surface with a live keyboard shortcut.
@@ -2950,6 +2956,30 @@ export default function App() {
         return x >= xmin && x <= xmax && y >= ymin && y <= ymax;
       });
 
+      // SHIFT-CLICK = tray toggle (spec §5.3). This is the right seam, not
+      // handleSurfaceElementClick: that one takes a bare elementId with no event, and artifact
+      // windows never route through it. Only consumes the click when the entity actually
+      // resolves to a source — everything else falls through to normal pointing.
+      if (e.shiftKey && found) {
+        const sourceId = entityToSourceId(found);
+        if (sourceId) {
+          // A toggle that REMOVES an already-present member must still work at the cap —
+          // removing is not adding. Only an add that would grow the tray past MAX_ARTIFACTS
+          // is refused, and the refusal must be visible (same discipline as onPin's at-cap
+          // path below) — toggleTray itself just returns the tray unchanged, silently.
+          const alreadyIn = tray.some((m) => m.sourceId === sourceId);
+          if (!alreadyIn && isTrayFull(tray)) {
+            addLog('info', `Combine tray refused — already holds ${MAX_ARTIFACTS} sources.`);
+            emitFeedback({ outcome: 'error', label: `Can't add — remove one from the tray first (${MAX_ARTIFACTS} max)` });
+            telemetry.combineTray(tray.length, 'add', false);
+            return;
+          }
+          setTray((t) => toggleTray(t, { entityId: String(found.id), sourceId,
+            title: displayName(found), color: CATEGORY_COLORS[found.category] }));
+          return;
+        }
+      }
+
       // TOUCH DEIXIS: touch has no hover — a tap is the point. Register the target at the
       // down position (cursor + hovered + history) so saying "this" right after a tap resolves,
       // even if no pointermove fired. (Mouse users already get this via hover; harmless there.)
@@ -3982,6 +4012,20 @@ export default function App() {
             grounding={grounding}
             quickFireEcho={quickFireEcho}
             onRemoveGrounding={(id) => setGrounding(g => g.filter(c => c.id !== id))}
+            tray={tray.map((t) => ({ sourceId: t.sourceId, title: t.title, color: t.color }))}
+            onRemoveTray={(sourceId) => setTray((t) => removeTray(t, sourceId))}
+            onFireTray={(kind) => {
+              if (!canFire(tray)) return;
+              const { userText, hint } = buildCombineRequest(tray, kind);
+              // The fenced hint carries the exact ids; the user turn carries the intent. Firing
+              // does NOT author content — the model reads the named sources and writes the
+              // synthesis itself, so authorship stays honest.
+              providerRef.current?.sendTextHint(hint);
+              providerRef.current?.sendUserText(userText);
+              addLog('event', `Combine tray fired — ${tray.map((t) => t.sourceId).join(' + ')} → ${kind}`);
+              telemetry.combineTray(tray.length, kind, true);
+              setTray(clearTray());
+            }}
             onSubmit={(text) => {
               lastActivityRef.current = Date.now();
               setFirstRunHint(false); setFocusTitle(undefined);
