@@ -12,6 +12,24 @@ const fake = () => {
   };
 };
 
+const fakeWithOps = () => {
+  const m = new Map<string, string>();
+  const ops: Array<{ op: 'setItem' | 'removeItem'; key: string }> = [];
+  return {
+    getItem: (k: string) => m.get(k) ?? null,
+    setItem: (k: string, v: string) => {
+      ops.push({ op: 'setItem', key: k });
+      m.set(k, v);
+    },
+    removeItem: (k: string) => {
+      ops.push({ op: 'removeItem', key: k });
+      m.delete(k);
+    },
+    _m: m,
+    _ops: ops,
+  };
+};
+
 describe('journal persistence', () => {
   const entries = appendEntry([], 'dials', { type: 'dials.set', dials: {}, registerKey: null }, 1000);
 
@@ -52,6 +70,69 @@ describe('journal persistence', () => {
     s.setItem(QUARANTINE_KEY, 'old');
     clearJournal(s);
     expect(s.getItem(JOURNAL_KEY)).toBeNull();
+    expect(s.getItem(QUARANTINE_KEY)).toBeNull();
+  });
+
+  it('a throwing getItem is NOT silent — returns failed, not empty', () => {
+    const s = { ...fake(), getItem: () => { throw new Error('access denied'); } };
+    const r = loadJournal(s as any);
+    expect('failed' in r && r.failed).toMatch(/inaccessible/i);
+  });
+
+  it('quarantine PRECEDES journal removal (order matters for evidence survival)', () => {
+    const s = fakeWithOps();
+    s.setItem(JOURNAL_KEY, JSON.stringify({ v: 1, entries: [{ nope: true }] }));
+    loadJournal(s);
+    // Find the indices of quarantine setItem and journal removeItem
+    const quarantineSetIdx = s._ops.findIndex(op => op.op === 'setItem' && op.key === QUARANTINE_KEY);
+    const journalRemoveIdx = s._ops.findIndex(op => op.op === 'removeItem' && op.key === JOURNAL_KEY);
+    expect(quarantineSetIdx >= 0).toBe(true); // quarantine setItem happened
+    expect(journalRemoveIdx >= 0).toBe(true); // journal removeItem happened
+    expect(quarantineSetIdx < journalRemoveIdx).toBe(true); // setItem before removeItem
+  });
+
+  it('if quarantine setItem throws, journal removeItem still runs', () => {
+    const base = fakeWithOps();
+    const s = {
+      ...base,
+      setItem: (k: string, v: string) => {
+        if (k === QUARANTINE_KEY) throw new Error('quota');
+        base.setItem(k, v);
+      },
+    };
+    s.setItem(JOURNAL_KEY, JSON.stringify({ v: 1, entries: [{ nope: true }] }));
+    const r = loadJournal(s as any);
+    expect('failed' in r).toBe(true); // load fails as expected
+    expect(s.getItem(JOURNAL_KEY)).toBeNull(); // journal is removed despite quarantine throw
+  });
+
+  it('no-args loadJournal (default storage) returns {empty: true} when storage unavailable', () => {
+    const r = loadJournal();
+    expect(r).toEqual({ empty: true });
+  });
+
+  it('no-args saveJournal (default storage) returns false when storage unavailable', () => {
+    const r = saveJournal(entries);
+    expect(r).toBe(false);
+  });
+
+  it('no-args clearJournal (default storage) does not throw', () => {
+    expect(() => clearJournal()).not.toThrow();
+  });
+
+  it('clearJournal with throwing first removeItem still removes quarantine', () => {
+    const base = fakeWithOps();
+    const s = {
+      ...base,
+      removeItem: (k: string) => {
+        if (k === JOURNAL_KEY) throw new Error('locked');
+        base.removeItem(k);
+      },
+    };
+    s.setItem(JOURNAL_KEY, 'data');
+    s.setItem(QUARANTINE_KEY, 'old');
+    clearJournal(s as any);
+    // Despite the throw on JOURNAL_KEY removal, QUARANTINE_KEY should be removed
     expect(s.getItem(QUARANTINE_KEY)).toBeNull();
   });
 });

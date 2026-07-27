@@ -30,12 +30,14 @@ function isEntry(x: unknown): x is JournalEntry {
 export function loadJournal(storage: StorageLike | null = defaultStorage()): LoadResult {
   if (!storage) return { empty: true };            // no storage at all = nothing to restore
   let raw: string | null = null;
-  try { raw = storage.getItem(JOURNAL_KEY); } catch { return { empty: true }; }
+  try { raw = storage.getItem(JOURNAL_KEY); } catch { return { failed: 'storage inaccessible' }; }
   if (raw === null) return { empty: true };
   const fail = (reason: string): LoadResult => {
     // Quarantine BEFORE clearing: the evidence outlives the failure (spec §5). Overwrites the
-    // previous quarantine — one incident of evidence is the contract.
-    try { storage.setItem(QUARANTINE_KEY, raw!); storage.removeItem(JOURNAL_KEY); } catch { /* fail-soft */ }
+    // previous quarantine — one incident of evidence is the contract. Separate try/catch for each
+    // to ensure that if quarantine setItem throws, journal removeItem still runs.
+    try { storage.setItem(QUARANTINE_KEY, raw!); } catch { /* fail-soft */ }
+    try { storage.removeItem(JOURNAL_KEY); } catch { /* fail-soft */ }
     return { failed: reason };
   };
   try {
@@ -58,5 +60,6 @@ export function saveJournal(entries: JournalEntry[], storage: StorageLike | null
 }
 
 export function clearJournal(storage: StorageLike | null = defaultStorage()): void {
-  try { storage?.removeItem(JOURNAL_KEY); storage?.removeItem(QUARANTINE_KEY); } catch { /* fail-soft */ }
+  try { storage?.removeItem(JOURNAL_KEY); } catch { /* fail-soft */ }
+  try { storage?.removeItem(QUARANTINE_KEY); } catch { /* fail-soft */ }
 }
