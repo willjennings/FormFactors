@@ -509,6 +509,14 @@ export default function App() {
   // about these", the tray is "make a new artifact from these". Cleared on program swap.
   const [tray, setTray] = useState<TrayMember[]>([]);
   useEffect(() => { setTray(clearTray()); }, [activeProgram]);
+  // I4 (final review): sendTypedInput returning true means QUEUED, not delivered. When a fire
+  // takes the queue path (no live session yet) and the connect that was supposed to flush it
+  // fails (missing API key — a fresh checkout's default — mic denied, etc.), the queued TEXT is
+  // restored as a draft but the tray was already cleared on the optimistic `dispatched` return,
+  // destroying the user's explicit source selection for an operation that never happened. Stash
+  // the fired tray here ONLY when the fire queued (never on a live send, which needs no
+  // restoration); onOpen's genuine flush clears it, abortPendingTyped/onError restore it.
+  const pendingTrayRef = useRef<TrayMember[] | null>(null);
   // R1 Task 4: chipDensity render gate — ONE derivation feeds both the chip row (Omnibox
   // `suggestions` prop) and quick-fire (via suggestionsRef below), so 'none' can never leave
   // an invisible hot surface with a live keyboard shortcut.
@@ -2360,6 +2368,15 @@ export default function App() {
     if (pendingTypedRef.current) setRestoredDraft({ text: pendingTypedRef.current, at: Date.now() });
     pendingTypedRef.current = null;
     pendingHintRef.current = null;
+    // I4: the fire never went out — restore the tray rather than leave it destroyed by an
+    // operation that never happened. The fenced hint is NOT restored into visible text under
+    // any circumstances (dropped above, out of scope) — typed text must never be able to
+    // impersonate a [COMBINE REQUEST].
+    if (pendingTrayRef.current) {
+      setTray(pendingTrayRef.current);
+      addLog('info', 'Combine tray kept — the fire did not go out (connect failed).');
+      pendingTrayRef.current = null;
+    }
   };
 
   const startLiveSession = async () => {
@@ -2513,6 +2530,9 @@ export default function App() {
               pendingHintRef.current = null;
               providerRef.current?.sendUserText(flushText);
               pendingTypedRef.current = null;
+              // I4: this is the genuine flush — the queued fire (if any) actually went out,
+              // so the stashed tray is no longer needed as a restoration fallback.
+              pendingTrayRef.current = null;
             }
           },
           onClose: () => {
@@ -2527,6 +2547,14 @@ export default function App() {
             if (pendingTypedRef.current) setRestoredDraft({ text: pendingTypedRef.current, at: Date.now() });
             pendingTypedRef.current = null;
             pendingHintRef.current = null;
+            // I4: same principle for a queued tray fire — the fire never went out, so the
+            // user's explicit source selection must not be destroyed. The fenced hint stays
+            // dropped (out of scope) and is never restored as visible text.
+            if (pendingTrayRef.current) {
+              setTray(pendingTrayRef.current);
+              addLog('info', 'Combine tray kept — the fire did not go out (connect failed).');
+              pendingTrayRef.current = null;
+            }
             let errMsg = m;
             if (errMsg.includes('Permission denied') || errMsg.includes('NotAllowedError')) {
               errMsg = "Microphone access denied. Please check your browser settings and ensure this site has permission to use your microphone.";
@@ -4101,8 +4129,17 @@ export default function App() {
               // the onOpen flush (above) merges the hint into the same turn. Only report success
               // and clear the tray once dispatched is true — i.e. the request is genuinely on
               // its way, sent or queued, never claimed on a no-op.
+              //
+              // I4: `dispatched === true` means QUEUED-or-sent, not delivered. Replicate
+              // sendTypedInput's own live/queue test (it makes the identical check internally,
+              // synchronously, so there's no race between this read and its own) to know which
+              // path this fire took — only the queue path can still fail downstream (a live
+              // send either succeeds or the session itself errors, both already handled
+              // elsewhere), so only the queue path needs a restoration fallback.
+              const willQueue = !(providerRef.current && isLive);
               const dispatched = sendTypedInput(userText, hint);
               if (!dispatched) return;
+              if (willQueue) pendingTrayRef.current = tray;
               addLog('event', `Combine tray fired — ${tray.map((t) => t.sourceId).join(' + ')} → ${kind}`);
               telemetry.combineTray(tray.length, kind, true);
               setTray(clearTray());
