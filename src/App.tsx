@@ -716,12 +716,20 @@ export default function App() {
   const annotationHintGateRef = useRef(makeChangeGate());
   const teachingDispatchRef = useRef<((e: TeachingEvent) => void) | null>(null);
   const [teachingSnapshot, setTeachingSnapshot] = useState<TeachingState | null>(null);
+  // Single render-scope source for "the teaching rail right now" — <RailPanel>'s teachingRail
+  // prop and the recompose signature below both read this, so they can never disagree about
+  // what's on screen (the same discipline projectedRailState enforces for RailPanel/railEntities).
+  const teachingRail: Rail | null = teachingSnapshot ? projectTeaching(teachingSnapshot) : null;
   // Plan 2: stale-closure-free reads for the click gate (Contract A) + hover handler (Contract B).
   const teachingSnapshotRef = useRef<TeachingState | null>(null);
   useEffect(() => { teachingSnapshotRef.current = teachingSnapshot; }, [teachingSnapshot]);
   // Projected teaching rail, mirrored into a ref the same way artifactStateRef is — composeEntities
   // runs outside React render (from updateLayout, an effect callback) and must not read state
-  // directly, only refs kept in sync by effects.
+  // directly, only refs kept in sync by effects. Deliberately gated on `teachingSnapshot` (not
+  // `teachingRail`, which has a fresh identity every render) so this effect only re-runs when the
+  // underlying snapshot actually changes. (composeEntities/updateLayout run from effects and event
+  // handlers, never synchronously during render, so reading the one-render-late ref there is
+  // correct — unlike railSignature below, which runs IN render and must use `teachingRail` directly.)
   const teachingRailRef = useRef<Rail | null>(null);
   useEffect(() => { teachingRailRef.current = teachingSnapshot ? projectTeaching(teachingSnapshot) : null; }, [teachingSnapshot]);
   const annotationDispatchRef = useRef<((e: AnnotationEvent) => void) | null>(null);
@@ -1016,9 +1024,29 @@ export default function App() {
   // Rail cards are entities, so the scene must be re-measured whenever the rail changes —
   // otherwise the registry keeps describing cards that `rail.set` has already replaced. Same
   // failure the artifact revise core shipped and had to fix: state moved, scene never did.
+  //
+  // Must mirror composeEntities' own projection: the teaching rail is folded into the scene
+  // too (via teachingRailRef), so a signature reading only railState.rail leaves that whole
+  // path never re-measuring — the ordinary walkthrough, where railState.rail is null and the
+  // rail panel shows the projected teaching sequence instead, would never recompose.
+  // `teachingRail` (below) is the same render-scope value passed to <RailPanel>'s
+  // `teachingRail` prop, not `teachingRailRef` — the ref only settles post-effect, one render
+  // late, which would make this signature (and thus this effect) lag a render behind the DOM.
+  //
+  // openWhy/flipped are included because they change a card's HEIGHT without changing the
+  // rail itself: the why paragraph and the flipped concept back-face render inside the same
+  // data-entity-id root CardView already stamped, so railLayoutRef's bbox for that card goes
+  // stale (too short) the instant either toggles, even though seq/cards.length/activeIndex
+  // don't move.
+  //
   // A STRING signature, not the state object: `updateLayout` calls `setEntities`, so a
-  // fresh-identity dependency recomputed every render would re-render forever.
-  const railSignature = `${railState.rail?.seq ?? ''}:${railState.rail?.cards.length ?? 0}:${railState.rail?.activeIndex ?? -1}`;
+  // fresh-identity dependency recomputed every render would re-render forever. `projectedRailState`
+  // returns a fresh object every call, but only primitives are read out of it into the template
+  // literal — the effect's actual dependency is that string, not the object, so this is safe.
+  const projectedForSignature = projectedRailState(railState, teachingRail);
+  const railSignature = projectedForSignature?.rail
+    ? `${projectedForSignature.rail.seq}:${projectedForSignature.rail.cards.length}:${projectedForSignature.rail.activeIndex ?? -1}:${projectedForSignature.openWhy ?? -1}:${projectedForSignature.flipped.join(',')}`
+    : '';
   useEffect(() => { updateLayout(); }, [artifactRevSignature, railSignature, updateLayout]);
 
   // Mount/reattach observers — re-runs when windowOpen flips so the new .program-window
@@ -3975,7 +4003,7 @@ export default function App() {
 
           <RailPanel
             state={railState}
-            teachingRail={teachingSnapshot ? projectTeaching(teachingSnapshot) : null}
+            teachingRail={teachingRail}
             onEvent={railDispatch}
             onShowMe={(id) => { telemetry.guidance('show_me', { taskKey: railState.rail?.seq }); teachingDispatchRef.current?.({ type: 'teach.highlight', entityId: id as EntityId }); }}
           />
