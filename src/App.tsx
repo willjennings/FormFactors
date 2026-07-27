@@ -352,6 +352,22 @@ const bootStates = journalBoot.states as {
   goal?: GoalState;
   dials?: DialsState;
 } | null;
+// Fix round 1 (I1): StrictMode double-invokes every mount-time effect in dev (mount → cleanup →
+// mount) — TWO calls with byte-identical props/state, not one. A "skip exactly the first call"
+// toggle (ref- or module-scoped, it makes no difference — both persist across the two passes)
+// necessarily lets the SECOND of those two calls through, which is precisely the spurious call
+// StrictMode injects. The dials effect below is fixed by comparing against the exact boot
+// baseline BY REFERENCE instead of counting calls: both StrictMode passes see the identical
+// (unchanged) `dials`/`registerKey` objects the initializer produced, so both compare equal and
+// both skip; a real subsequent change always produces a new `dials` object (every `setDials`
+// spreads), so it never again matches the baseline once one real change has landed.
+const bootDialsBaseline = bootStates?.dials?.dials ?? DEFAULT_DIALS;
+const bootRegisterKeyBaseline = bootStates?.dials ? bootStates.dials.registerKey : 'guided';
+// The failed-load notice, below, is a different shape of guard — "act once, then suppress
+// forever" — and that polarity DOES survive StrictMode's double call correctly with a plain
+// module-scoped boolean: pass 1 sees it false, acts, sets it true; pass 2 sees it true and
+// returns. (Verified in the fix round's dev-mode observation, not just reasoned through.)
+let failureNoticeShown = false;
 
 export default function App() {
   // --- Active program (Word / Excel / PowerPoint) — single source of truth for content ---
@@ -595,20 +611,23 @@ export default function App() {
     }
   }, [promptDialsKey]);
 
-  // Dials are session shape (spec §4) — journal every settled change. Skip the mount-time
-  // fire (the initializer already reflects boot state, or the fresh default; journaling it
-  // again would be a no-op event but a needless one).
-  const dialsBootSkip = useRef(true);
+  // Dials are session shape (spec §4) — journal every settled change. Skip the mount-time fire:
+  // still exactly the boot baseline (by reference) — see the I1 comment above for why this,
+  // and not a call-counting guard, survives StrictMode's dev double-invoke.
   useEffect(() => {
-    if (dialsBootSkip.current) { dialsBootSkip.current = false; return; }
+    if (dials === bootDialsBaseline && registerKey === bootRegisterKeyBaseline) return;
     journalAppend('dials', { type: 'dials.set', dials, registerKey });
   }, [dials, registerKey]);
 
   // The failed-load notice (spec §5) is never silent: a journal that existed and could not be
   // restored must be SHOWN, not just logged where only a debug drawer would ever see it. One
   // shot on mount — journalBoot itself is a module-level memo, computed once before render.
+  // Module-scoped `failureNoticeShown` (I1 fix) — "act once, then suppress" is the polarity
+  // that DOES survive StrictMode's double call with a plain boolean (unlike the dials effect
+  // above): pass 1 acts and flips it true, pass 2 sees true and returns.
   useEffect(() => {
-    if (!journalBoot.failure) return;
+    if (!journalBoot.failure || failureNoticeShown) return;
+    failureNoticeShown = true;
     addLog('info', `Previous desk could not be restored (${journalBoot.failure}). Starting fresh.`);
     emitFeedback({ outcome: 'error', label: `Your previous desk couldn't be restored (${journalBoot.failure}). Starting fresh.` });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -694,6 +713,24 @@ export default function App() {
       if (!saveJournal(journalRef.current)) addLog('info', 'Journal save failed (storage unavailable or full) — the desk will not survive a reload.');
     }, 500);
   };
+  // Fix round 1 (I2): the debounce alone has no escape hatch — an unmount (or a StrictMode
+  // cleanup pass) leaves a pending timer to be garbage-collected unfired, and a real navigation
+  // away/reload inside the 500ms window loses whatever was appended since the last flush. Two
+  // halves: clear the timer on unmount (no stray timer firing into a torn-down closure), and
+  // flush synchronously on `pagehide` (bfcache-safe, unlike `beforeunload`) so the save actually
+  // lands before the page goes away.
+  useEffect(() => () => { if (journalSaveTimer.current) clearTimeout(journalSaveTimer.current); }, []);
+  useEffect(() => {
+    const flush = () => {
+      if (journalSaveTimer.current) {
+        clearTimeout(journalSaveTimer.current);
+        journalSaveTimer.current = null;
+        saveJournal(journalRef.current);   // compaction can wait for the next debounced save;
+      }                                    // losing an edit cannot
+    };
+    window.addEventListener('pagehide', flush);
+    return () => window.removeEventListener('pagehide', flush);
+  }, []);
   // Journaled artifact dispatch (spec §3): every event — including ones the reducer will
   // refuse (rejectedAtCap) — journals identically, so replay reproduces the exact same refusal.
   // Call sites use this wrapper, never artifactDispatch directly (except the useReducer above).
