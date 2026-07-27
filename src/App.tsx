@@ -117,7 +117,7 @@ import { COMBINE_TOOL, READ_SOURCES_TOOL, validateCombineCall, sourceDetail, val
 import { REFINE_TOOL, validateRefineCall, describePatch } from './artifacts/refineTools';
 import { feedsSummary } from './artifacts/feeds';
 import { artifactEntities, entityToSourceId } from './artifacts/entities';
-import { toggleTray, removeTray, clearTray, canFire, isTrayFull, type TrayMember } from './artifacts/combineTray';
+import { toggleTray, removeTray, clearTray, canFire, isTrayFull, pruneTray, restoreTray, type TrayMember } from './artifacts/combineTray';
 import { buildCombineRequest } from './artifacts/combineRequest';
 import { ArtifactWindow } from './artifacts/ArtifactWindow';
 import { ARTIFACT_DEMO_ARGS, ARTIFACT_DEMO_WIDGET_ARGS, ARTIFACT_DEMO_REFINE_ARGS } from './artifacts/demo';
@@ -652,19 +652,20 @@ export default function App() {
   // an array/object identity is fresh every render and would re-run this every commit.
   const artifactIdSignature = artifactState.artifacts.map((a) => a.id).join(',');
   useEffect(() => {
-    const liveIds = new Set(artifactIdSignature ? artifactIdSignature.split(',') : []);
-    setTray((t) => {
-      // Artifact ids are always `a${n}` (artifactStore.ts) — a program id (word/excel/…) never
-      // matches, so this only ever targets artifact-sourced members, never program members.
-      const stale = t.filter((m) => /^a\d+$/.test(m.sourceId) && !liveIds.has(m.sourceId));
-      if (!stale.length) return t;
-      // The prune must be VISIBLE — a silently vanishing chip is still a silent state change.
-      for (const m of stale) {
-        addLog('info', `Tray: "${m.title}" was closed — removed from the tray.`);
-        emitFeedback({ outcome: 'error', label: `Removed from tray — ${m.title} was closed` });
-      }
-      return t.filter((m) => !stale.includes(m));
-    });
+    // pruneTray is PURE (src/artifacts/combineTray.ts, TDD'd) — the dead-id logic lives there
+    // exactly once, shared with restoreTray below. Side effects (addLog/emitFeedback) stay OUT
+    // of the setTray updater: StrictMode double-invokes updaters in dev, which would double the
+    // log line, the toast, and the earcon for a single real prune.
+    const liveIds = artifactIdSignature ? artifactIdSignature.split(',') : [];
+    const pruned = pruneTray(tray, liveIds);
+    if (!pruned.dropped.length) return;
+    setTray(pruned.tray);
+    // The prune must be VISIBLE — a silently vanishing chip is still a silent state change.
+    for (const m of pruned.dropped) {
+      addLog('info', `Tray: "${m.title}" was closed — removed from the tray.`);
+      emitFeedback({ outcome: 'error', label: `Removed from tray — ${m.title} was closed` });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [artifactIdSignature]);
   // Measured bboxes of mounted ArtifactWindow content regions, keyed by `artifact-${id}` —
   // updateLayout fills this in (below) so artifactEntities() can produce real, pointable bboxes.
@@ -2358,6 +2359,29 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  // R3 (fix-wave regression): a blind `setTray(stash)` at a restore site can (a) resurrect a
+  // member whose artifact the user closed WHILE the connect was in flight — the fence would
+  // then name a dead id with machine authority, the exact C1 failure, resurrected — or (b)
+  // discard members the user added to the tray mid-connect (the stash is a snapshot from
+  // before the fire; the tray can have moved on). restoreTray (pure, TDD'd,
+  // src/artifacts/combineTray.ts) reconciles stash-first order against the CURRENT tray and the
+  // live artifact set (read from artifactStateRef, never stale). Any drop is reported here,
+  // OUTSIDE any state updater — a silent drop is a silent lie.
+  const restorePendingTray = () => {
+    const stash = pendingTrayRef.current;
+    if (!stash) return;
+    pendingTrayRef.current = null;
+    const liveIds = artifactStateRef.current.artifacts.map((a) => a.id);
+    const { tray: restored, dropped } = restoreTray(tray, stash, liveIds);
+    setTray(restored);
+    addLog('info', 'Combine tray kept — the fire did not go out (connect failed).');
+    if (dropped.length) {
+      const names = dropped.map((m) => m.title);
+      addLog('info', `Tray: ${names.map((n) => `"${n}"`).join(', ')} could not be restored — closed, or past the ${MAX_ARTIFACTS}-artifact cap.`);
+      emitFeedback({ outcome: 'error', label: `Couldn't restore ${names.join(', ')} to the tray` });
+    }
+  };
+
   // R1: a typed command may have auto-started this session attempt. If session
   // startup fails BEFORE the provider callbacks exist (missing key, mic denied,
   // insecure context, connect throw), unwind: re-enable the box and give the
@@ -2372,11 +2396,7 @@ export default function App() {
     // operation that never happened. The fenced hint is NOT restored into visible text under
     // any circumstances (dropped above, out of scope) — typed text must never be able to
     // impersonate a [COMBINE REQUEST].
-    if (pendingTrayRef.current) {
-      setTray(pendingTrayRef.current);
-      addLog('info', 'Combine tray kept — the fire did not go out (connect failed).');
-      pendingTrayRef.current = null;
-    }
+    restorePendingTray();
   };
 
   const startLiveSession = async () => {
@@ -2537,6 +2557,12 @@ export default function App() {
           },
           onClose: () => {
             if (providerRef.current !== thisProvider) return; // stale close from a replaced session
+            // R2: a session that dies WITHOUT ever opening (e.g. the server drops the socket
+            // before onOpen fires) never reaches onError or abortPendingTyped either — the
+            // genuine onOpen flush is the only other place that clears pendingTrayRef, and it
+            // never ran. Restore here too. Safe after a NORMAL open-then-close: the flush sets
+            // pendingTrayRef to null, so restorePendingTray's stash guard is a no-op then.
+            restorePendingTray();
             setIsLive(false); setIsConnecting(false); connectInFlightRef.current = false; setModelBusy(false); sessionRef.current = null; providerRef.current = null; addLog('info', 'Live Link Closed');
           },
           onError: (m: string) => {
@@ -2550,11 +2576,7 @@ export default function App() {
             // I4: same principle for a queued tray fire — the fire never went out, so the
             // user's explicit source selection must not be destroyed. The fenced hint stays
             // dropped (out of scope) and is never restored as visible text.
-            if (pendingTrayRef.current) {
-              setTray(pendingTrayRef.current);
-              addLog('info', 'Combine tray kept — the fire did not go out (connect failed).');
-              pendingTrayRef.current = null;
-            }
+            restorePendingTray();
             let errMsg = m;
             if (errMsg.includes('Permission denied') || errMsg.includes('NotAllowedError')) {
               errMsg = "Microphone access denied. Please check your browser settings and ensure this site has permission to use your microphone.";
@@ -4130,16 +4152,37 @@ export default function App() {
               // and clear the tray once dispatched is true — i.e. the request is genuinely on
               // its way, sent or queued, never claimed on a no-op.
               //
-              // I4: `dispatched === true` means QUEUED-or-sent, not delivered. Replicate
+              // I4/R2: `dispatched === true` means QUEUED-or-sent, not delivered. Replicate
               // sendTypedInput's own live/queue test (it makes the identical check internally,
               // synchronously, so there's no race between this read and its own) to know which
               // path this fire took — only the queue path can still fail downstream (a live
               // send either succeeds or the session itself errors, both already handled
               // elsewhere), so only the queue path needs a restoration fallback.
+              //
+              // R2 (fix-wave regression): the stash MUST be written BEFORE calling
+              // sendTypedInput, not after. sendTypedInput can synchronously call
+              // startLiveSession, which synchronously calls abortPendingTyped for the
+              // missing-API-key / missing-Azure-key / insecure-context aborts — all of which
+              // happen INSIDE this same call, before it returns. Writing the stash after the
+              // call left it null while abortPendingTyped ran (destroying a fresh checkout's
+              // tray) and then wrote a stale stash nothing would ever clear, clobbering a later
+              // unrelated fire's tray. Stashing first and clearing on a non-dispatch keeps the
+              // stash's lifetime exactly bracketing "a queued fire is outstanding."
               const willQueue = !(providerRef.current && isLive);
-              const dispatched = sendTypedInput(userText, hint);
-              if (!dispatched) return;
               if (willQueue) pendingTrayRef.current = tray;
+              const dispatched = sendTypedInput(userText, hint);
+              if (!dispatched) { pendingTrayRef.current = null; return; }
+              // sendTypedInput's `true` means "queued (or sent)", not "still pending" — the
+              // missing-API-key / missing-Azure-key / insecure-context aborts run SYNCHRONOUSLY
+              // inside the call above (before sendTypedInput's own `return true`), and
+              // restorePendingTray already ran as part of that abort, clearing pendingTrayRef
+              // and putting the tray back with its own "kept" message. If that happened, the
+              // stash we wrote a few lines up is already gone — detect it and stop here, or
+              // this would re-claim success for a send that never left and clear the tray
+              // restorePendingTray just restored. A genuinely-queued-and-still-pending fire
+              // (mic preflight, connect throw, or the provider's own onError — all async,
+              // deferred past this synchronous block) leaves pendingTrayRef untouched here.
+              if (willQueue && pendingTrayRef.current === null) return;
               addLog('event', `Combine tray fired — ${tray.map((t) => t.sourceId).join(' + ')} → ${kind}`);
               telemetry.combineTray(tray.length, kind, true);
               setTray(clearTray());
