@@ -141,9 +141,12 @@ describe('entityToSourceId', () => {
     expect(entityToSourceId(ent('powerpoint-slide-2', true))).toBe('powerpoint');
     expect(entityToSourceId(ent('photo-1'))).toBe('photo');
   });
-  it('an artifact PART is not a source — the artifact is', () => {
-    expect(entityToSourceId(ent('artifact-a1-para-2', true))).toBeNull();
-    expect(entityToSourceId(ent('artifact-a2-field-1', true))).toBeNull();
+  it('an artifact PART stands for its parent artifact — symmetric with the program rule above, ' +
+     'and load-bearing for shift-click on artifact text: the DOM-first hit under a click on a ' +
+     'paragraph/field is the PART, so the part must resolve or the primary tray-add gesture ' +
+     'breaks (this test supersedes a prior version that pinned parts -> null)', () => {
+    expect(entityToSourceId(ent('artifact-a1-para-2', true))).toBe('a1');
+    expect(entityToSourceId(ent('artifact-a2-field-1', true))).toBe('a2');
   });
   it('a rail card is not a source — pin it first', () => {
     expect(entityToSourceId(ent('rail-explain-save-c1', true))).toBeNull();

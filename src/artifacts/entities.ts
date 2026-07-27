@@ -77,11 +77,14 @@ export function artifactEntities(state: ArtifactState, layout: Layout): SceneEnt
 // is imported from scenarios.ts, the single source of truth for the valid program list.
 export function entityToSourceId(entity: { id: string; sub?: boolean }): string | null {
   const id = String(entity.id);
-  // Artifact PARTS (paragraphs, fields) are not sources; the artifact is. `artifact-a1` has
-  // exactly two segments, `artifact-a1-para-2` has more.
+  // Artifact PARTS (paragraphs, fields) stand for their PARENT artifact — symmetric with the
+  // program rule below ("any element of the mounted program stands for its document"): any part
+  // of an artifact stands for the artifact. `artifact-a1` has exactly two segments (whole);
+  // `artifact-a1-para-2` has more (part) — the artifact id is the segment right after the
+  // `artifact-` prefix, before the part's own hyphenated suffix.
   if (id.startsWith('artifact-')) {
     const rest = id.slice('artifact-'.length);
-    return rest.includes('-') ? null : rest;
+    return rest.includes('-') ? rest.split('-')[0] : rest;
   }
   const program = PROGRAM_IDS.find((p) => id.startsWith(`${p}-`));
   return program ?? null;   // rail cards and anything else: not a source

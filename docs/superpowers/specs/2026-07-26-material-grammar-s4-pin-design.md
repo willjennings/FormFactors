@@ -152,6 +152,11 @@ truth, TDD'd:
   program (ribbon, buttons, body/canvas, cells, slides, …) stands for its document. That is what
   shipped: `entityToSourceId` matches any entity id prefixed `${programId}-`, not one designated
   "the window."
+- **AMENDED (fix-wave regression fix):** symmetric with the program rule above, ANY part of an
+  artifact (a paragraph, a widget field) also stands for the whole artifact — `artifact-a1-para-2`
+  → `a1`, not null. This supersedes the original "parts are not sources" rule: DOM-first shift-click
+  resolution on an artifact hits the part element under the pointer, so parts must resolve or the
+  primary tray-add gesture (clicking artifact text) never adds anything.
 - **everything else → null**, including rail cards. A card is not a source until it is pinned.
   That is the grammar: pin makes material, the tray combines material.
 
