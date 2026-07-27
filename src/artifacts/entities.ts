@@ -70,3 +70,23 @@ export function artifactEntities(state: ArtifactState, layout: Layout): SceneEnt
   }
   return [...wholes, ...parts];
 }
+
+// The SINGLE answer to "can this be combined?" (spec §5.1). Every combinability decision and
+// every message naming valid sources derives from this — never a hardcoded list.
+//
+// There is no program-WINDOW entity in this codebase (buildEntities mints one entity per
+// control plus sub-entities), so any element of the mounted program stands for its document:
+// the combinable unit is the doc, and shift-clicking the Save button means "this Word doc".
+const PROGRAM_IDS = ['word', 'excel', 'powerpoint', 'photo'];
+
+export function entityToSourceId(entity: { id: string; sub?: boolean }): string | null {
+  const id = String(entity.id);
+  // Artifact PARTS (paragraphs, fields) are not sources; the artifact is. `artifact-a1` has
+  // exactly two segments, `artifact-a1-para-2` has more.
+  if (id.startsWith('artifact-')) {
+    const rest = id.slice('artifact-'.length);
+    return rest.includes('-') ? null : rest;
+  }
+  const program = PROGRAM_IDS.find((p) => id.startsWith(`${p}-`));
+  return program ?? null;   // rail cards and anything else: not a source
+}

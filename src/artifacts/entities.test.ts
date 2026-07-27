@@ -124,3 +124,31 @@ describe('artifact sub-entities (paragraphs and fields)', () => {
     expect(parts.every((p) => es.indexOf(p) > es.indexOf(whole[1]))).toBe(true);
   });
 });
+
+import { entityToSourceId } from './entities';
+import { asId, type SceneEntity } from '../entities/registry';
+
+const ent = (id: string, sub = false): SceneEntity =>
+  ({ id: asId(id), title: 't', url: '', category: 'content', aliases: [], bbox: [0, 0, 0, 0], sub });
+
+describe('entityToSourceId', () => {
+  it('maps a whole artifact to its source id', () => {
+    expect(entityToSourceId(ent('artifact-a1'))).toBe('a1');
+  });
+  it('maps any program element to that program — the document is the combinable unit', () => {
+    expect(entityToSourceId(ent('word-3'))).toBe('word');
+    expect(entityToSourceId(ent('excel-cell-A3', true))).toBe('excel');
+    expect(entityToSourceId(ent('powerpoint-slide-2', true))).toBe('powerpoint');
+    expect(entityToSourceId(ent('photo-1'))).toBe('photo');
+  });
+  it('an artifact PART is not a source — the artifact is', () => {
+    expect(entityToSourceId(ent('artifact-a1-para-2', true))).toBeNull();
+    expect(entityToSourceId(ent('artifact-a2-field-1', true))).toBeNull();
+  });
+  it('a rail card is not a source — pin it first', () => {
+    expect(entityToSourceId(ent('rail-explain-save-c1', true))).toBeNull();
+  });
+  it('an unknown prefix is not a source', () => {
+    expect(entityToSourceId(ent('mystery-1'))).toBeNull();
+  });
+});
