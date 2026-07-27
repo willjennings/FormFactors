@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { toggleTray, removeTray, clearTray, canFire, type TrayMember } from './combineTray';
+import { toggleTray, removeTray, clearTray, canFire, isTrayFull, type TrayMember } from './combineTray';
 import { MAX_ARTIFACTS } from './artifactStore';
 
 const m = (sourceId: string): TrayMember =>
@@ -39,5 +39,25 @@ describe('combineTray', () => {
     expect(canFire([])).toBe(false);
     expect(canFire([m('a1')])).toBe(false);
     expect(canFire([m('a1'), m('word')])).toBe(true);
+  });
+  it('isTrayFull is false below cap', () => {
+    let t: TrayMember[] = [];
+    for (let i = 0; i < MAX_ARTIFACTS - 1; i++) t = toggleTray(t, m(`a${i}`));
+    expect(isTrayFull(t)).toBe(false);
+  });
+  it('isTrayFull is true at cap', () => {
+    let t: TrayMember[] = [];
+    for (let i = 0; i < MAX_ARTIFACTS; i++) t = toggleTray(t, m(`a${i}`));
+    expect(isTrayFull(t)).toBe(true);
+  });
+  it('full tray can still toggle off existing member (removing is not adding)', () => {
+    let t: TrayMember[] = [];
+    for (let i = 0; i < MAX_ARTIFACTS; i++) t = toggleTray(t, m(`a${i}`));
+    expect(t).toHaveLength(MAX_ARTIFACTS);
+    expect(isTrayFull(t)).toBe(true);
+    // Toggle off a member when full — should succeed since removing is not adding
+    const afterToggleOff = toggleTray(t, m('a0'));
+    expect(afterToggleOff).toHaveLength(MAX_ARTIFACTS - 1);
+    expect(afterToggleOff.map((x) => x.sourceId)).not.toContain('a0');
   });
 });

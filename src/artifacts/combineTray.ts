@@ -10,7 +10,7 @@ export type CombineTray = TrayMember[];
 
 export function toggleTray(tray: CombineTray, member: TrayMember): CombineTray {
   if (tray.some((x) => x.sourceId === member.sourceId)) return removeTray(tray, member.sourceId);
-  if (tray.length >= MAX_ARTIFACTS) return tray;
+  if (isTrayFull(tray)) return tray;
   return [...tray, member];
 }
 
@@ -25,4 +25,11 @@ export function clearTray(): CombineTray {
 /** `combine` itself refuses fewer than two sources — the fire affordance must not offer it. */
 export function canFire(tray: CombineTray): boolean {
   return tray.length >= 2;
+}
+
+/** True when the tray cannot accept another member. The UI must consult this BEFORE offering
+ *  an add, and say so when it is true — a refusal the user cannot see reads as a broken
+ *  control (the same discipline artifactStore applies with rejectedAtCap). */
+export function isTrayFull(tray: CombineTray): boolean {
+  return tray.length >= MAX_ARTIFACTS;
 }
