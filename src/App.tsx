@@ -21,6 +21,7 @@ import { createAzureRealtimeProvider } from './voice/azure';
 import { newContextToken } from './voice/sentinel';
 import {
   PROGRAMS,
+  PROGRAM_IDS,
   DEFAULT_PROGRAM,
   getProgram,
   tasksForProgram,
@@ -2999,7 +3000,18 @@ export default function App() {
       // windows never route through it. Only consumes the click when the entity actually
       // resolves to a source — everything else falls through to normal pointing.
       if (e.shiftKey && found) {
-        const sourceId = entityToSourceId(found);
+        // I2 (final review, OBSERVED in the Task 10 drive): `found` is a plain array-order
+        // bbox match, and artifacts always precede rail cards in composeEntities — on a
+        // cluttered desk with overlapping bboxes, array order has nothing to do with topmost
+        // paint, so `found` can silently resolve to an entity the user did not visually click
+        // (shift-clicking a rail card over the desk added an overlapping artifact to the tray).
+        // Every other consumer of `found` keeps the array-order resolution — that's a global
+        // resolution question deferred by explicit ruling — but this branch MUTATES STATE on
+        // the result, so it alone resolves DOM-first: the stamped `data-entity-id` ancestor of
+        // the actual click target wins, and `found` is only a fallback when nothing is stamped.
+        const stampedId = (e.target as HTMLElement).closest?.<HTMLElement>('[data-entity-id]')?.dataset?.entityId;
+        const shiftTarget = (stampedId && entityById(entitiesRef.current, stampedId as EntityId)) || found;
+        const sourceId = entityToSourceId(shiftTarget);
         if (sourceId) {
           // A toggle that REMOVES an already-present member must still work at the cap —
           // removing is not adding. Only an add that would grow the tray past MAX_ARTIFACTS
@@ -3012,8 +3024,20 @@ export default function App() {
             telemetry.combineTray(tray.length, 'add', false);
             return;
           }
-          setTray((t) => toggleTray(t, { entityId: String(found.id), sourceId,
-            title: displayName(found), color: CATEGORY_COLORS[found.category] }));
+          // I5 (ruled: fix): the chip and the user turn must name what actually combines — the
+          // SOURCE DOCUMENT — not the clicked element. `displayName(shiftTarget)` names the
+          // element (shift-clicking Save produced a chip reading "Word Ribbon"; a cell click
+          // read "Cell A3" while the fence said `sources=["excel"]`). A program-id source is
+          // titled from the program's own display name (`label` — the same field the program
+          // dropdown and the reconnect log already use), never the clicked entity. An
+          // artifact-id source is titled from the ARTIFACT STATE, not the clicked entity, so a
+          // part-click (e.g. a paragraph) still names the artifact, not "Paragraph 2 — ...".
+          const isProgramSource = (PROGRAM_IDS as readonly string[]).includes(sourceId);
+          const sourceTitle = isProgramSource
+            ? getProgram(sourceId as ProgramId).label
+            : artifactState.artifacts.find((a) => a.id === sourceId)?.title ?? displayName(shiftTarget);
+          setTray((t) => toggleTray(t, { entityId: String(shiftTarget.id), sourceId,
+            title: sourceTitle, color: CATEGORY_COLORS[shiftTarget.category] }));
           return;
         }
       }
