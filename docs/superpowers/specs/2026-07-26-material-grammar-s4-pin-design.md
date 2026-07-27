@@ -148,7 +148,10 @@ includes artifact ids), pointable (`artifactEntities`), paragraph-addressable an
 `entityToSourceId(entity): string | null` in `src/artifacts/entities.ts` — the single source of
 truth, TDD'd:
 - an artifact window entity → strip the prefix (`artifact-a1` → `a1`)
-- the program window entity → the active program's id
+- **AMENDED (final review):** there is no program-window entity — ANY element of the mounted
+  program (ribbon, buttons, body/canvas, cells, slides, …) stands for its document. That is what
+  shipped: `entityToSourceId` matches any entity id prefixed `${programId}-`, not one designated
+  "the window."
 - **everything else → null**, including rail cards. A card is not a source until it is pinned.
   That is the grammar: pin makes material, the tray combines material.
 
@@ -189,11 +192,17 @@ halves are wrong against current code**, and the corrections are part of this de
 
 A non-combinable shift-click is a no-op for the tray and falls through to normal behaviour.
 
-**Tray UI:** a distinct row in the omnibox above the grounding chips, each member a removable chip
-(`hit-24` ×). Rendered in every register — like pin, the tray is material, not scaffolding.
+**Tray UI: AMENDED (final review)** — a distinct row rendered above the omnibox form (not "above
+the grounding chips": the grounding chips are an inline child of the form row itself, so "above
+the grounding chips" described a relationship that doesn't hold — the tray row sits above the
+whole form, chips included), each member a removable chip (`hit-24` ×). Rendered in every
+register — like pin, the tray is material, not scaffolding.
 
-**Fire:** with ≥2 members, a chip appears — `combine these → doc` / `→ widget`. Quick-fire-able by
-digit, consistent with the existing slippy pattern.
+**Fire:** with ≥2 members, a chip appears — `combine these → doc` / `→ widget`. **AMENDED (final
+review):** digit quick-fire for tray chips was silently dropped at planning time and is NOT
+shipped in S4 — deferred. The quick-fire digit surface (1-9) is owned by suggestion chips
+(`src/shell/quickFire.ts`); extending it to tray chips as a second consumer of the same digits is
+future work, not assumed here.
 
 ### 5.4 Firing — a fenced handoff, not a bypass
 
