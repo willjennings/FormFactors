@@ -1796,6 +1796,7 @@ export default function App() {
         doc = { ...doc, text: reviseTa.value };
         mockDocRef.current = doc;
         setMockDoc(doc);
+        journalAppend('workspace', { type: 'doc.set', program: activeProgramRef.current ?? activeProgram, doc });
       }
       const cs = Number(a.charStart), ce = Number(a.charEnd);
       if (doc.kind !== 'word' || !Number.isFinite(cs) || !Number.isFinite(ce)) {
