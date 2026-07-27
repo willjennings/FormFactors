@@ -115,3 +115,12 @@ export function visibleCards(s: RailState): { card: RailCard; index: number; mod
   }
   return out.slice(0, 4);
 }
+
+/** Which rail is actually on screen: the respond rail wins, else the projected teaching rail.
+ *  Extracted so RailPanel and railEntities cannot disagree about what is being rendered —
+ *  an entity for a card the panel is not showing would be a lie about the screen. */
+export function projectedRailState(state: RailState, teachingRail: Rail | null): RailState | null {
+  if (state.rail) return state;
+  if (teachingRail) return { rail: teachingRail, openWhy: null, flipped: [] };
+  return null;
+}

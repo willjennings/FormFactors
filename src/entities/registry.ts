@@ -29,6 +29,12 @@ type Layout = { items: { id: string; bbox: LayoutBox }[] } | null;
 const toTuple = (b: LayoutBox | undefined): [number, number, number, number] =>
   b ? [b.ymin, b.xmin, b.ymax, b.xmax] : [0, 0, 0, 0];
 
+// ENTITY ID NAMESPACE — three prefixes, one flat scene:
+//   `<programId>-…`  program controls and their sub-entities (buildEntities, below)
+//   `artifact-…`     artifact windows and their paragraphs/fields (artifacts/entities.ts)
+//   `rail-…`         response-rail cards (rail/railEntities.ts)
+// Anything added here must not collide with those; resolveEchoedTarget searches the whole set.
+
 /** Single source for the scene: one entity per program element. Pure & derived. */
 export function buildEntities(program: Program, doc: MockDoc, perceived: PerceivedCache, layout: Layout): SceneEntity[] {
   const bboxOf = (id: string) => toTuple(layout?.items.find((it) => it.id === id)?.bbox);
