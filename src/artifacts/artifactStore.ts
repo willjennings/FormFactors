@@ -15,6 +15,9 @@ export function reduce(state: ArtifactState, event: ArtifactEvent): ArtifactStat
       if (state.artifacts.length >= MAX_ARTIFACTS) return { ...state, rejectedAtCap: state.rejectedAtCap + 1 };
       const artifact: Artifact = {
         ...event.artifact,
+        // Always `a${n}`, never hyphenated — entityToSourceId's whole-vs-part split
+        // (`artifact-a1` has exactly two `-`-segments, `artifact-a1-para-2` has more)
+        // depends on the id itself containing no `-`.
         id: `a${state.nextId}`,
         rev: 1,
         // The creating meta reuses createdAt — the reducer must not read the clock.

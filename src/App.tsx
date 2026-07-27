@@ -633,6 +633,30 @@ export default function App() {
   const [artifactState, artifactDispatch] = useReducer(artifactReduce, undefined, initialArtifactState);
   const artifactStateRef = useRef(artifactState);
   useEffect(() => { artifactStateRef.current = artifactState; }, [artifactState]);
+  // C1 (final review): the tray is otherwise only cleared on program swap, on fire, and by
+  // explicit user removal — NOTHING reconciles it against artifact deletion. `artifact.close`
+  // deletes outright (artifactStore.ts has no soft-delete), so a tray chip naming a closed
+  // artifact would sit there as a live-looking chip with a dead id until fired — at which point
+  // the fenced `[COMBINE REQUEST]` would name that dead id with machine authority, handing the
+  // model an honest rejection to guess around instead of the id it should have named. Prune here.
+  // A STRING signature of the artifact ids (not the artifacts array) is the effect dependency —
+  // an array/object identity is fresh every render and would re-run this every commit.
+  const artifactIdSignature = artifactState.artifacts.map((a) => a.id).join(',');
+  useEffect(() => {
+    const liveIds = new Set(artifactIdSignature ? artifactIdSignature.split(',') : []);
+    setTray((t) => {
+      // Artifact ids are always `a${n}` (artifactStore.ts) — a program id (word/excel/…) never
+      // matches, so this only ever targets artifact-sourced members, never program members.
+      const stale = t.filter((m) => /^a\d+$/.test(m.sourceId) && !liveIds.has(m.sourceId));
+      if (!stale.length) return t;
+      // The prune must be VISIBLE — a silently vanishing chip is still a silent state change.
+      for (const m of stale) {
+        addLog('info', `Tray: "${m.title}" was closed — removed from the tray.`);
+        emitFeedback({ outcome: 'error', label: `Removed from tray — ${m.title} was closed` });
+      }
+      return t.filter((m) => !stale.includes(m));
+    });
+  }, [artifactIdSignature]);
   // Measured bboxes of mounted ArtifactWindow content regions, keyed by `artifact-${id}` —
   // updateLayout fills this in (below) so artifactEntities() can produce real, pointable bboxes.
   const artifactLayoutRef = useRef<Record<string, [number, number, number, number]>>({});
