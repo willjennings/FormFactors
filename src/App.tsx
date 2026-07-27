@@ -705,7 +705,18 @@ export default function App() {
   // debounced and fail-soft; compaction keeps the on-disk journal within JOURNAL_CAP.
   const journalRef = useRef<JournalEntry[]>(journalBoot.entries);
   const journalSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Task 8 drive finding (J-ERASE-RACE, narrower variant than Task 7's): a `useEffect`-driven
+  // journalAppend (e.g. the dials effect) is deferred until after paint. If New Desk's erase is
+  // clicked in the gap between a state-changing click and that deferred effect actually running,
+  // handleNewDesk's clear-then-reload can complete BEFORE the effect fires — and the effect then
+  // calls journalAppend anyway, re-populating journalRef and re-arming the save timer after the
+  // erasure, resurrecting the just-erased edit through the reload. journalErasedRef closes this:
+  // once New Desk has fired, every append (however it was scheduled) is a no-op, permanently,
+  // for the rest of this page's lifetime — there is no route back from an erased desk except a
+  // real reload, which resets this ref along with everything else.
+  const journalErasedRef = useRef(false);
   const journalAppend = (store: string, event: unknown, label?: string) => {
+    if (journalErasedRef.current) return;
     journalRef.current = appendEntry(journalRef.current, store, event, Date.now(), label);
     if (journalSaveTimer.current) clearTimeout(journalSaveTimer.current);
     journalSaveTimer.current = setTimeout(() => {
@@ -3869,7 +3880,12 @@ export default function App() {
     // Erasure must beat the pagehide flush: reload() fires pagehide, whose listener would
     // otherwise write journalRef straight back over the cleared storage — resurrecting the
     // desk the user just confirmed erasing. Empty the in-memory journal AND disarm the
-    // pending debounce so the flush has nothing to say.
+    // pending debounce so the flush has nothing to say. journalErasedRef goes first (Task 8
+    // drive finding, J-ERASE-RACE): it must be set before anything else so a journalAppend
+    // call still in flight from a just-clicked edit's deferred effect (queued before this
+    // click, not yet run) finds the desk already erased and no-ops, instead of resurrecting
+    // the edit by re-arming the timer after this function has already cleared everything.
+    journalErasedRef.current = true;
     if (journalSaveTimer.current) { clearTimeout(journalSaveTimer.current); journalSaveTimer.current = null; }
     journalRef.current = [];
     clearJournal();

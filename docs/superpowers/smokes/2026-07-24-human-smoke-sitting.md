@@ -76,6 +76,20 @@ live-session shape of the offline hint-loss finding — and cannot be driven key
 | M4 | Pin at the 6-artifact cap during a live session | Honest refusal, nothing evicted | pending |
 | M5 | Shift-click a rail card | Nothing enters the tray, and the model is not told anything happened | pending |
 
+## Part 7 — Persisted journal, live session (key required)
+
+Owed from the 2026-07-27-persisted-journal plan (Task 8): the keyless browser drive confirmed
+J1-J9 plus J-DEV/J-FLUSH/J-ERASE-RACE/J-ACCUM against the real DOM with no model involved (demo
+query params only — see `task-8-report.md`). These three are the model-facing half — the restore
+hints a live model actually reads, and the one journaling path (`onToolCall`) no demo replay
+exercises — and cannot be driven keyless.
+
+| # | Test | Verifies | Result |
+| --- | --- | --- | --- |
+| P1-M1 | Reload into a restored desk (material already on it from a prior session), then start a live session | The model's `[ARTIFACTS]`/`[CORPUS]` hints describe the restored material correctly, not just what was created this session | pending |
+| P1-M2 | Combine and refine an artifact via live tool calls (not the `?artifacts=1` demo), then reload | The live calls journal exactly like the demo's scripted ones do, and survive a reload — the `onToolCall` journaling path has never been exercised, only the demo-replay path that calls the same dispatchers directly | pending |
+| P1-M3 | Quota-ish stress: run a long live session with many edits | The journal compacts (per `JOURNAL_CAP`) without visible jank — the >500-entry compaction path is unit-tested and its entry-count bound was confirmed sane after a short session (Task 8), but never driven at real scale in a live session | pending |
+
 ## Log
 
 ### Part 1 — Register system (keyless), 2026-07-24, HEAD ac5238e
