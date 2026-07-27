@@ -2243,25 +2243,39 @@ export default function App() {
   // R1 TYPED PARITY: a typed command rides the exact same pipeline as speech —
   // local grammar first (deixis binds to the pointer at type-time, repair, numbers),
   // then a forced model turn. No session? Stash the text and auto-start one.
-  const sendTypedInput = (raw: string) => {
+  //
+  // `hint` is an optional fenced context line (e.g. the combine tray's machine-precise source
+  // list) that must reach the model ALONGSIDE this turn, never as a bare send of its own: this
+  // repo already fixed a race (2026-07-18) where a hint flushed bare immediately before queued
+  // user text could arrive out of order server-side — the fix was to merge the hint into the
+  // SAME flushed turn. Live, two synchronous provider calls in order preserve that order by
+  // construction; pre-open, the hint is queued and merged into the flush text below (same
+  // mechanism as the type-time deixis hint further up this file).
+  // Returns whether the turn was genuinely dispatched (sent live, or queued for onOpen) — a
+  // caller that reports success or clears state on this send must gate on the return value,
+  // not assume it: a pre-open bare send silently no-ops (see the comment on the queue branch).
+  const sendTypedInput = (raw: string, hint?: string): boolean => {
     const text = parseTypedSubmit(raw);
-    if (!text) return;
+    if (!text) return false;
     lastInputModalityRef.current = 'typed';
     addLog('event', `⌨ ${text}`);
     setLiveTranscription(text);
     processInputTranscript(text);
     if (providerRef.current && isLive) {
+      if (hint) providerRef.current.sendTextHint(hint);
       providerRef.current.sendUserText(text);
     } else {
       // R1 #2: no OPEN session (none, or one still connecting — providerRef is set before
       // connect resolves, and a pre-open sendUserText is silently swallowed by the provider's
       // null-session optional chain). Queue instead; onOpen flushes. Multiple submits join.
       pendingTypedRef.current = pendingTypedRef.current ? `${pendingTypedRef.current}\n${text}` : text;
+      if (hint) pendingHintRef.current = pendingHintRef.current ? `${pendingHintRef.current}\n${hint}` : hint;
       if (!connectInFlightRef.current && !providerRef.current) {
         setIsConnecting(true);
         startLiveSession();
       }
     }
+    return true;
   };
 
   // Quick-fire keydown: window-level so it works wherever the pointer is; guarded off all
@@ -4020,8 +4034,18 @@ export default function App() {
               // The fenced hint carries the exact ids; the user turn carries the intent. Firing
               // does NOT author content — the model reads the named sources and writes the
               // synthesis itself, so authorship stays honest.
-              providerRef.current?.sendTextHint(hint);
-              providerRef.current?.sendUserText(userText);
+              //
+              // Routed through sendTypedInput, NOT sent bare via providerRef directly: the tray
+              // fills fully offline (shift-click has no session gate), and providerRef.current
+              // is null pre-connect — a bare sendTextHint/sendUserText would silently no-op
+              // (sendTypedInput's own comment documents this exact failure mode), discarding the
+              // user's selection while this handler went on to claim success. sendTypedInput
+              // already solves it: live, it sends now; pre-open, it queues + auto-connects and
+              // the onOpen flush (above) merges the hint into the same turn. Only report success
+              // and clear the tray once dispatched is true — i.e. the request is genuinely on
+              // its way, sent or queued, never claimed on a no-op.
+              const dispatched = sendTypedInput(userText, hint);
+              if (!dispatched) return;
               addLog('event', `Combine tray fired — ${tray.map((t) => t.sourceId).join(' + ')} → ${kind}`);
               telemetry.combineTray(tray.length, kind, true);
               setTray(clearTray());
