@@ -110,7 +110,8 @@ import { idleExceeded } from './shell/idle';
 import { seedCorpus } from './artifacts/seeds';
 import { saveAndLoad } from './artifacts/corpus';
 import { serializeCorpus, serializeArtifacts } from './artifacts/serialize';
-import { initialArtifactState, reduce as artifactReduce } from './artifacts/artifactStore';
+import { initialArtifactState, reduce as artifactReduce, MAX_ARTIFACTS } from './artifacts/artifactStore';
+import { pinEventFor } from './artifacts/pin';
 import { COMBINE_TOOL, READ_SOURCES_TOOL, validateCombineCall, sourceDetail, validSourceIds } from './artifacts/combineTools';
 import { REFINE_TOOL, validateRefineCall, describePatch } from './artifacts/refineTools';
 import { feedsSummary } from './artifacts/feeds';
@@ -4006,6 +4007,36 @@ export default function App() {
             teachingRail={teachingRail}
             onEvent={railDispatch}
             onShowMe={(id) => { telemetry.guidance('show_me', { taskKey: railState.rail?.seq }); teachingDispatchRef.current?.({ type: 'teach.highlight', entityId: id as EntityId }); }}
+            onPin={(index) => {
+              const projected = projectedRailState(railState, teachingRail);
+              const card = projected?.rail?.cards[index];
+              if (!card) return;
+              const v = pinEventFor(card, projected!.rail!.seq, Date.now());
+              if ('error' in v) {
+                addLog('info', `Pin refused — ${v.error}`);
+                emitFeedback({ outcome: 'error', label: v.error });
+                telemetry.pin(card.t, undefined, v.error);
+                return;
+              }
+              // SIMULATE through the real reducer first: at the cap the store refuses, and a
+              // refusal the user cannot see reads as a broken button. Reject-never-evict means
+              // the honest outcome is a visible "close one first", not silence.
+              const next = artifactReduce(artifactStateRef.current, v.event);
+              if (next.rejectedAtCap > artifactStateRef.current.rejectedAtCap) {
+                artifactDispatch(v.event);            // still dispatch: the counter must be real
+                artifactStateRef.current = next;
+                addLog('info', `Pin refused — the desk already holds ${MAX_ARTIFACTS} artifacts.`);
+                emitFeedback({ outcome: 'error', label: `Can't pin — close an artifact first (${MAX_ARTIFACTS} open)` });
+                telemetry.pin(card.t, undefined, 'at-cap');
+                return;
+              }
+              artifactDispatch(v.event);
+              artifactStateRef.current = next;
+              const created = next.artifacts[next.artifacts.length - 1];
+              addLog('info', `Pinned ${created.id} — "${created.title}"`);
+              emitFeedback({ outcome: 'committed', verbClass: 'create', label: `Pinned: ${created.title}` });
+              telemetry.pin(card.t, created.id);
+            }}
           />
 
 

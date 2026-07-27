@@ -6,10 +6,10 @@ import { Button } from '../ui/Button';
 const KICKER: Record<RailCard['t'], string> = { do: 'DO', answer: 'ANSWER', orient: 'ORIENT', check: 'CHECK', caution: 'CAUTION', concept: 'CONCEPT', try: 'TRY', recap: 'RECAP' };
 
 /** One card: kicker → action line (bold the THING) → result line → quiet why?/show-me. */
-export function CardView({ card, index, mode, entityDomId, whyOpen, flipped, onWhy, onFlip, onShowMe, onCheckConfirm }: {
+export function CardView({ card, index, mode, entityDomId, whyOpen, flipped, onWhy, onFlip, onShowMe, onCheckConfirm, onPin }: {
   card: RailCard; index: number; mode: 'stub' | 'active' | 'dimmed'; entityDomId: string;
   whyOpen: boolean; flipped: boolean;
-  onWhy: () => void; onFlip: () => void; onShowMe: () => void; onCheckConfirm: () => void;
+  onWhy: () => void; onFlip: () => void; onShowMe: () => void; onCheckConfirm: () => void; onPin: () => void;
 }) {
   if (mode === 'stub') {
     return (
@@ -67,12 +67,15 @@ export function CardView({ card, index, mode, entityDomId, whyOpen, flipped, onW
           )}
         </>
       )}
-      {(card.why || (card.entityId && card.band === 'solid')) && (
-        <div className="flex items-center gap-3 justify-end mt-1">
-          {card.why && <Button variant="ghost" size="chip" onClick={onWhy}>why?</Button>}
-          {card.entityId && card.band === 'solid' && <Button variant="ghost" size="chip" onClick={onShowMe} className="text-[var(--accent-color)]">show me</Button>}
-        </div>
-      )}
+      {/* Pin is ALWAYS shown — it is durable-material, not scaffolding, so no register gate
+          applies and it does not depend on the card carrying a why or an entity. */}
+      <div className="flex items-center gap-3 justify-end mt-1">
+        {card.why && <Button variant="ghost" size="chip" onClick={onWhy}>why?</Button>}
+        {card.entityId && card.band === 'solid' && <Button variant="ghost" size="chip" onClick={onShowMe} className="text-[var(--accent-color)]">show me</Button>}
+        <button aria-label="Pin this card as an artifact" title="Pin as an artifact"
+          className="hit-24 text-[10px] font-mono text-[var(--text-secondary)] hover:text-[var(--accent-color)]"
+          onClick={onPin}>pin</button>
+      </div>
       {whyOpen && card.why && <p className="text-[11px] text-[var(--text-secondary)] mt-1 border-t border-[var(--card-border)] pt-1">{card.why}</p>}
     </div>
   );

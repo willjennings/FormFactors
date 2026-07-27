@@ -10,9 +10,9 @@ import { Tip } from '../ui/Tooltip';
 /** The floating response rail (shell spec §4): right side, draggable, collapsible to a
  *  pill. Renders the respond rail when present, else the projected teaching rail.
  *  One grammar, one renderer. Chrome stops pointer-down (deixis painter lives on main). */
-export function RailPanel({ state, teachingRail, onEvent, onShowMe }: {
+export function RailPanel({ state, teachingRail, onEvent, onShowMe, onPin }: {
   state: RailState; teachingRail: Rail | null;
-  onEvent: (e: RailEvent) => void; onShowMe: (entityId: string) => void;
+  onEvent: (e: RailEvent) => void; onShowMe: (entityId: string) => void; onPin: (index: number) => void;
 }) {
   const [pos, setPos] = useState({ x: -16, y: 56 });   // offsets from top-right
   const [collapsed, setCollapsed] = useState(false);
@@ -75,6 +75,7 @@ export function RailPanel({ state, teachingRail, onEvent, onShowMe }: {
           onFlip={() => { if (!isProjection) onEvent({ type: 'user.flip', index }); }}
           onShowMe={() => card.entityId && onShowMe(card.entityId)}
           onCheckConfirm={() => onEvent({ type: 'user.checkConfirm' })}
+          onPin={() => onPin(index)}
         />
       ))}
       {projected.rail.guideLine && (

@@ -59,7 +59,8 @@ export type TelemetryEvent =
   | { t: number; type: 'mission_step_done'; key: string; stepKey: string }
   | { t: number; type: 'mission_complete'; key: string; run: number; durationMs: number; steps: number }
   | { t: number; type: 'mission_abandoned'; key: string; stepIndex: number }
-  | { t: number; type: 'register_switch'; from: string; to: string; midSession: boolean };
+  | { t: number; type: 'register_switch'; from: string; to: string; midSession: boolean }
+  | { t: number; type: 'pin'; cardType: string; artifactId?: string; error?: string };
 
 export function detectDevice(): DeviceInfo {
   const width = typeof window !== 'undefined' ? window.innerWidth : 0;
@@ -124,6 +125,7 @@ class Telemetry {
   missionComplete(key: string, run: number, durationMs: number, steps: number) { this.push({ type: 'mission_complete', key, run, durationMs, steps }); }
   missionAbandoned(key: string, stepIndex: number) { this.push({ type: 'mission_abandoned', key, stepIndex }); }
   registerSwitch(from: string, to: string, midSession: boolean) { this.push({ type: 'register_switch', from, to, midSession }); }
+  pin(cardType: string, artifactId?: string, error?: string) { this.push({ type: 'pin', cardType, artifactId, error }); }
 
   /** Aggregated, human-readable summary for the live readout + export. */
   metrics() {
