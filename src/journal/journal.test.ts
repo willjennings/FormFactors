@@ -1,0 +1,37 @@
+import { describe, it, expect } from 'vitest';
+import { appendEntry, replay, type JournalRegistry, type StoreSpec } from './journal';
+
+// A tiny counter store — enough to prove the journal folds through reducers it does not know.
+type CounterEvent = { type: 'add'; n: number } | { type: 'counter.restore'; value: number };
+const counter: StoreSpec<number, CounterEvent> = {
+  initial: () => 0,
+  reduce: (s, e) => (e.type === 'add' ? s + e.n : e.value),
+  snapshotEvent: (s) => ({ type: 'counter.restore', value: s }),
+};
+const registry: JournalRegistry = { counter };
+
+describe('appendEntry', () => {
+  it('appends with a monotonic 1-based seq and never mutates the input', () => {
+    const a = appendEntry([], 'counter', { type: 'add', n: 1 }, 1000);
+    const b = appendEntry(a, 'counter', { type: 'add', n: 2 }, 2000, 'second');
+    expect(a).toHaveLength(1);
+    expect(b.map((e) => e.seq)).toEqual([1, 2]);
+    expect(b[1]).toEqual({ seq: 2, t: 2000, store: 'counter', event: { type: 'add', n: 2 }, label: 'second' });
+  });
+});
+
+describe('replay', () => {
+  it('folds each entry through its store reducer', () => {
+    let j = appendEntry([], 'counter', { type: 'add', n: 2 }, 1);
+    j = appendEntry(j, 'counter', { type: 'add', n: 3 }, 2);
+    expect(replay(j, registry)).toEqual({ counter: 5 });
+  });
+  it('an empty journal yields every store initial', () => {
+    expect(replay([], registry)).toEqual({ counter: 0 });
+  });
+  it('SKIPS unknown store keys — a newer build\'s journal must not brick this one', () => {
+    let j = appendEntry([], 'counter', { type: 'add', n: 2 }, 1);
+    j = appendEntry(j, 'mystery', { type: 'whatever' }, 2);
+    expect(replay(j, registry)).toEqual({ counter: 2 });
+  });
+});
