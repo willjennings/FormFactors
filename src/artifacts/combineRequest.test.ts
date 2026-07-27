@@ -34,4 +34,14 @@ describe('buildCombineRequest', () => {
     expect(hint).toContain('sources=["a1","word"]');
     expect(userText).toBe('Combine B and A into a doc.');
   });
+
+  it('zero members produces a well-formed sentence (programming error guard)', () => {
+    const { userText } = buildCombineRequest([], 'doc');
+    expect(userText).toBe('Combine the selected items into a doc.');
+  });
+
+  it('one member reads naturally', () => {
+    const { userText } = buildCombineRequest([m('a1', 'Budget')], 'widget');
+    expect(userText).toBe('Combine Budget into a widget.');
+  });
 });
