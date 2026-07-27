@@ -59,6 +59,23 @@ but has never been seen against a live model.
 | S6 | Refine a feed-bound widget field's value | Honest refusal naming the feed, offering the rename | pending |
 | S7 | Start editing a paragraph, then ask the agent to revise the same artifact before committing | Conflict banner appears, draft preserved, second commit applies | pending |
 
+## Part 6 — Material grammar: rail cards, pin, combine tray (key required)
+
+Owed from the 2026-07-27 material-grammar-s4-pin plan (Task 10): the keyless browser drive
+exercised every reducer, entity id, and UI seam through scripted (`?rail=1` / `?artifacts=1`)
+paths and confirmed R1-R5, P1-P5, T1-T7 and the five review-flagged items all pass against the
+real DOM (see `task-10-report.md`). These five are the model-facing half — voice grounding to a
+card, an agent actually calling `combine` with UI-chosen ids rather than guessed ones, and the
+live-session shape of the offline hint-loss finding — and cannot be driven keyless.
+
+| # | Test | Verifies | Result |
+| --- | --- | --- | --- |
+| M1 | Fire the tray with two sources | The model calls `combine` with exactly those ids, not re-guessed ones | pending |
+| M2 | Point at "the caution card" by voice | Grounds to the right card | pending |
+| M3 | Pin a card, then refine the resulting artifact by voice | The full loop: ask → answer → pin → refine | pending |
+| M4 | Pin at the 6-artifact cap during a live session | Honest refusal, nothing evicted | pending |
+| M5 | Shift-click a rail card | Nothing enters the tray, and the model is not told anything happened | pending |
+
 ## Log
 
 ### Part 1 — Register system (keyless), 2026-07-24, HEAD ac5238e
