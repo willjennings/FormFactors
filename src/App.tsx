@@ -93,11 +93,13 @@ import { serializeSketch } from './sketch/serialize';
 import { buildSketchDemo } from './sketch/demo';
 import { BEAUTIFY_TOOL, validateBeautifyCall } from './sketch/beautify';
 import { BeautifyCard } from './sketch/BeautifyCard';
-import { initialRailState, reduceRail, railComplete, type RailEvent, type RailState } from './rail/railStore';
+import { initialRailState, reduceRail, railComplete, projectedRailState, type RailEvent, type RailState } from './rail/railStore';
 import { respondCallToRail } from './rail/respondCallToRail';
 import { buildRailDemo } from './rail/demoRail';
 import { projectTeaching } from './rail/projectTeaching';
 import { RailPanel } from './rail/RailPanel';
+import { railEntities } from './rail/railEntities';
+import type { Rail } from './rail/types';
 import { snapshotNode, makeThrottle } from './vision/snapshotNode';
 import { parseTypedSubmit } from './input/typedInput';
 import type { InputModality } from './telemetry';
@@ -627,10 +629,14 @@ export default function App() {
   // Measured bboxes of mounted ArtifactWindow content regions, keyed by `artifact-${id}` —
   // updateLayout fills this in (below) so artifactEntities() can produce real, pointable bboxes.
   const artifactLayoutRef = useRef<Record<string, [number, number, number, number]>>({});
+  // Measured bboxes of mounted rail cards, keyed by `rail-<slug>-cN` — same contract as
+  // artifactLayoutRef, filled by updateLayout below.
+  const railLayoutRef = useRef<Record<string, [number, number, number, number]>>({});
   // Every buildEntities( call site composes through here — kept in one place deliberately so
   // artifact entities (pointable windows) never drift out of sync with the program's own scene.
   const composeEntities = (built: SceneEntity[]): SceneEntity[] =>
-    [...built, ...artifactEntities(artifactStateRef.current, artifactLayoutRef.current)];
+    [...built, ...artifactEntities(artifactStateRef.current, artifactLayoutRef.current),
+     ...railEntities(projectedRailState(railStateRef.current, teachingRailRef.current), railLayoutRef.current)];
   // Undo stack: pre-commit mementos. Doc entries restore a snapshot (applyAction is pure);
   // artifact entries revert to a revision — which the store records as a NEW revision, so
   // undoing is itself undoable and nothing is ever erased.
@@ -713,6 +719,11 @@ export default function App() {
   // Plan 2: stale-closure-free reads for the click gate (Contract A) + hover handler (Contract B).
   const teachingSnapshotRef = useRef<TeachingState | null>(null);
   useEffect(() => { teachingSnapshotRef.current = teachingSnapshot; }, [teachingSnapshot]);
+  // Projected teaching rail, mirrored into a ref the same way artifactStateRef is — composeEntities
+  // runs outside React render (from updateLayout, an effect callback) and must not read state
+  // directly, only refs kept in sync by effects.
+  const teachingRailRef = useRef<Rail | null>(null);
+  useEffect(() => { teachingRailRef.current = teachingSnapshot ? projectTeaching(teachingSnapshot) : null; }, [teachingSnapshot]);
   const annotationDispatchRef = useRef<((e: AnnotationEvent) => void) | null>(null);
   const [annotationSnapshot, setAnnotationSnapshot] = useState<AnnotationState | null>(null);
 
@@ -924,6 +935,22 @@ export default function App() {
     }
     artifactLayoutRef.current = artifactLayout;
 
+    // Rail cards: measured unconditionally too (the rail floats independently of the program
+    // window, same as artifacts) so railEntities() can produce real, pointable bboxes.
+    const railEls = Array.from(main.querySelectorAll<HTMLElement>('[data-entity-id^="rail-"]'));
+    const railLayout: Record<string, [number, number, number, number]> = {};
+    for (const el of railEls) {
+      const htmlEl = el as HTMLElement;
+      const b = htmlEl.getBoundingClientRect();
+      railLayout[htmlEl.dataset.entityId!] = [
+        ((b.top - mainRect.top) / mainRect.height) * 1000,
+        ((b.left - mainRect.left) / mainRect.width) * 1000,
+        ((b.bottom - mainRect.top) / mainRect.height) * 1000,
+        ((b.right - mainRect.left) / mainRect.width) * 1000,
+      ];
+    }
+    railLayoutRef.current = railLayout;
+
     if (!winEl) {
       // Window is closed — zero-bbox degradation so entities/overlays render nothing honestly.
       setMainSize({ width: mainRect.width, height: mainRect.height });
@@ -986,7 +1013,13 @@ export default function App() {
   // `setEntities`/`setLayoutBounds`/`setMainSize`, none of which feed back into this signature,
   // so this cannot retrigger itself.
   const artifactRevSignature = artifactState.artifacts.map((a) => `${a.id}:${a.rev}`).join(',');
-  useEffect(() => { updateLayout(); }, [artifactRevSignature, updateLayout]);
+  // Rail cards are entities, so the scene must be re-measured whenever the rail changes —
+  // otherwise the registry keeps describing cards that `rail.set` has already replaced. Same
+  // failure the artifact revise core shipped and had to fix: state moved, scene never did.
+  // A STRING signature, not the state object: `updateLayout` calls `setEntities`, so a
+  // fresh-identity dependency recomputed every render would re-render forever.
+  const railSignature = `${railState.rail?.seq ?? ''}:${railState.rail?.cards.length ?? 0}:${railState.rail?.activeIndex ?? -1}`;
+  useEffect(() => { updateLayout(); }, [artifactRevSignature, railSignature, updateLayout]);
 
   // Mount/reattach observers — re-runs when windowOpen flips so the new .program-window
   // element (which the old observer never saw) gets observed immediately on reopen.

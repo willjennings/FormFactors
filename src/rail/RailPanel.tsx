@@ -1,8 +1,9 @@
 import React, { useRef, useState } from 'react';
 import { X, MessageSquare, GripHorizontal } from 'lucide-react';
 import type { Rail } from './types';
-import { visibleCards, type RailState, type RailEvent } from './railStore';
+import { visibleCards, projectedRailState, type RailState, type RailEvent } from './railStore';
 import { CardView } from './CardView';
+import { railSlug } from './railEntities';
 import { Button } from '../ui/Button';
 import { Tip } from '../ui/Tooltip';
 
@@ -18,10 +19,7 @@ export function RailPanel({ state, teachingRail, onEvent, onShowMe }: {
   const drag = useRef<{ sx: number; sy: number; start: { x: number; y: number } } | null>(null);
 
   const respond = state.rail;
-  const projected: RailState | null = respond
-    ? state
-    : teachingRail ? { rail: teachingRail, openWhy: null, flipped: [] as number[] }
-    : null;
+  const projected = projectedRailState(state, teachingRail);
   if (!projected?.rail) return null;
   const isProjection = !respond;
   const cards = visibleCards(projected);
@@ -38,7 +36,13 @@ export function RailPanel({ state, teachingRail, onEvent, onShowMe }: {
   }
   return (
     <div
-      onPointerDown={(e) => e.stopPropagation()}
+      onPointerDown={(e) => {
+        // Card CONTENT must reach <main>'s hit-test so a card can be pointed at and
+        // shift-clicked; the panel's own chrome (drag bar, buttons) must not. Same carve-out
+        // ArtifactWindow uses: shell stops pointing UNLESS the target is inside a data-entity-id.
+        if (!(e.target as HTMLElement)?.closest?.('[data-entity-id]')) e.stopPropagation();
+      }}
+      data-shell
       className="absolute z-30 w-[300px] flex flex-col gap-1.5 rounded-2xl border border-[var(--card-border)] bg-[var(--bg-color)]/90 backdrop-blur shadow-xl p-2"
       style={{ right: -pos.x, top: pos.y }}
     >
@@ -65,6 +69,7 @@ export function RailPanel({ state, teachingRail, onEvent, onShowMe }: {
       </div>
       {cards.map(({ card, index, mode }) => (
         <CardView key={index} card={card} index={index} mode={mode}
+          entityDomId={`rail-${railSlug(projected.rail!.seq)}-c${index + 1}`}
           whyOpen={state.openWhy === index} flipped={state.flipped.includes(index)}
           onWhy={() => { if (!isProjection) onEvent({ type: 'user.whyToggle', index }); }}
           onFlip={() => { if (!isProjection) onEvent({ type: 'user.flip', index }); }}

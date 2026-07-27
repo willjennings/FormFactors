@@ -6,14 +6,14 @@ import { Button } from '../ui/Button';
 const KICKER: Record<RailCard['t'], string> = { do: 'DO', answer: 'ANSWER', orient: 'ORIENT', check: 'CHECK', caution: 'CAUTION', concept: 'CONCEPT', try: 'TRY', recap: 'RECAP' };
 
 /** One card: kicker → action line (bold the THING) → result line → quiet why?/show-me. */
-export function CardView({ card, index, mode, whyOpen, flipped, onWhy, onFlip, onShowMe, onCheckConfirm }: {
-  card: RailCard; index: number; mode: 'stub' | 'active' | 'dimmed';
+export function CardView({ card, index, mode, entityDomId, whyOpen, flipped, onWhy, onFlip, onShowMe, onCheckConfirm }: {
+  card: RailCard; index: number; mode: 'stub' | 'active' | 'dimmed'; entityDomId: string;
   whyOpen: boolean; flipped: boolean;
   onWhy: () => void; onFlip: () => void; onShowMe: () => void; onCheckConfirm: () => void;
 }) {
   if (mode === 'stub') {
     return (
-      <div className="flex items-center gap-1.5 px-2 py-1 text-[10px] font-mono text-[var(--text-secondary)]">
+      <div data-entity-id={entityDomId} className="flex items-center gap-1.5 px-2 py-1 text-[10px] font-mono text-[var(--text-secondary)]">
         <Check size={10} className="text-emerald-500 shrink-0" />
         <span className="truncate">{card.text ?? card.front ?? card.lines?.[0] ?? card.prompt}</span>
       </div>
@@ -23,7 +23,7 @@ export function CardView({ card, index, mode, whyOpen, flipped, onWhy, onFlip, o
     // §5 dimmed titles: kicker + first line only (no result/notice/affordances).
     const firstLine = card.t === 'concept' ? card.front : card.t === 'recap' ? card.lines?.[0] : card.text ?? card.prompt;
     return (
-      <div className="rounded-xl border px-3 py-2 bg-[var(--card-bg)] opacity-40 border-[var(--card-border)]">
+      <div data-entity-id={entityDomId} className="rounded-xl border px-3 py-2 bg-[var(--card-bg)] opacity-40 border-[var(--card-border)]">
         <span className="text-[9px] font-mono uppercase tracking-widest text-[var(--text-secondary)]">{KICKER[card.t]}{card.subgoal ? ` · ${card.subgoal}` : ''}</span>
         <p className="text-[13px] font-semibold text-[var(--text-primary)] mt-0.5 truncate">{firstLine}</p>
       </div>
@@ -34,7 +34,7 @@ export function CardView({ card, index, mode, whyOpen, flipped, onWhy, onFlip, o
       ? (<>{text.split(card.target)[0]}<strong>{card.target}</strong>{text.split(card.target).slice(1).join(card.target)}</>)
       : text;
   return (
-    <div className={`rounded-xl border px-3 py-2 bg-[var(--card-bg)] ${card.state === 'failed' ? 'border-red-400/60' : 'border-[var(--accent-color)]/50 shadow-sm'}`}>
+    <div data-entity-id={entityDomId} className={`rounded-xl border px-3 py-2 bg-[var(--card-bg)] ${card.state === 'failed' ? 'border-red-400/60' : 'border-[var(--accent-color)]/50 shadow-sm'}`}>
       <div className="flex items-center justify-between">
         <span className="text-[9px] font-mono uppercase tracking-widest text-[var(--text-secondary)]">{KICKER[card.t]}{card.subgoal ? ` · ${card.subgoal}` : ''}</span>
         {card.target && (
