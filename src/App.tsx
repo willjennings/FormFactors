@@ -82,7 +82,7 @@ import { docStatusLabel } from './widgets/surfaceModels';
 import type { TeachingEvent, TeachingState } from './teaching/types';
 import { serializeTeachingState, makeChangeGate } from './teaching/teachingState';
 import { GOAL_TOOLS, goalCallToEvent, validateSuggestion, type GoalProposal } from './goal/goalTools';
-import { initialGoalState, reduce as goalReduce, isStepDone, type GoalState } from './goal/goalStore';
+import { initialGoalState, reduce as goalReduce, isStepDone, type GoalState, type GoalEvent } from './goal/goalStore';
 import { serializeGoalState } from './goal/serialize';
 import { WB_TOOLS, wbCallToEvent } from './whiteboard/tools';
 import type { WbEvent } from './whiteboard/types';
@@ -127,6 +127,10 @@ import { MISSIONS } from './missions/defs';
 import { startMission, advanceMission } from './missions/runStore';
 import { loadRuns, saveRuns } from './missions/persistence';
 import type { MissionRun, MissionObservables } from './missions/types';
+import { bootJournal, resetBootMemo } from './journal/boot';
+import { appendEntry, compact, type JournalEntry } from './journal/journal';
+import { JOURNAL_REGISTRY, type WorkspaceState, type DialsState } from './journal/registry';
+import { saveJournal, clearJournal, JOURNAL_CAP } from './journal/persistence';
 
 // --- Types ---
 interface Marker {
@@ -338,9 +342,20 @@ const LaptopSmileyIcon = ({ size = 64, className = "" }: { size?: number, classN
   </svg>
 );
 
+// Boot replay (spec §6): runs ONCE at module scope, before first render, so every lazy
+// initializer below reads the SAME restored (or fresh) states — StrictMode's double-invoke
+// of the component function must not double the replay or desync one initializer from another.
+const journalBoot = bootJournal();
+const bootStates = journalBoot.states as {
+  artifacts?: import('./artifacts/types').ArtifactState;
+  workspace?: WorkspaceState;
+  goal?: GoalState;
+  dials?: DialsState;
+} | null;
+
 export default function App() {
   // --- Active program (Word / Excel / PowerPoint) — single source of truth for content ---
-  const [activeProgram, setActiveProgram] = useState<ProgramId>(DEFAULT_PROGRAM);
+  const [activeProgram, setActiveProgram] = useState<ProgramId>(() => bootStates?.workspace?.activeProgram ?? DEFAULT_PROGRAM);
   const activeProgramRef = useRef(activeProgram);
   useEffect(() => { activeProgramRef.current = activeProgram; }, [activeProgram]);
   const program = React.useMemo(() => getProgram(activeProgram), [activeProgram]);
@@ -428,13 +443,13 @@ export default function App() {
   // (friction), DIAL B = feedback modality; honest = prompt variant A/B; the rest gate
   // chips/trace/teaching/proactivity. Debug-only knobs (backend, sendFrequency,
   // whiteboardMode) stay separate.
-  const [dials, setDials] = useState<DialValues>(DEFAULT_DIALS);
+  const [dials, setDials] = useState<DialValues>(() => bootStates?.dials?.dials ?? DEFAULT_DIALS);
   const dialsRef = useRef(dials);
   useEffect(() => { dialsRef.current = dials; }, [dials]);
   // The named register this session is riding, or null when a manual dial edit has
   // walked the dials off every named point (Custom). 'guided' initially — it IS today's
   // control-arm defaults (DEFAULT_DIALS === REGISTERS.guided.dials).
-  const [registerKey, setRegisterKey] = useState<string | null>('guided');
+  const [registerKey, setRegisterKey] = useState<string | null>(() => bootStates?.dials ? bootStates.dials.registerKey : 'guided');
   const registerKeyRef = useRef(registerKey);
   useEffect(() => { registerKeyRef.current = registerKey; }, [registerKey]);
   // The register band (backtick-summoned). Mirrored to a ref because the chord handler
@@ -509,6 +524,12 @@ export default function App() {
   // about these", the tray is "make a new artifact from these". Cleared on program swap.
   const [tray, setTray] = useState<TrayMember[]>([]);
   useEffect(() => { setTray(clearTray()); }, [activeProgram]);
+  // S4 (final re-review, carried into this task): mirror the tray into a ref. restorePendingTray
+  // and the prune effect below both run on async paths where the `tray` closure can be stale —
+  // a member shift-clicked into the tray mid-connect would otherwise be silently replaced by
+  // whatever the closure captured at effect-registration time. Same pattern as mockDocRef/corpusRef.
+  const trayRef = useRef<TrayMember[]>([]);
+  useEffect(() => { trayRef.current = tray; }, [tray]);
   // I4 (final review): sendTypedInput returning true means QUEUED, not delivered. When a fire
   // takes the queue path (no live session yet) and the connect that was supposed to flush it
   // fails (missing API key — a fresh checkout's default — mic denied, etc.), the queued TEXT is
@@ -574,6 +595,25 @@ export default function App() {
     }
   }, [promptDialsKey]);
 
+  // Dials are session shape (spec §4) — journal every settled change. Skip the mount-time
+  // fire (the initializer already reflects boot state, or the fresh default; journaling it
+  // again would be a no-op event but a needless one).
+  const dialsBootSkip = useRef(true);
+  useEffect(() => {
+    if (dialsBootSkip.current) { dialsBootSkip.current = false; return; }
+    journalAppend('dials', { type: 'dials.set', dials, registerKey });
+  }, [dials, registerKey]);
+
+  // The failed-load notice (spec §5) is never silent: a journal that existed and could not be
+  // restored must be SHOWN, not just logged where only a debug drawer would ever see it. One
+  // shot on mount — journalBoot itself is a module-level memo, computed once before render.
+  useEffect(() => {
+    if (!journalBoot.failure) return;
+    addLog('info', `Previous desk could not be restored (${journalBoot.failure}). Starting fresh.`);
+    emitFeedback({ outcome: 'error', label: `Your previous desk couldn't be restored (${journalBoot.failure}). Starting fresh.` });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const isInitialBackendSync = useRef(true);
   useEffect(() => {
     voiceBackendRef.current = voiceBackend;
@@ -626,7 +666,7 @@ export default function App() {
   useEffect(() => { actRequestRef.current = actRequest; }, [actRequest]);
   // Action verbs (save/edit/format/insert/photo) mutate this mock document; a pending action
   // is witness-rendered before it commits — the same grammar as `share`.
-  const [mockDoc, setMockDoc] = useState<MockDoc>(() => seedCorpus()[DEFAULT_PROGRAM]);
+  const [mockDoc, setMockDoc] = useState<MockDoc>(() => bootStates?.workspace ? (bootStates.workspace.corpus[bootStates.workspace.activeProgram] ?? seedCorpus()[bootStates.workspace.activeProgram]) : seedCorpus()[DEFAULT_PROGRAM]);
   // Live mirror so the tool-call closure can read the current doc without stale-closure risk.
   const mockDocRef = useRef(mockDoc);
   useEffect(() => { mockDocRef.current = mockDoc; }, [mockDoc]);
@@ -636,12 +676,28 @@ export default function App() {
   // §3.1), so "take the report and the numbers" is expressible on the first turn with no
   // program tour first. fullCorpus overrides the active entry with the live mockDoc wherever
   // it's consumed. corpusRef mirrors it for the tool-call closure, same pattern as mockDocRef.
-  const [corpus, setCorpus] = useState<Partial<Record<ProgramId, MockDoc>>>(seedCorpus);
+  const [corpus, setCorpus] = useState<Partial<Record<ProgramId, MockDoc>>>(() => bootStates?.workspace?.corpus ?? seedCorpus());
   const corpusRef = useRef(corpus);
   useEffect(() => { corpusRef.current = corpus; }, [corpus]);
-  const [artifactState, artifactDispatch] = useReducer(artifactReduce, undefined, initialArtifactState);
+  const [artifactState, artifactDispatch] = useReducer(artifactReduce, undefined, () => bootStates?.artifacts ?? initialArtifactState());
   const artifactStateRef = useRef(artifactState);
   useEffect(() => { artifactStateRef.current = artifactState; }, [artifactState]);
+  // The live journal (spec §6): restored entries + everything appended this session. Saves are
+  // debounced and fail-soft; compaction keeps the on-disk journal within JOURNAL_CAP.
+  const journalRef = useRef<JournalEntry[]>(journalBoot.entries);
+  const journalSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const journalAppend = (store: string, event: unknown, label?: string) => {
+    journalRef.current = appendEntry(journalRef.current, store, event, Date.now(), label);
+    if (journalSaveTimer.current) clearTimeout(journalSaveTimer.current);
+    journalSaveTimer.current = setTimeout(() => {
+      journalRef.current = compact(journalRef.current, JOURNAL_REGISTRY, JOURNAL_CAP);
+      if (!saveJournal(journalRef.current)) addLog('info', 'Journal save failed (storage unavailable or full) — the desk will not survive a reload.');
+    }, 500);
+  };
+  // Journaled artifact dispatch (spec §3): every event — including ones the reducer will
+  // refuse (rejectedAtCap) — journals identically, so replay reproduces the exact same refusal.
+  // Call sites use this wrapper, never artifactDispatch directly (except the useReducer above).
+  const artifactDispatchJ = (event: ArtifactEvent, label?: string) => { journalAppend('artifacts', event, label); artifactDispatch(event); };
   // C1 (final review): the tray is otherwise only cleared on program swap, on fire, and by
   // explicit user removal — NOTHING reconciles it against artifact deletion. `artifact.close`
   // deletes outright (artifactStore.ts has no soft-delete), so a tray chip naming a closed
@@ -657,7 +713,7 @@ export default function App() {
     // of the setTray updater: StrictMode double-invokes updaters in dev, which would double the
     // log line, the toast, and the earcon for a single real prune.
     const liveIds = artifactIdSignature ? artifactIdSignature.split(',') : [];
-    const pruned = pruneTray(tray, liveIds);
+    const pruned = pruneTray(trayRef.current, liveIds);
     if (!pruned.dropped.length) return;
     setTray(pruned.tray);
     // The prune must be VISIBLE — a silently vanishing chip is still a silent state change.
@@ -776,9 +832,11 @@ export default function App() {
   const annotationDispatchRef = useRef<((e: AnnotationEvent) => void) | null>(null);
   const [annotationSnapshot, setAnnotationSnapshot] = useState<AnnotationState | null>(null);
 
-  const [goalState, goalDispatch] = useReducer(goalReduce, undefined, initialGoalState);
+  const [goalState, goalDispatch] = useReducer(goalReduce, undefined, () => bootStates?.goal ?? initialGoalState());
   const goalStateRef = useRef<GoalState>(goalState);
   useEffect(() => { goalStateRef.current = goalState; }, [goalState]);
+  // Journaled goal dispatch (spec §3), same wrapper pattern as artifactDispatchJ.
+  const goalDispatchJ = (event: GoalEvent, label?: string) => { journalAppend('goal', event, label); goalDispatch(event); };
   const goalHintGateRef = useRef(makeChangeGate());
 
   // --- Missions (spec 2026-07-17-mission-arcs): user-side scaffolding ONLY — the agent sees
@@ -1525,13 +1583,13 @@ export default function App() {
         // message, so a combine-then-refine turn must see this rejectedAtCap bump on the SAME
         // pass, not after React flushes.
         if (v.atCap && v.event) {
-          artifactDispatch(v.event);
+          artifactDispatchJ(v.event);
           artifactStateRef.current = artifactReduce(artifactStateRef.current, v.event);
         }
         addLog('tool', `Tool Call: combine REJECTED — ${v.error}`);
         ack({ success: false, error: v.error });
       } else {
-        artifactDispatch(v.event);
+        artifactDispatchJ(v.event);
         // Fold into the ref immediately (I1, final review): a model calling combine then
         // refine_artifact in the SAME message hits validateRefineCall synchronously before
         // React can flush the dispatch above, so without this the refine sees a stale ref and
@@ -1596,7 +1654,7 @@ export default function App() {
             addLog('tool', `Tool Call: refine_artifact REFUSED by the store — ${ev.id} is at rev ${applied?.rev ?? '(closed)'}`);
             ack({ success: false, error: `${ev.id} did not accept that revision — it is at rev ${applied?.rev ?? '(closed)'}. Re-read [ARTIFACTS] and re-issue against the current revision.` });
           } else {
-            artifactDispatch(ev);
+            artifactDispatchJ(ev);
             artifactStateRef.current = nextState;
             setUndoStack((s) => [...s, { kind: 'artifact' as const, id: ev.id, toRev: ev.baseRev, label: `Refine ${ev.id}` }]);
             addLog('tool', `Tool Call: refine_artifact — ${ev.id} ${partLabel} (rev ${ev.baseRev} → ${applied.rev})`);
@@ -1659,8 +1717,9 @@ export default function App() {
         const nextDoc = applyAction(prevDoc, fc.name, args);
         mockDocRef.current = nextDoc;
         setMockDoc(nextDoc);
+        journalAppend('workspace', { type: 'doc.set', program: activeProgramRef.current ?? activeProgram, doc: nextDoc });
         setUndoStack(s => [...s, { kind: 'doc' as const, doc: prevDoc, label: phrase }]); // memento for undo
-        goalDispatch({ type: 'goal.actionCommitted', verb: fc.name, target: args.target });
+        goalDispatchJ({ type: 'goal.actionCommitted', verb: fc.name, target: args.target });
         setPendingAction({ verb: fc.name, label, target, detail, confirmed: true });
         emitFeedback({ outcome: 'committed', verbClass, label: phrase });
         // G4: register newly-created objects so "send the chart I just made" resolves later.
@@ -1740,7 +1799,7 @@ export default function App() {
           setPendingGoal({ objective: ev.objective, steps: ev.steps }); // Approach A: confirm card (Task 5)
           addLog('tool', `Tool Call: set_goal(witness) — "${ev.objective}"`);
         } else {
-          goalDispatch(ev); // Approach B: track directly (tentative chip)
+          goalDispatchJ(ev); // Approach B: track directly (tentative chip)
           addLog('tool', `Tool Call: set_goal — "${ev.objective}"`);
         }
         ack({ success: true });
@@ -1866,7 +1925,8 @@ export default function App() {
     if (nextDoc === prevDoc) return;
     mockDocRef.current = nextDoc;
     setMockDoc(nextDoc);
-    goalDispatch({ type: 'goal.actionCommitted', verb, target: args.target });
+    journalAppend('workspace', { type: 'doc.set', program: activeProgramRef.current ?? activeProgram, doc: nextDoc });
+    goalDispatchJ({ type: 'goal.actionCommitted', verb, target: args.target });
     const d = describeAction(verb, args);
     setUndoStack(s => [...s, { kind: 'doc' as const, doc: prevDoc, label: `${d.label} ${d.target}` }]);
     lastInputModalityRef.current = 'direct';
@@ -1908,7 +1968,7 @@ export default function App() {
         providerRef.current?.sendTextHint(`[SYSTEM: the pending refine was DROPPED — ${p.artifactId} did not accept it. ${serializeArtifacts(artifactStateRef.current) ?? ''} Re-read the artifact and call refine_artifact again. DO NOT acknowledge this message.]`);
         return;
       }
-      artifactDispatch(ev);
+      artifactDispatchJ(ev);
       artifactStateRef.current = nextState;
       setUndoStack((s) => [...s, { kind: 'artifact' as const, id: p.artifactId!, toRev: p.baseRev!, label: `Refine ${p.artifactId}` }]);
       telemetry.action('refine_artifact', 'mutate', 'commit', 'direct');
@@ -1934,8 +1994,9 @@ export default function App() {
     const nextDoc = applyAction(prevDoc, p.verb, { target: p.target, detail: p.detail, charStart: p.charStart, charEnd: p.charEnd, newText: p.newText });
     mockDocRef.current = nextDoc;
     setMockDoc(nextDoc);
+    journalAppend('workspace', { type: 'doc.set', program: activeProgramRef.current ?? activeProgram, doc: nextDoc });
     setUndoStack(s => [...s, { kind: 'doc' as const, doc: prevDoc, label: `${p.label} ${p.target}` }]);
-    goalDispatch({ type: 'goal.actionCommitted', verb: p.verb, target: p.target });
+    goalDispatchJ({ type: 'goal.actionCommitted', verb: p.verb, target: p.target });
     telemetry.action(p.verb, classOf(p.verb), 'commit', 'direct');
     recordMissionCommit(p.verb, classOf(p.verb));
     emitFeedback({ outcome: 'committed', verbClass: classOf(p.verb), label: `${p.label} ${p.target}` });
@@ -2372,7 +2433,7 @@ export default function App() {
     if (!stash) return;
     pendingTrayRef.current = null;
     const liveIds = artifactStateRef.current.artifacts.map((a) => a.id);
-    const { tray: restored, dropped } = restoreTray(tray, stash, liveIds);
+    const { tray: restored, dropped } = restoreTray(trayRef.current, stash, liveIds);
     setTray(restored);
     addLog('info', 'Combine tray kept — the fire did not go out (connect failed).');
     if (dropped.length) {
@@ -3468,7 +3529,7 @@ export default function App() {
     for (const i of stepsDone) {
       telemetry.missionStepDone(missionDef.key, missionDef.steps[i].key);
       if (ownsGoal && recorded && !isStepDone(goalStateRef.current, recorded[i])) {
-        goalDispatch({ type: 'goal.stepDone', id: recorded[i] });
+        goalDispatchJ({ type: 'goal.stepDone', id: recorded[i] });
       }
     }
     if (!completed) setMissionRun(run);
@@ -3485,7 +3546,7 @@ export default function App() {
         cards: [{ t: 'answer', text: `${missionDef.title} complete — ${missionDef.steps.length} step${missionDef.steps.length === 1 ? '' : 's'}, ${mm}:${String(ss).padStart(2, '0')}`, band: 'solid', state: 'done' }],
         activeIndex: null, startedAt: Date.now(),
       } });
-      if (ownsGoal) goalDispatch({ type: 'goal.clear' });
+      if (ownsGoal) goalDispatchJ({ type: 'goal.clear' });
       // The run is over — the rail card is the record. Clearing missionRun returns the panel
       // to the picker list (Task 4 drive: a completed run left a stale title-only strip).
       missionGoalIdsRef.current = null;
@@ -3550,7 +3611,7 @@ export default function App() {
         addLog('tool', `Tool Call: combine (demo) REJECTED — ${v.error}`);
         return;
       }
-      artifactDispatch(v.event);
+      artifactDispatchJ(v.event);
       const created = (v.event as Extract<ArtifactEvent, { type: 'artifact.create' }>).artifact;
       addLog('tool', `Tool Call: combine (demo) — "${created.title}" ${v.provenance}`);
       emitFeedback({ outcome: 'committed', verbClass: 'create', label: `Created: ${created.title}` });
@@ -3569,7 +3630,7 @@ export default function App() {
           addLog('tool', `Tool Call: combine (demo widget) REJECTED — ${vw.error}`);
           return;
         }
-        artifactDispatch(vw.event);
+        artifactDispatchJ(vw.event);
         const widgetCreated = (vw.event as Extract<ArtifactEvent, { type: 'artifact.create' }>).artifact;
         addLog('tool', `Tool Call: combine (demo widget) — "${widgetCreated.title}" ${vw.provenance}`);
         emitFeedback({ outcome: 'committed', verbClass: 'create', label: `Created: ${widgetCreated.title}` });
@@ -3586,7 +3647,7 @@ export default function App() {
             addLog('tool', `Tool Call: refine_artifact (demo) REJECTED — ${vr.error}`);
             return;
           }
-          artifactDispatch(vr.event);
+          artifactDispatchJ(vr.event);
           artifactStateRef.current = artifactReduce(artifactStateRef.current, vr.event);
           addLog('tool', `Tool Call: refine_artifact (demo) — a1 paragraph 1 (rev 1 → 2)`);
           emitFeedback({ outcome: 'committed', verbClass: 'mutate', label: 'Refined a1 paragraph 1' });
@@ -3632,6 +3693,11 @@ export default function App() {
   // gets the right verbs/instructions (mirrors the honest-mode reconnect).
   const handleProgramChange = (id: ProgramId) => {
     if (id === activeProgram) return;
+    // Swap ordering discipline (spec §6 caller obligation): journal the OUTGOING doc's doc.set
+    // BEFORE program.set. Reversed, replay would fold the outgoing doc under the INCOMING
+    // program instead of the one it actually belongs to.
+    journalAppend('workspace', { type: 'doc.set', program: activeProgram, doc: mockDocRef.current });
+    journalAppend('workspace', { type: 'program.set', program: id });
     setActiveProgram(id);
     markersRef.current = [];
     setEntities([]);
@@ -3675,7 +3741,7 @@ export default function App() {
       artifactIds: artifactState.artifacts.map((a) => a.id),
     };
     if (activeProgram !== def.program) handleProgramChange(def.program);
-    goalDispatch({ type: 'goal.set', objective: def.brief, steps: def.steps.map((s) => ({ label: s.subgoal })) });
+    goalDispatchJ({ type: 'goal.set', objective: def.brief, steps: def.steps.map((s) => ({ label: s.subgoal })) });
     telemetry.missionStart(key, missionRuns[key] ?? 0);
     setMissionRun(startMission(def, Date.now()));
   };
@@ -3687,7 +3753,7 @@ export default function App() {
       const rec = missionGoalIdsRef.current;
       const owns = !!rec && goalStateRef.current.steps.length === rec.length
         && goalStateRef.current.steps.every((s, i) => s.id === rec[i]);
-      if (owns) goalDispatch({ type: 'goal.clear' });
+      if (owns) goalDispatchJ({ type: 'goal.clear' });
     }
     missionGoalIdsRef.current = null;
     setMissionRun(null);
@@ -3703,7 +3769,7 @@ export default function App() {
       const artifacts = artifactStateRef.current.artifacts;
       if (artifacts.length === 0) return;
       const newest = artifacts[artifacts.length - 1];
-      artifactDispatch({ type: 'artifact.close', id: newest.id });
+      artifactDispatchJ({ type: 'artifact.close', id: newest.id });
       telemetry.correction();
       emitFeedback({ outcome: 'undo', label: `Closed ${newest.title}` });
       return;
@@ -3721,7 +3787,7 @@ export default function App() {
       const after = artifactReduce(before, ev);
       setUndoStack(undoStack.slice(0, -1));
       if (after === before) return; // orphaned entry: nothing to undo, drop it silently
-      artifactDispatch(ev);
+      artifactDispatchJ(ev);
       artifactStateRef.current = after;
       addLog('info', `Undo — ${last.label} (reverted to rev ${last.toRev})`);
       emitFeedback({ outcome: 'committed', verbClass: 'mutate', label: `Undid ${last.label}` });
@@ -3729,6 +3795,7 @@ export default function App() {
     }
     setMockDoc(last.doc);
     mockDocRef.current = last.doc;
+    journalAppend('workspace', { type: 'doc.set', program: activeProgramRef.current ?? activeProgram, doc: last.doc });
     setUndoStack(undoStack.slice(0, -1));
     setPendingAction(null);
     telemetry.correction(); // undo = a correction signal for the testbed
@@ -3750,6 +3817,7 @@ export default function App() {
     const seeded = seedCorpus()[activeProgram];
     setMockDoc(seeded);
     mockDocRef.current = seeded;
+    journalAppend('workspace', { type: 'doc.set', program: activeProgramRef.current ?? activeProgram, doc: seeded });
     setCorpus((c) => { const { [activeProgram]: _drop, ...rest } = c; corpusRef.current = rest; return rest; });
     setUndoStack([]);
     referents.clear();
@@ -3870,11 +3938,11 @@ export default function App() {
               list, and closable only by the × below (no tool maps to close). */}
           {artifactState.artifacts.map((a, i) => (
             <ArtifactWindow key={a.id} artifact={a} index={i}
-              onClose={() => artifactDispatch({ type: 'artifact.close', id: a.id })}
+              onClose={() => artifactDispatchJ({ type: 'artifact.close', id: a.id })}
               onRevert={(toRev) => {
                 const beforeRev = a.rev;
                 const ev: ArtifactEvent = { type: 'artifact.revertTo', id: a.id, toRev, at: Date.now() };
-                artifactDispatch(ev);
+                artifactDispatchJ(ev);
                 artifactStateRef.current = artifactReduce(artifactStateRef.current, ev);
                 // Symmetric with refine/edit (spec §9 — "undoing is itself undoable"): a revert
                 // is itself a revision, so ⌘Z must be able to step it back too, same as any other
@@ -3887,7 +3955,7 @@ export default function App() {
               onEditPart={(patch, baseRev) => {
                 const ev: ArtifactEvent = { type: 'artifact.revise', id: a.id, baseRev, patch,
                   owner: 'user', at: Date.now(), note: 'edited by hand' };
-                artifactDispatch(ev);
+                artifactDispatchJ(ev);
                 artifactStateRef.current = artifactReduce(artifactStateRef.current, ev);
                 setUndoStack((s) => [...s, { kind: 'artifact' as const, id: a.id, toRev: baseRev, label: `Edit ${a.id}` }]);
                 addLog('info', `You edited ${a.id} (rev ${baseRev} → ${baseRev + 1})`);
@@ -3923,7 +3991,7 @@ export default function App() {
                   them into gibberish (user 2026-07-19: "a user literally cannot read it"). */}
               <span title={goalState.objective ?? undefined} className="text-[11px] font-mono text-[var(--text-primary)] max-w-[520px] line-clamp-2 leading-tight text-left">{goalState.objective}</span>
               <span className="text-[10px] font-mono text-[var(--text-secondary)]">· {goalState.steps.filter((s) => s.done).length}/{goalState.steps.length}</span>
-              <button aria-label="Clear goal" className="hit-24 text-[var(--text-secondary)] hover:text-[var(--text-primary)]" onClick={() => (missionRun && missionRun.completedAt === null ? abandonMission() : goalDispatch({ type: 'goal.clear' }))}><X size={12} /></button>
+              <button aria-label="Clear goal" className="hit-24 text-[var(--text-secondary)] hover:text-[var(--text-primary)]" onClick={() => (missionRun && missionRun.completedAt === null ? abandonMission() : goalDispatchJ({ type: 'goal.clear' }))}><X size={12} /></button>
             </div>
           )}
           {dials.traceView !== 'hidden' && (
@@ -4079,7 +4147,7 @@ export default function App() {
                   {pendingGoal.steps.map((s, i) => <li key={i}>{s.label}</li>)}
                 </ul>
                 <div className="flex items-center gap-2">
-                  <Button variant="primary" size="sm" ref={!shareRequest && !actRequest && !pendingAction ? confirmBtnRef : undefined} onClick={() => { goalDispatch({ type: 'goal.set', objective: pendingGoal.objective, steps: pendingGoal.steps }); setPendingGoal(null); }}>Track it</Button>
+                  <Button variant="primary" size="sm" ref={!shareRequest && !actRequest && !pendingAction ? confirmBtnRef : undefined} onClick={() => { goalDispatchJ({ type: 'goal.set', objective: pendingGoal.objective, steps: pendingGoal.steps }); setPendingGoal(null); }}>Track it</Button>
                   <Button variant="outline" size="sm" onClick={() => setPendingGoal(null)}>No thanks</Button>
                 </div>
               </section>
@@ -4228,14 +4296,14 @@ export default function App() {
               // the honest outcome is a visible "close one first", not silence.
               const next = artifactReduce(artifactStateRef.current, v.event);
               if (next.rejectedAtCap > artifactStateRef.current.rejectedAtCap) {
-                artifactDispatch(v.event);            // still dispatch: the counter must be real
+                artifactDispatchJ(v.event);            // still dispatch: the counter must be real
                 artifactStateRef.current = next;
                 addLog('info', `Pin refused — the desk already holds ${MAX_ARTIFACTS} artifacts.`);
                 emitFeedback({ outcome: 'error', label: `Can't pin — close an artifact first (${MAX_ARTIFACTS} open)` });
                 telemetry.pin(card.t, undefined, 'at-cap');
                 return;
               }
-              artifactDispatch(v.event);
+              artifactDispatchJ(v.event);
               artifactStateRef.current = next;
               const created = next.artifacts[next.artifacts.length - 1];
               addLog('info', `Pinned ${created.id} — "${created.title}"`);
