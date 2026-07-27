@@ -3866,6 +3866,12 @@ export default function App() {
   // is the honest restart (every store, ref, gate and session rebuilds from seed — no risk of
   // a half-reset in-memory desk disagreeing with the now-empty journal).
   const handleNewDesk = () => {
+    // Erasure must beat the pagehide flush: reload() fires pagehide, whose listener would
+    // otherwise write journalRef straight back over the cleared storage — resurrecting the
+    // desk the user just confirmed erasing. Empty the in-memory journal AND disarm the
+    // pending debounce so the flush has nothing to say.
+    if (journalSaveTimer.current) { clearTimeout(journalSaveTimer.current); journalSaveTimer.current = null; }
+    journalRef.current = [];
     clearJournal();
     resetBootMemo();
     window.location.reload();
