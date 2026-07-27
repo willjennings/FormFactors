@@ -1075,9 +1075,18 @@ export default function App() {
   // fresh-identity dependency recomputed every render would re-render forever. `projectedRailState`
   // returns a fresh object every call, but only primitives are read out of it into the template
   // literal — the effect's actual dependency is that string, not the object, so this is safe.
+  // I3 (final review): a `doc.changed` auto-check failure flips a card's `state` to 'failed'
+  // (railStore.ts advance/reduceRail) — which renders an extra "not yet —" paragraph and a red
+  // border — but seq/cards.length/activeIndex/openWhy/flipped are ALL unchanged by that
+  // transition, so this signature didn't move, no re-measure fired, and the entity kept the
+  // too-short bbox. Same defect class as the why/flip case above (third instance): a state
+  // fingerprint of the PROJECTED rail's own cards folds it in. First letters are enough to
+  // distinguish 'pending'/'active'/'done'/'failed'. This cannot loop: updateLayout only writes
+  // entities/layoutBounds/mainSize, none of which feed railState or teachingSnapshot, so nothing
+  // this signature reads can change as a result of the effect it drives.
   const projectedForSignature = projectedRailState(railState, teachingRail);
   const railSignature = projectedForSignature?.rail
-    ? `${projectedForSignature.rail.seq}:${projectedForSignature.rail.cards.length}:${projectedForSignature.rail.activeIndex ?? -1}:${projectedForSignature.openWhy ?? -1}:${projectedForSignature.flipped.join(',')}`
+    ? `${projectedForSignature.rail.seq}:${projectedForSignature.rail.cards.length}:${projectedForSignature.rail.activeIndex ?? -1}:${projectedForSignature.openWhy ?? -1}:${projectedForSignature.flipped.join(',')}:${projectedForSignature.rail.cards.map((c) => c.state[0]).join('')}`
     : '';
   useEffect(() => { updateLayout(); }, [artifactRevSignature, railSignature, updateLayout]);
 
