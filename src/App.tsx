@@ -116,7 +116,7 @@ import { pinEventFor } from './artifacts/pin';
 import { COMBINE_TOOL, READ_SOURCES_TOOL, validateCombineCall, sourceDetail, validSourceIds } from './artifacts/combineTools';
 import { REFINE_TOOL, validateRefineCall, describePatch } from './artifacts/refineTools';
 import { validateActionCall } from './actions/validate';
-import { isDuplicateConfirm } from './actions/dedupe';
+import { shouldDedupeConfirm } from './actions/dedupe';
 import { feedsSummary } from './artifacts/feeds';
 import { artifactEntities, entityToSourceId } from './artifacts/entities';
 import { toggleTray, removeTray, clearTray, canFire, isTrayFull, pruneTray, restoreTray, type TrayMember } from './artifacts/combineTray';
@@ -1730,22 +1730,27 @@ export default function App() {
       const { label, target, detail } = describeAction(fc.name, args);
       const confirmed = args.confirm === true;
 
-      // Double-apply guard — checked BEFORE the gate (fix round 1, I3): if the button already
+      // THE GATE (spec §4). Nothing is witnessed or committed on missing information. An ask is
+      // NOT an error: {needsContent} addresses the USER (Task 5 gives it chips; until then the
+      // model asks by speech), {error} addresses the MODEL. Computed BEFORE the double-apply
+      // guard (fix round 2, I3) — dedupe must never override the gate's verdict, only skip
+      // re-applying when the gate independently agrees the call is fine. See shouldDedupeConfirm.
+      const gate = validateActionCall(fc.name, args, mockDocRef.current);
+
+      // Double-apply guard (fix round 1, I3; tightened fix round 2, I3): if the button already
       // confirmed this action, don't re-run the voice-confirm call that follows (button sets
-      // confirmed=true, then the model also fires confirm=true — one apply is enough). A dedupe
-      // hit commits nothing, so checking it first cannot violate "nothing may be witnessed or
-      // committed on missing information" — it just stops a corrected retry (e.g. the model
-      // resending confirm=true without the detail the button already supplied) from being
-      // mistaken by the gate for a malformed call. Witness-mode calls (confirmed=false) unaffected.
-      if (confirmed && isDuplicateConfirm(pendingActionRef.current, fc.name, args.target)) {
+      // confirmed=true, then the model also fires confirm=true — one apply is enough). Requiring
+      // the gate to agree (ok, or needsContent on an already-confirmed action — see dedupe.ts)
+      // closes the hole round 1 opened: a confirm:true call matching a confirmed pending action's
+      // verb+target used to dedupe on payload alone, so a call the gate would genuinely REJECT
+      // (e.g. a different, wrong, or missing value) could be acked as a fabricated success. Now a
+      // rejected call always falls through to the real error below, never a fake dedupe success —
+      // while a harmless replay (the gate still says ok/needsContent) dedupes exactly as before.
+      if (shouldDedupeConfirm(pendingActionRef.current, fc.name, args.target, confirmed, gate)) {
         ack({ success: true, deduped: true, note: 'already applied via button confirm' });
         return;
       }
 
-      // THE GATE (spec §4). Nothing is witnessed or committed on missing information. An ask is
-      // NOT an error: {needsContent} addresses the USER (Task 5 gives it chips; until then the
-      // model asks by speech), {error} addresses the MODEL.
-      const gate = validateActionCall(fc.name, args, mockDocRef.current);
       if ('error' in gate) {
         addLog('tool', `Tool Call: ${fc.name} REJECTED — ${gate.error}`);
         // The gate refusing is itself a measurable per-attempt outcome (fix round 1, I5) — record
@@ -1792,9 +1797,8 @@ export default function App() {
         ? `You pointed at “${displayName(appReferentEntity)}”, but I read “${displayName(resolved!.entity)}”.`
         : undefined;
 
-      telemetry.action(fc.name, verbClass, effectiveDecision, lastInputModalityRef.current);
-      if (effectiveDecision === 'commit') recordMissionCommit(fc.name, verbClass);
       if (effectiveDecision === 'witness') {
+        telemetry.action(fc.name, verbClass, effectiveDecision, lastInputModalityRef.current);
         addLog('tool', `Tool Call: ${fc.name}(witness${disagreement ? ', grounding mismatch' : ''}) — ${phrase}`);
         setPendingAction({ verb: fc.name, label, target, detail, confirmed: false, note });
         emitFeedback({ outcome: 'needs-confirm', verbClass, label: disagreement ? `Mismatch: ${displayName(appReferentEntity)} vs ${displayName(resolved?.entity)}` : `Confirm: ${phrase}` });
@@ -1806,11 +1810,17 @@ export default function App() {
         // totalled column has a free row left to land in) — so a gate-approved call can still be a
         // no-op in the reducer. Bail honestly on identity rather than reporting a commit that never
         // happened (mirrors the existing idiom at handleSurfaceAction's `nextDoc === prevDoc`).
+        // Fix round 2, C2 residual: telemetry.action/recordMissionCommit moved to AFTER this bail
+        // (they used to fire unconditionally above, before applyAction ran at all) — a rejected
+        // no-op must not be recorded as a 'commit' decision or advance mission progress; that is
+        // counted, and worse than a missing event, it is a quiet falsehood in the measured record.
         if (nextDoc === prevDoc) {
           addLog('tool', `Tool Call: ${fc.name} — the document did not change (nothing to land, or it no-ops here)`);
           ack({ success: false, error: `${phrase} made no change to the document — there was nothing to land, or that combination doesn't do anything here. Check the current document state and try something different.` });
           return;
         }
+        telemetry.action(fc.name, verbClass, effectiveDecision, lastInputModalityRef.current);
+        recordMissionCommit(fc.name, verbClass);
         mockDocRef.current = nextDoc;
         setMockDoc(nextDoc);
         journalAppend('workspace', { type: 'doc.set', program: activeProgramRef.current ?? activeProgram, doc: nextDoc });
