@@ -36,6 +36,15 @@ describe('buildInstructions — honest desktop assistant', () => {
     expect(confident).not.toMatch(/confidence: low/i);
   });
 
+  it('refuses to invent authorial content — the rule that answers the "Heading" bug', () => {
+    // The honest arm is told to ASK; the tool it is told to call is the one the app registers.
+    expect(honest).toContain('ask_content');
+    expect(honest).toMatch(/do NOT (guess|send a placeholder)/);
+    expect(honest).toMatch(/heading, body text or a slide title/);
+    // …and told NOT to nag for a value the user already gave (an Excel cell is not authorial).
+    expect(honest).toMatch(/NOT authorial/);
+  });
+
   it('carries the response contract', () => {
     expect(honest).toContain('RESPONSE CONTRACT');
     expect(honest).toContain('respond');

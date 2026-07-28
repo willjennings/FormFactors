@@ -125,11 +125,15 @@ export function DebugDrawer(props: DrawerProps) {
           <span className="text-[var(--text-secondary)]">Calibration</span>
           <span>hi {cal.high.correct}/{cal.high.n} · lo {cal.low.correct}/{cal.low.n}</span>
           <span className="text-[var(--text-secondary)]">Actions</span>
-          <span>{tm.actions.total} ({tm.actions.commits}✓ {tm.actions.witnesses}?)</span>
+          <span>{tm.actions.total} ({tm.actions.commits}✓ {tm.actions.witnesses}? {tm.actions.rejected}✗)</span>
           <span className="text-[var(--text-secondary)]">Grounding</span>
           <span>{tm.grounding.agreementRate === null ? '—' : `${Math.round(tm.grounding.agreementRate * 100)}% (${tm.grounding.agree}/${tm.grounding.total})`}</span>
           <span className="text-[var(--text-secondary)]">Corrections</span>
           <span>{tm.corrections} ({Math.round(tm.correctionRate * 100)}%)</span>
+          {/* Deliberately its OWN row, immediately above Errors and never added into it: asking
+              the user what their heading should say is correct behaviour, not a failure. */}
+          <span className="text-[var(--text-secondary)]">Asks</span>
+          <span>{tm.asks.total} ({tm.asks.answered} answered, {tm.asks.viaCandidate} from a chip)</span>
           <span className="text-[var(--text-secondary)]">Errors</span>
           <span>{tm.errors}</span>
         </div>

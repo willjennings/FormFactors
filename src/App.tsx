@@ -117,6 +117,9 @@ import { COMBINE_TOOL, READ_SOURCES_TOOL, validateCombineCall, sourceDetail, val
 import { REFINE_TOOL, validateRefineCall, describePatch } from './artifacts/refineTools';
 import { validateActionCall } from './actions/validate';
 import { shouldDedupeConfirm } from './actions/dedupe';
+import {
+  ASK_CONTENT_TOOL, askCallToState, askChips, answeredFromCandidate, gateAskAck, type AskState,
+} from './actions/askContent';
 import { feedsSummary } from './artifacts/feeds';
 import { artifactEntities, entityToSourceId } from './artifacts/entities';
 import { toggleTray, removeTray, clearTray, canFire, isTrayFull, pruneTray, restoreTray, type TrayMember } from './artifacts/combineTray';
@@ -405,7 +408,11 @@ export default function App() {
   // Tools offered to the voice model = the kept verbs (explain, share) + the action verbs this
   // program exposes. Read at connect time; program swap reconnects (see handleProgramChange).
   const voiceTools = React.useMemo(
-    () => [...VOICE_TOOLS, ...buildActionTools(activeProgram), ...ANNOTATE_TOOLS, ...(activeProgram === 'word' ? [REVISE_TOOL] : []), ACT_TOOL, ...GOAL_TOOLS, ...WB_TOOLS, BEAUTIFY_TOOL, ...TEACH_TOOLS, COMBINE_TOOL, READ_SOURCES_TOOL, REFINE_TOOL],
+    // ask_content only where authorial content exists (ASK_FIELDS = heading/body/slideTitle).
+    // An Excel cell value or a photo edit is never authorial — the gate refuses to ask there
+    // (validate.ts's authorialField returns null), so offering the tool would invite nagging.
+    () => [...VOICE_TOOLS, ...buildActionTools(activeProgram), ...ANNOTATE_TOOLS, ...(activeProgram === 'word' ? [REVISE_TOOL] : []), ACT_TOOL, ...GOAL_TOOLS, ...WB_TOOLS, BEAUTIFY_TOOL, ...TEACH_TOOLS, COMBINE_TOOL, READ_SOURCES_TOOL, REFINE_TOOL,
+      ...(activeProgram === 'word' || activeProgram === 'powerpoint' ? [ASK_CONTENT_TOOL] : [])],
     [activeProgram],
   );
   const CONFUSABLE_PAIRS = React.useMemo(() => {
@@ -556,12 +563,44 @@ export default function App() {
   // the fired tray here ONLY when the fire queued (never on a live send, which needs no
   // restoration); onOpen's genuine flush clears it, abortPendingTyped/onError restore it.
   const pendingTrayRef = useRef<TrayMember[] | null>(null);
+  // AN OPEN UNSPECIFIED ASK (spec §6). "Add a heading here" leaves the words to the user, so the
+  // app asks instead of inventing them. The ask is a QUESTION, not a mode: nothing is blocked,
+  // nothing is trapped, and any next utterance — chip, typed or spoken — closes it.
+  const [ask, setAsk] = useState<AskState | null>(null);
+  // …with a ref, for the same reason pendingAction has one. Every reader below is on a
+  // stale-closure path: the quick-fire keydown listener is registered once ([] deps), the Esc
+  // listener re-registers only on [isLive, activeProgram, undoStack], and
+  // processInputTranscript is reached from the provider callback bound at connect time. Reading
+  // `ask` from those closures would see its value at registration time — null, forever. Writers
+  // set the ref synchronously (a stale copy of clearAsk still reads the CURRENT ask); the mirror
+  // effect is only a backstop for any future reader that sets `ask` some other way.
+  const askRef = useRef<AskState | null>(null);
+  useEffect(() => { askRef.current = ask; }, [ask]);
+  const openAsk = (a: AskState) => { askRef.current = a; setAsk(a); };
+  /** Close the open ask, if any, and record the one telemetry event for it. Idempotent — every
+   *  path that could end an ask calls this, and only the first call in a turn does anything. */
+  const clearAsk = (answered: boolean, viaChip: boolean) => {
+    const open = askRef.current;
+    if (!open) return;
+    askRef.current = null;
+    // Its OWN counter, never the error rate: an ask is correct collaborative behaviour, and the
+    // 'rejected' ActionDecision exists for gate ERRORS only (telemetry.ts / validate.ts).
+    telemetry.unspecifiedAsk(open.field, answered, viaChip);
+    setAsk(null);
+  };
+  // A program swap abandons the question — it was about a document no longer on screen. Fires on
+  // mount too, where askRef is null and clearAsk is a no-op, so no phantom event is recorded.
+  useEffect(() => { clearAsk(false, false); }, [activeProgram]);
   // R1 Task 4: chipDensity render gate — ONE derivation feeds both the chip row (Omnibox
   // `suggestions` prop) and quick-fire (via suggestionsRef below), so 'none' can never leave
   // an invisible hot surface with a live keyboard shortcut.
   const suggestions = useMemo(
-    () => visibleSuggestions(allSuggestions, dials.chipDensity, grounding.length),
-    [allSuggestions, dials.chipDensity, grounding.length],
+    // An open ask OWNS the chip row in every register: declining to invent the user's words is
+    // not scaffolding, so no chipDensity gate applies to it. Both the rendered chips and the
+    // quick-fire digit path read this one value, so the candidates are digit-fireable with no
+    // new fire path — and while the question stands, no unrelated chip is hot.
+    () => ask ? askChips(ask) : visibleSuggestions(allSuggestions, dials.chipDensity, grounding.length),
+    [ask, allSuggestions, dials.chipDensity, grounding.length],
   );
   const suggestionsRef = useRef(suggestions);
   useEffect(() => { suggestionsRef.current = suggestions; }, [suggestions]);
@@ -1558,17 +1597,19 @@ export default function App() {
       : typeof fc.args?.title === 'string' ? ` (${fc.args.title})` : '';
     if (fc.name !== 'respond') traceActivity({ kind: 'call', callId: fc.id, text: `${fc.name}${targetSummary}` });
     const ack = (result: Record<string, any>) => {
-      if (result.success === false) {
-        callDeduperRef.current.forget(fc.name, dedupeKey);
-        if (result.ask) {
-          // Fix round 1, I2: a collaborative ask is not an error (validate.ts's own doctrine —
-          // logging it as one would inflate every register arm's error rate with correct
-          // behaviour). Show the USER-facing question here, not the model-directed `error` text.
-          traceActivity({ kind: 'ask', callId: fc.id, text: String(result.ask).slice(0, 80) });
-        } else {
-          // A rejection is data the user should see too — retries stop looking like dead air.
-          traceActivity({ kind: 'error', callId: fc.id, text: `${fc.name}: ${String(result.error ?? 'rejected').slice(0, 80)}` });
-        }
+      // A REJECTED call never executed, so un-record it from the deduper (see above) — that is
+      // true of every success:false ack, `ask` or not, so it happens before the trace branch.
+      if (result.success === false) callDeduperRef.current.forget(fc.name, dedupeKey);
+      if (result.ask) {
+        // Fix round 1, I2: a collaborative ask is not an error (validate.ts's own doctrine —
+        // logging it as one would inflate every register arm's error rate with correct
+        // behaviour). Show the USER-facing question here, not the model-directed `error` text.
+        // Keyed on `ask` alone, not on success:false, so ask_content's own successful call
+        // (Task 5) traces as the question it is rather than as a bare "done".
+        traceActivity({ kind: 'ask', callId: fc.id, text: String(result.ask).slice(0, 80) });
+      } else if (result.success === false) {
+        // A rejection is data the user should see too — retries stop looking like dead air.
+        traceActivity({ kind: 'error', callId: fc.id, text: `${fc.name}: ${String(result.error ?? 'rejected').slice(0, 80)}` });
       } else if (result.witnessed || result.offered) {
         traceActivity({ kind: 'witness', callId: fc.id, text: `${fc.name} — awaiting your confirm` });
       } else if (fc.name !== 'respond' && !result.deduped) {
@@ -1762,17 +1803,19 @@ export default function App() {
       }
       if ('needsContent' in gate) {
         // Not an error (validate.ts's own doctrine, fix round 1, I2): don't inflate the error-rate
-        // trace with correct collaborative behaviour. The USER-facing trace shows the question;
-        // the MODEL-facing ack carries the instruction. Task 5 gives this its own counter
-        // (telemetry.unspecifiedAsk) — no interim counter invented here.
-        addLog('info', `${fc.name} needs ${gate.needsContent.field} — telling the model to ask: "${gate.needsContent.question}"`);
-        ack({
-          success: false,
-          ask: gate.needsContent.question,
-          // I1: the model has no ask_content tool registered yet (that's Task 5) — tell it to ask
-          // by speech, not to call a tool that doesn't exist in this session.
-          error: `${gate.needsContent.question} Ask the user this out loud — do NOT call a tool for it, and do NOT send a placeholder value.`,
-        });
+        // trace with correct collaborative behaviour. The USER-facing trace shows the question
+        // (ack() routes a result carrying `ask` to traceActivity kind:'ask', never kind:'error');
+        // the MODEL-facing ack carries the instruction. Counted by clearAsk when the ask closes —
+        // that is when `answered` is known — never as an ActionDecision.
+        //
+        // THE BACKSTOP: the app puts the question on screen ITSELF rather than only telling the
+        // model to ask. The prompt rule + ask_content are the front door (the model asks before
+        // ever calling the verb); this is what happens when it walks past them, and it is the
+        // path the origin bug took. A model that goes on to call ask_content replaces this ask
+        // with its own question and candidates.
+        openAsk({ field: gate.needsContent.field, question: gate.needsContent.question, candidates: [] });
+        addLog('info', `${fc.name} needs ${gate.needsContent.field} — asking the user: "${gate.needsContent.question}"`);
+        ack(gateAskAck(fc.name, gate.needsContent));
         return;
       }
 
@@ -1839,6 +1882,21 @@ export default function App() {
         // (closes the action→result loop for multi-step work). Also drawn into the vision frame.
         providerRef.current?.sendTextHint(`[DOCUMENT STATE after your edit: ${serializeMockDoc(nextDoc)}. DO NOT acknowledge this message.]`);
         ack({ success: true, done: true });
+      }
+    } else if (fc.name === 'ask_content') {
+      // The FRONT DOOR of the ask (spec §6): the model noticed the user left the words open and
+      // asked back instead of guessing. Candidates are offers, not defaults — they render as the
+      // chip row and nothing applies unless the user sends one. An ask already open (from the
+      // gate backstop above) is REPLACED, not stacked — one question on screen at a time, and
+      // one telemetry event when it closes.
+      const v = askCallToState(fc.args);
+      if ('error' in v) {
+        addLog('tool', `Tool Call: ask_content REJECTED — ${v.error}`);
+        ack({ success: false, error: v.error });
+      } else {
+        openAsk(v.ask);
+        addLog('info', `Asked: ${v.ask.question}${v.ask.candidates.length ? ` (${v.ask.candidates.length} candidates)` : ''}`);
+        ack({ success: true, ask: v.ask.question, note: `The question is on screen${v.ask.candidates.length ? ' with your candidates as chips' : ''}; the user will answer by chip, typing or voice. Say the question out loud once, then wait — do not call the action verb until they answer.` });
       }
     } else if (fc.name === 'revise_text') {
       // C2b Part B: witnessed, reversible span edit. Always witness-render the before→after diff;
@@ -2222,6 +2280,24 @@ export default function App() {
     // "cancel / never mind" → drop the pending action; "no, the other one" → swap to the
     // alternative candidate of the last ambiguous point and re-offer it.
     const repair = parseRepair(cleanedText);
+    // ANY real user turn closes an open ask — this is the one seam every answer crosses, typed
+    // (sendTypedInput calls it) or spoken (the provider's onInputTranscript calls it), so voice
+    // is a first-class answer and no modal is needed. The user's words go on to the model
+    // untouched: the ask never consumes, rewrites or applies them, so ignoring the question and
+    // saying something else entirely just works. "Never mind" (repair 'cancel') is a decline,
+    // recorded as unanswered rather than dressed up as an answer; any OTHER change of subject is
+    // still recorded answered, because the app cannot read intent and only that one form of
+    // decline is legible to it. Pure noise returned above without touching the ask at all.
+    // The quick-fire path has already closed it by here (viaChip),
+    // and clearAsk is idempotent, so a chip answer is counted once.
+    //
+    // KNOWN LIMIT, deliberately taken: voice arrives here as partial deltas too (the provider
+    // callback ignores isFinal), so a SPOKEN answer closes the ask on its first fragment and its
+    // viaChip is judged on that fragment — a spoken candidate read off the screen can be recorded
+    // viaChip:false. Gating on isFinal instead would tie the ask's only voice exit to a
+    // turnComplete flag Gemini may deliver on a message carrying no transcript at all, leaving
+    // the question stuck open on the primary modality. A soft under-count beats a stuck ask.
+    clearAsk(repair !== 'cancel', answeredFromCandidate(askRef.current, cleanedText));
     if (repair === 'undo') {
       handleUndo();
     } else if (repair === 'cancel') {
@@ -2548,6 +2624,11 @@ export default function App() {
       setQuickFireEcho({ n: i + 1, phrase: sug.phrase, referent: hovered ? displayName(hovered) : null, at: Date.now() });
       lastActivityRef.current = Date.now();
       setFirstRunHint(false);
+      // While an ask is open these ARE its candidates (the suggestions memo hands the row over),
+      // so a digit here is direct evidence of a chip answer rather than the text-match inference
+      // processInputTranscript falls back on. Closed BEFORE the send: sendTypedInput reaches
+      // processInputTranscript synchronously, and whichever call gets there first owns the event.
+      clearAsk(true, true);
       sendTypedInputRef.current(sug.phrase);
     };
     window.addEventListener('keydown', onKey);
@@ -2848,6 +2929,15 @@ export default function App() {
         if (pendingBeautifyRef.current) { providerRef.current?.sendTextHint('[SYSTEM: the user DECLINED the beautify — their sketch is unchanged. Do not re-call the tool unless they ask.]'); setPendingBeautify(null); return; }
         if (pendingGoalRef.current) { setPendingGoal(null); return; }
         if (pendingSuggestionRef.current) { setPendingSuggestion(null); return; }
+        // Dismiss an open question. Reached even while the omnibox has focus (this Escape block
+        // runs above the editable-target bail below), so a user who started typing an answer and
+        // changed their mind can drop it. Nothing is applied — no candidate is ever a default —
+        // and the model is told, or it would sit waiting for an answer that will never come.
+        if (askRef.current) {
+          clearAsk(false, false);
+          providerRef.current?.sendTextHint('[SYSTEM: the user dismissed your question without answering. Do not re-ask and do not fill in the content yourself — wait for them.]');
+          return;
+        }
       }
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) { e.preventDefault(); handleUndo(); return; }
@@ -4355,6 +4445,7 @@ export default function App() {
             busy={modelBusy}
             grounding={grounding}
             quickFireEcho={quickFireEcho}
+            askQuestion={ask?.question ?? null}
             onRemoveGrounding={(id) => setGrounding(g => g.filter(c => c.id !== id))}
             tray={tray.map((t) => ({ sourceId: t.sourceId, title: t.title, color: t.color }))}
             onRemoveTray={(sourceId) => setTray((t) => removeTray(t, sourceId))}

@@ -64,6 +64,7 @@ export type TelemetryEvent =
   | { t: number; type: 'mission_complete'; key: string; run: number; durationMs: number; steps: number }
   | { t: number; type: 'mission_abandoned'; key: string; stepIndex: number }
   | { t: number; type: 'register_switch'; from: string; to: string; midSession: boolean }
+  | { t: number; type: 'unspecified_ask'; field: string; answered: boolean; viaChip: boolean }
   | { t: number; type: 'pin'; cardType: string; artifactId?: string; error?: string }
   | { t: number; type: 'combine_tray'; count: number; kind: string; ok: boolean };
 
@@ -130,6 +131,11 @@ class Telemetry {
   missionComplete(key: string, run: number, durationMs: number, steps: number) { this.push({ type: 'mission_complete', key, run, durationMs, steps }); }
   missionAbandoned(key: string, stepIndex: number) { this.push({ type: 'mission_abandoned', key, stepIndex }); }
   registerSwitch(from: string, to: string, midSession: boolean) { this.push({ type: 'register_switch', from, to, midSession }); }
+  /** An unspecified ask is CORRECT collaborative behaviour, never a failure. Counted separately
+   *  so a register arm that asks more does not look like an arm that errors more. Emitted once
+   *  per ask, when it CLOSES (that is when `answered` is known) — an ask still open when the
+   *  session ends therefore emits nothing, which is honest: its outcome is genuinely unknown. */
+  unspecifiedAsk(field: string, answered: boolean, viaChip: boolean) { this.push({ type: 'unspecified_ask', field, answered, viaChip }); }
   pin(cardType: string, artifactId?: string, error?: string) { this.push({ type: 'pin', cardType, artifactId, error }); }
   combineTray(count: number, kind: string, ok: boolean) { this.push({ type: 'combine_tray', count, kind, ok }); }
 
@@ -160,6 +166,7 @@ class Telemetry {
       const a = actions.filter(x => x.modality === mod);
       return { total: a.length, commits: a.filter(x => x.decision === 'commit').length, witnesses: a.filter(x => x.decision === 'witness').length };
     };
+    const asks = this.events.filter(e => e.type === 'unspecified_ask') as Extract<TelemetryEvent, { type: 'unspecified_ask' }>[];
     const guid = this.events.filter(e => e.type === 'guidance') as Extract<TelemetryEvent, { type: 'guidance' }>[];
     const gk = (k: string) => guid.filter(e => e.kind === k).length;
     return {
@@ -177,11 +184,23 @@ class Telemetry {
         total: actions.length,
         commits: actions.filter(a => a.decision === 'commit').length,
         witnesses: actions.filter(a => a.decision === 'witness').length,
+        // Reported so the three decisions SUM to total. Before this, `total` counted the
+        // 'rejected' decision (added with the gate) while only commits and witnesses were
+        // shown, so the readout silently lost every rejection between two numbers.
+        rejected: actions.filter(a => a.decision === 'rejected').length,
         byModality: { voice: actByMod('voice'), typed: actByMod('typed'), direct: actByMod('direct') },
       },
       corrections,
       correctionRate: actions.length ? +(corrections / actions.length).toFixed(2) : 0,
       errors,
+      // Kept OUT of `errors` on purpose (validate.ts's header states the doctrine): asking the
+      // user what their heading should say is the behaviour this testbed wants to see more of,
+      // so folding it into the error rate would penalise the arms that do it right.
+      asks: {
+        total: asks.length,
+        answered: asks.filter(a => a.answered).length,
+        viaCandidate: asks.filter(a => a.viaChip).length,
+      },
       guidance: {
         sequences: gk('sequence_start'),
         completions: gk('sequence_complete'),

@@ -2,13 +2,20 @@ import React, { useState } from 'react';
 import { Mic, MicOff, CornerDownLeft, X } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Tip } from '../ui/Tooltip';
+// One constant for the whole ask surface — the question line and its candidate chips are one
+// thing and must not drift into two colours the way a duplicated literal eventually would.
+import { ASK_CHIP_COLOR } from '../actions/askContent';
 
 export type Suggestion = { key: string; label: string; phrase: string; color: string };
 export type GroundingChip = { id: string; title: string; color: string };
 
-export function Omnibox({ isLive, isConnecting, error, transcript, suggestions, firstRunHint, restoredDraft, modelCaption, busy = false, grounding = [], quickFireEcho = null, tray, onRemoveGrounding, onRemoveTray, onFireTray, onSubmit, onMicToggle, onChipTap, above }: {
+export function Omnibox({ isLive, isConnecting, error, transcript, suggestions, firstRunHint, restoredDraft, modelCaption, busy = false, grounding = [], quickFireEcho = null, tray, askQuestion = null, onRemoveGrounding, onRemoveTray, onFireTray, onSubmit, onMicToggle, onChipTap, above }: {
   isLive: boolean; isConnecting: boolean; error: string | null; transcript: string | null;
   suggestions: Suggestion[]; firstRunHint: boolean;
+  /** An open unspecified ask's question — rendered as its own line above the chips AND as the
+   *  input's placeholder. It is a prompt, not a mode: the field stays free, so the user may
+   *  answer it, ignore it and type something else, or say the answer out loud instead. */
+  askQuestion?: string | null;
   restoredDraft?: { text: string; at: number } | null;
   /** The model's speech as text — the response window for muted speakers. Persists post-query. */
   modelCaption?: { text: string; final: boolean } | null;
@@ -64,6 +71,17 @@ export function Omnibox({ isLive, isConnecting, error, transcript, suggestions, 
             {quickFireEcho.phrase}
             {quickFireEcho.referent && <span className="text-[var(--text-secondary)]">→ {quickFireEcho.referent}</span>}
           </span>
+        </div>
+      )}
+      {/* The open question, kept VISIBLE while it is being answered. The placeholder below
+          carries it too, but a placeholder disappears at the first keystroke — i.e. exactly
+          when the user is answering — and never shows at all if a draft is already in the
+          field. Not a modal: nothing is disabled, focus is not moved or trapped. */}
+      {askQuestion && (
+        <div className="rounded-2xl border bg-[var(--card-bg)]/90 backdrop-blur shadow-lg px-3 py-2"
+          style={{ borderColor: `rgba(${ASK_CHIP_COLOR},0.45)` }} role="status">
+          <span className="text-[9px] font-mono uppercase tracking-widest" style={{ color: `rgb(${ASK_CHIP_COLOR})` }}>question</span>
+          <p className="text-[12px] text-[var(--text-primary)] leading-snug">{askQuestion}</p>
         </div>
       )}
       {suggestions.length > 0 && (
@@ -159,7 +177,7 @@ export function Omnibox({ isLive, isConnecting, error, transcript, suggestions, 
         <input
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          placeholder={grounding.length ? 'Ask about your selection…' : 'Ask or tell me anything — point while you type'}
+          placeholder={askQuestion ?? (grounding.length ? 'Ask about your selection…' : 'Ask or tell me anything — point while you type')}
           disabled={isConnecting}
           className="flex-1 min-h-6 bg-transparent text-[13px] text-[var(--text-primary)] placeholder:text-[var(--text-secondary)] placeholder:opacity-50 focus:outline-none disabled:opacity-40"
         />

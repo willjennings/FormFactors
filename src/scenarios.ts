@@ -359,7 +359,7 @@ export const ACTION_VERBS: Partial<Record<ActionCategory, ActionVerb>> = {
   },
   insert: {
     action: 'insert', commitment: 'high', name: 'insert_object',
-    description: 'Insert a new object (a chart, a new slide, a shape). HIGH-COMMITMENT — it adds to the document. Witness-render first, then commit with confirm=true.',
+    description: 'Insert a new object (a chart, a new slide, a shape), or compute a column aggregate (sum/total, average) into the first free cell below that column. HIGH-COMMITMENT — it adds to the document. Witness-render first, then commit with confirm=true.',
     parameters: VERB_PARAMETERS,
   },
   photo: {

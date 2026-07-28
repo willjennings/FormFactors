@@ -61,6 +61,41 @@ describe('mission telemetry (spec §7)', () => {
   });
 });
 
+describe('unspecified asks are counted apart from errors', () => {
+  beforeEach(() => telemetry.start(cfg));
+
+  it('records field / answered / viaChip per ask and never touches the error count', () => {
+    telemetry.unspecifiedAsk('heading', true, true);
+    telemetry.unspecifiedAsk('body', true, false);
+    telemetry.unspecifiedAsk('slideTitle', false, false);   // Esc'd, or the program swapped
+    const m = telemetry.metrics();
+    expect(m.asks).toEqual({ total: 3, answered: 2, viaCandidate: 1 });
+    expect(m.errors).toBe(0);                               // an ask is not an error
+    expect(m.actions.total).toBe(0);                        // …and not an action decision either
+    const events = JSON.parse(telemetry.exportJSON()).events as any[];
+    expect(events.filter(e => e.type === 'unspecified_ask')).toHaveLength(3);
+    expect(events.find(e => e.type === 'unspecified_ask'))
+      .toMatchObject({ field: 'heading', answered: true, viaChip: true });
+  });
+
+  it('a real error still counts as one, with the asks alongside it', () => {
+    telemetry.unspecifiedAsk('heading', true, false);
+    telemetry.error('boom');
+    const m = telemetry.metrics();
+    expect(m.errors).toBe(1);
+    expect(m.asks.total).toBe(1);
+  });
+
+  it('the three action decisions sum to the action total (gate rejections included)', () => {
+    telemetry.action('edit_content', 'mutate', 'commit');
+    telemetry.action('edit_content', 'mutate', 'witness');
+    telemetry.action('insert_object', 'create', 'rejected');
+    const a = telemetry.metrics().actions;
+    expect(a.commits + a.witnesses + a.rejected).toBe(a.total);
+    expect(a.rejected).toBe(1);
+  });
+});
+
 describe('arm in telemetry', () => {
   it('stamps the arm on session config and register_switch events', () => {
     const DEFAULT_DIALS = { honest: false, autonomy: 'confirm' as const, feedback: 'earcon' as const, confirmGoals: false, markings: false, chipDensity: 'full' as const, traceView: 'hidden' as const, teaching: 'off' as const, proactivity: 'never' as const };
