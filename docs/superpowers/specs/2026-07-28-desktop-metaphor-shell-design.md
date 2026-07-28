@@ -30,6 +30,39 @@ Research basis: `docs/superpowers/research/2026-07-28-desktop-metaphor-research.
    Windows?" on every missing affordance (research §4, §6).
 4. **Skins compose slots; they are not forks.** One slot system filled four ways, mirroring how
    registers became dials-plus-gates rather than four apps (research §2).
+5. **The shell is a rung on a learning ladder, not just a look** (ruling 2026-07-28, from the
+   step-by-step-learning conversation). Learning this system means coming to believe six things in
+   order, and each skin assumes a different amount of that prior learning — see §2b.
+
+---
+
+## §0b The learning ladder
+
+Trusting this system is six beliefs, acquired in order:
+
+| rung | belief | earned by |
+|---|---|---|
+| R0 | "This is a computer I recognise" | the shell itself |
+| R1 | "It sees what I point at" | the honest pointer, deixis |
+| R2 | "It acts visibly, and I can undo" | witness cards, tagged ⌘Z |
+| R3 | "It asks instead of guessing" | the missing-information gate + ask surface |
+| R4 | "What it makes is material I keep" | artifacts, pin, combine, revisions |
+| R5 | "I can change how it behaves" | registers, dials — and these shells |
+
+Two design consequences land in this phase:
+
+**Each skin declares `assumesRung`** (a `ShellSkin` field, rendered in the band beside ethos and
+probe): A assumes nothing — forty years of convention do the work; D assumes nothing for anyone
+chat-literate; **C is meaningless before R2** — provenance tags answer a question ("who did this?")
+that a user who hasn't seen the agent act has not yet asked; **B assumes R4** — until "what it makes
+is material" is believed, a desk organised around material reads as "where did my spreadsheet go?".
+This makes skin orderings testable: does Familiar-then-Material teach faster than Material-first?
+
+**Sparse start.** The first-run desk opens ONE window, not a furnished stage; density is earned as
+things are actually made and opened. Same instinct as the teaching system's fade-on-repeat: scaffold
+proportional to need. Concretely: `initialDeskState()` opens only the active program's window;
+artifacts and further windows appear when the session creates them. A returning desk restores
+whatever the journal says was open — sparseness is a first-contact property, not a cap.
 
 ---
 
@@ -131,6 +164,7 @@ export interface ShellSkin {
   key: SkinKey; label: string; glyph: string;
   ethos: string;   // one sentence: what this shell believes
   probe: string;   // the pre-registered hypothesis, rendered in the band
+  assumesRung: 'none' | 'R2' | 'R4';   // §0b — the prior learning this skin presumes, shown in the band
   slots: {
     background:   'wallpaper' | 'paper' | 'dark' | 'flat';
     topBar:       'menu' | 'desk' | 'session' | 'minimal';
@@ -290,6 +324,10 @@ was invisible to every per-task review because no single task owned both halves.
   tiling; user-chosen wallpaper.
 - Any change to what the agent can do. This phase changes the furniture and the inventory, not the
   grammar.
+- **The diverse program set** (Notes, Files, Calendar, Mail, Settings, Code, Video) and the
+  `ProgramDef` registry that makes adding them safe. That is its own phase — see
+  `2026-07-28-program-platform-design.md`. The shell lands first because the inventory is what
+  makes a taskbar meaningful before there are nine programs to list.
 
 ## After approval
 
