@@ -1732,21 +1732,19 @@ export default function App() {
 
       // THE GATE (spec §4). Nothing is witnessed or committed on missing information. An ask is
       // NOT an error: {needsContent} addresses the USER (Task 5 gives it chips; until then the
-      // model asks by speech), {error} addresses the MODEL. Computed BEFORE the double-apply
-      // guard (fix round 2, I3) — dedupe must never override the gate's verdict, only skip
-      // re-applying when the gate independently agrees the call is fine. See shouldDedupeConfirm.
+      // model asks by speech), {error} addresses the MODEL. validateActionCall is pure, so hoisting
+      // it above the double-apply guard below is free — the guard no longer depends on its result.
       const gate = validateActionCall(fc.name, args, mockDocRef.current);
 
-      // Double-apply guard (fix round 1, I3; tightened fix round 2, I3): if the button already
-      // confirmed this action, don't re-run the voice-confirm call that follows (button sets
-      // confirmed=true, then the model also fires confirm=true — one apply is enough). Requiring
-      // the gate to agree (ok, or needsContent on an already-confirmed action — see dedupe.ts)
-      // closes the hole round 1 opened: a confirm:true call matching a confirmed pending action's
-      // verb+target used to dedupe on payload alone, so a call the gate would genuinely REJECT
-      // (e.g. a different, wrong, or missing value) could be acked as a fabricated success. Now a
-      // rejected call always falls through to the real error below, never a fake dedupe success —
-      // while a harmless replay (the gate still says ok/needsContent) dedupes exactly as before.
-      if (shouldDedupeConfirm(pendingActionRef.current, fc.name, args.target, confirmed, gate)) {
+      // Double-apply guard (fix round 1, I3; tightened round 2; rebuilt round 3, I3/#1 — see
+      // dedupe.ts for the full history). A confirm:true call matching a confirmed pending action's
+      // verb+target dedupes ONLY when its detail carries nothing new: absent/blank (the button
+      // already supplied the value), or the SAME value as what was actually applied
+      // (pending.detail — round 3's discriminator; it's threaded through unchanged from
+      // describeAction's verbatim pass-through, see dedupe.ts). A genuinely DIFFERENT value is a
+      // new edit, not a replay — it falls through to the gate and the reducer like any other call,
+      // so it can never be silently dropped as a fabricated "already applied" success.
+      if (shouldDedupeConfirm(pendingActionRef.current, fc.name, args.target, args.detail, confirmed)) {
         ack({ success: true, deduped: true, note: 'already applied via button confirm' });
         return;
       }

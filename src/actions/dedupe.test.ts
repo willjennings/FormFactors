@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { isDuplicateConfirm, shouldDedupeConfirm } from './dedupe';
 import { validateActionCall } from './validate';
+import { applyAction } from '../scenarios';
 import { seedCorpus } from '../artifacts/seeds';
 
 describe('isDuplicateConfirm (fix round 1, I3)', () => {
@@ -25,48 +26,63 @@ describe('isDuplicateConfirm (fix round 1, I3)', () => {
   });
 });
 
-// Fix round 2, I3: round 1 made `isDuplicateConfirm` alone gate the dedupe decision, checked
-// BEFORE the gate — which let ANY confirm:true call matching a confirmed pending action's
-// verb+target dedupe on payload alone, including one the gate would genuinely refuse. These tests
-// pin BOTH directions against the REAL gate (validateActionCall), not a stub, so a future reorder
-// of "compute gate" vs "check dedupe" in App.tsx would need to also break this call shape to slip
-// past — the two cases below are the reviewer's exact reproductions.
-describe('shouldDedupeConfirm — dedupe must never override the gate (fix round 2, I3)', () => {
-  it('direction 1 — a harmless replay the gate independently allows still dedupes (round 1\'s fix, preserved)', () => {
-    // Authorial field (word heading): validate.ts's own confirm-bypass makes the gate say {ok}
-    // unconditionally once confirm:true, even with no detail — the classic "button already
-    // applied it, model re-fires confirm without resending the text" replay.
-    const doc = seedCorpus().word;
-    const pending = { verb: 'edit_content', target: 'heading', confirmed: true };
-    const gate = validateActionCall('edit_content', { target: 'heading', confirm: true }, doc);
+// Fix round 3, I3/#1: round 2 required the gate to independently agree before deduping, which
+// closed the MISSING-value hole but not a DIFFERENT-value one — a well-formed but genuinely
+// different detail still passes the gate on its own terms (the gate has no memory of what was
+// already written), so it still deduped to a fabricated success. This round replaces the
+// gate-agreement clause with a PAYLOAD clause: dedupe only when the incoming detail carries
+// nothing new (absent/blank, or the SAME value already applied). See dedupe.ts for the full
+// history and why `pending.confirmed === true` is a strong enough discriminator once payload is
+// checked (it's only ever set past an identity bail, and invalidated on undo/program-swap/reset).
+describe('shouldDedupeConfirm — payload discriminator, no gate needed (fix round 3, I3/#1)', () => {
+  it('a replay with the SAME value as the pending action dedupes (round 1\'s original guarantee — now holds for Excel/insert_object too, not just authorial fields)', () => {
+    const pending = { verb: 'edit_content', target: 'Cell B5', detail: '250', confirmed: true };
+    expect(shouldDedupeConfirm(pending, 'edit_content', 'Cell B5', '250', true)).toBe(true);
+  });
+
+  it('a replay with NO detail (the button already supplied it) dedupes', () => {
+    const pending = { verb: 'edit_content', target: 'Cell B5', detail: '250', confirmed: true };
+    expect(shouldDedupeConfirm(pending, 'edit_content', 'Cell B5', undefined, true)).toBe(true);
+  });
+
+  it('the same-value comparison is whitespace/case-insensitive (normText), not exact-string', () => {
+    const pending = { verb: 'edit_content', target: 'heading', detail: 'Quarterly Report', confirmed: true };
+    expect(shouldDedupeConfirm(pending, 'edit_content', 'heading', '  quarterly   report  ', true)).toBe(true);
+  });
+
+  it("the coordinator's exact repro: a DIFFERENT value must NOT dedupe — it is a new edit, not a replay", () => {
+    const pending = { verb: 'edit_content', target: 'Cell B5', detail: '250', confirmed: true };
+    expect(shouldDedupeConfirm(pending, 'edit_content', 'Cell B5', '260', true)).toBe(false);
+  });
+
+  it('never dedupes when this call itself is not a confirm (confirmed=false), regardless of payload', () => {
+    const pending = { verb: 'edit_content', target: 'Cell B5', detail: '250', confirmed: true };
+    expect(shouldDedupeConfirm(pending, 'edit_content', 'Cell B5', undefined, false)).toBe(false);
+  });
+
+  it('never dedupes when verb/target do not match the pending action', () => {
+    const pending = { verb: 'edit_content', target: 'Cell B5', detail: '250', confirmed: true };
+    expect(shouldDedupeConfirm(pending, 'edit_content', 'Cell C9', undefined, true)).toBe(false);
+  });
+});
+
+// Both new directions, verified against the REAL gate and reducer (not stubs) on seedCorpus(), per
+// the coordinator's explicit instruction: same value dedupes (the gate/reducer are never even
+// reached); different value does NOT dedupe and reaches the reducer, which applies the NEW value.
+describe('shouldDedupeConfirm — both directions against the real gate + reducer (fix round 3, I3/#1)', () => {
+  it('same-value replay dedupes before the gate or reducer ever run', () => {
+    const pending = { verb: 'edit_content', target: 'Cell B5', detail: '250', confirmed: true };
+    expect(shouldDedupeConfirm(pending, 'edit_content', 'Cell B5', '250', true)).toBe(true);
+  });
+
+  it("different-value replay does NOT dedupe — it reaches the gate (which allows it) and the reducer (which writes the NEW value, never silently drops it)", () => {
+    const base = seedCorpus().excel as { kind: 'excel'; cells: Record<string, string>; currency: string[]; chart: boolean; saved: boolean };
+    const doc = { ...base, cells: { ...base.cells, B5: '250' } }; // B5 already holds the FIRST applied value
+    const pending = { verb: 'edit_content', target: 'Cell B5', detail: '250', confirmed: true };
+    expect(shouldDedupeConfirm(pending, 'edit_content', 'Cell B5', '260', true)).toBe(false);
+    const gate = validateActionCall('edit_content', { target: 'Cell B5', detail: '260', confirm: true }, doc);
     expect(gate).toEqual({ ok: true });
-    expect(shouldDedupeConfirm(pending, 'edit_content', 'heading', true, gate)).toBe(true);
-  });
-
-  it("direction 2 — reviewer's exact repro: a call the gate REJECTS must never be acked a duplicate success", () => {
-    // Excel cell (non-authorial): the gate has no way to know a missing value was already
-    // supplied via the button, so it genuinely refuses — that refusal must surface, never be
-    // swallowed as a fake success just because verb+target match a confirmed pending action.
-    const doc = seedCorpus().excel;
-    const pending = { verb: 'edit_content', target: 'Cell B5', confirmed: true };
-    const gate = validateActionCall('edit_content', { target: 'Cell B5', confirm: true }, doc);
-    expect('error' in gate).toBe(true);
-    expect(shouldDedupeConfirm(pending, 'edit_content', 'Cell B5', true, gate)).toBe(false);
-  });
-
-  it('a needsContent verdict on an already-confirmed action also dedupes (the shape the reviewer named, even though unreachable today — validate.ts\'s confirm-bypass returns {ok} first)', () => {
-    const pending = { verb: 'edit_content', target: 'heading', confirmed: true };
-    const gate = { needsContent: { field: 'heading', question: 'What would you like the heading to say?' } } as const;
-    expect(shouldDedupeConfirm(pending, 'edit_content', 'heading', true, gate)).toBe(true);
-  });
-
-  it('never dedupes when this call itself is not a confirm (confirmed=false), regardless of the gate', () => {
-    const pending = { verb: 'edit_content', target: 'heading', confirmed: true };
-    expect(shouldDedupeConfirm(pending, 'edit_content', 'heading', false, { ok: true })).toBe(false);
-  });
-
-  it('never dedupes when verb/target do not match the pending action, even if the gate says ok', () => {
-    const pending = { verb: 'edit_content', target: 'heading', confirmed: true };
-    expect(shouldDedupeConfirm(pending, 'edit_content', 'Cell C9', true, { ok: true })).toBe(false);
+    const after = applyAction(doc, 'edit_content', { target: 'Cell B5', detail: '260' }) as any;
+    expect(after.cells.B5).toBe('260'); // the new value lands — not the stale '250' from a fabricated dedupe
   });
 });
