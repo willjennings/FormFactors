@@ -51,8 +51,18 @@ function isPlaceholder(detail: string | undefined, field: string): boolean {
   return PLACEHOLDERS.includes(d) || d === normText(field);
 }
 
-/** Column for an aggregate: the target's letter, else the only numeric column, else ask. */
-function resolveColumn(cells: Record<string, string>, target?: string): string | null {
+/** Cell ref named by a target string ("Cell A1", "A1"), or null if none is named. Never guesses
+ *  A1 — an unnamed cell means write nothing (fix round 1, I4). Shared by the gate and the reducer
+ *  (scenarios.ts) so "is this a real cell" can't be answered two different ways, same as C1. */
+export function resolveCellRef(target?: string): string | null {
+  return target?.match(/[A-Za-z]\d+/)?.[0]?.toUpperCase() ?? null;
+}
+
+/** Column for an aggregate: the target's letter, else the only numeric column, else ask.
+ *  Exported (fix round 1, C1) so the reducer (scenarios.ts) calls this SAME function instead of
+ *  its own letter-matching regex — two functions deciding the column is exactly the defect class
+ *  this task exists to remove, one level up. */
+export function resolveColumn(cells: Record<string, string>, target?: string): string | null {
   const named = target?.match(/\b([A-Da-d])\s*\d/)?.[1]
     ?? target?.match(/\bcolumn\s+([A-Da-d])\b/i)?.[1]
     ?? target?.trim().match(/^([A-Da-d])$/)?.[1];
@@ -77,6 +87,12 @@ export function validateActionCall(
       if (!detail) {
         const where = args.target?.trim() || 'that cell';
         return { error: `edit_content on ${where} needs the value to enter — the user said it; pass it as detail.` };
+      }
+      // Excel cells are ADDRESSED, not authored — but the address itself must be real (fix round
+      // 1, I4). A target that doesn't name a cell (e.g. "the total row") must never fall back to
+      // guessing A1 and overwriting whatever happens to sit there.
+      if (doc.kind === 'excel' && !resolveCellRef(args.target)) {
+        return { error: `edit_content needs a real cell reference (like "B5") — "${args.target ?? ''}" doesn't name one.` };
       }
       return { ok: true };
     }

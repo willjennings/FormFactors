@@ -116,6 +116,7 @@ import { pinEventFor } from './artifacts/pin';
 import { COMBINE_TOOL, READ_SOURCES_TOOL, validateCombineCall, sourceDetail, validSourceIds } from './artifacts/combineTools';
 import { REFINE_TOOL, validateRefineCall, describePatch } from './artifacts/refineTools';
 import { validateActionCall } from './actions/validate';
+import { isDuplicateConfirm } from './actions/dedupe';
 import { feedsSummary } from './artifacts/feeds';
 import { artifactEntities, entityToSourceId } from './artifacts/entities';
 import { toggleTray, removeTray, clearTray, canFire, isTrayFull, pruneTray, restoreTray, type TrayMember } from './artifacts/combineTray';
@@ -1559,8 +1560,15 @@ export default function App() {
     const ack = (result: Record<string, any>) => {
       if (result.success === false) {
         callDeduperRef.current.forget(fc.name, dedupeKey);
-        // A rejection is data the user should see too — retries stop looking like dead air.
-        traceActivity({ kind: 'error', callId: fc.id, text: `${fc.name}: ${String(result.error ?? 'rejected').slice(0, 80)}` });
+        if (result.ask) {
+          // Fix round 1, I2: a collaborative ask is not an error (validate.ts's own doctrine —
+          // logging it as one would inflate every register arm's error rate with correct
+          // behaviour). Show the USER-facing question here, not the model-directed `error` text.
+          traceActivity({ kind: 'ask', callId: fc.id, text: String(result.ask).slice(0, 80) });
+        } else {
+          // A rejection is data the user should see too — retries stop looking like dead air.
+          traceActivity({ kind: 'error', callId: fc.id, text: `${fc.name}: ${String(result.error ?? 'rejected').slice(0, 80)}` });
+        }
       } else if (result.witnessed || result.offered) {
         traceActivity({ kind: 'witness', callId: fc.id, text: `${fc.name} — awaiting your confirm` });
       } else if (fc.name !== 'respond' && !result.deduped) {
@@ -1722,30 +1730,45 @@ export default function App() {
       const { label, target, detail } = describeAction(fc.name, args);
       const confirmed = args.confirm === true;
 
+      // Double-apply guard — checked BEFORE the gate (fix round 1, I3): if the button already
+      // confirmed this action, don't re-run the voice-confirm call that follows (button sets
+      // confirmed=true, then the model also fires confirm=true — one apply is enough). A dedupe
+      // hit commits nothing, so checking it first cannot violate "nothing may be witnessed or
+      // committed on missing information" — it just stops a corrected retry (e.g. the model
+      // resending confirm=true without the detail the button already supplied) from being
+      // mistaken by the gate for a malformed call. Witness-mode calls (confirmed=false) unaffected.
+      if (confirmed && isDuplicateConfirm(pendingActionRef.current, fc.name, args.target)) {
+        ack({ success: true, deduped: true, note: 'already applied via button confirm' });
+        return;
+      }
+
       // THE GATE (spec §4). Nothing is witnessed or committed on missing information. An ask is
       // NOT an error: {needsContent} addresses the USER (Task 5 gives it chips; until then the
       // model asks by speech), {error} addresses the MODEL.
       const gate = validateActionCall(fc.name, args, mockDocRef.current);
       if ('error' in gate) {
         addLog('tool', `Tool Call: ${fc.name} REJECTED — ${gate.error}`);
+        // The gate refusing is itself a measurable per-attempt outcome (fix round 1, I5) — record
+        // it the same way a commit/witness decision is recorded, so the gate's firing rate is
+        // visible in a session export instead of vanishing behind this early return.
+        telemetry.action(fc.name, classOf(fc.name), 'rejected', lastInputModalityRef.current);
         ack({ success: false, error: gate.error });
         return;
       }
       if ('needsContent' in gate) {
-        addLog('info', `${fc.name} needs ${gate.needsContent.field} — asking the user.`);
-        ack({ success: false, error: `${gate.needsContent.question} Call ask_content with that question, then act on the user's answer. Do NOT send a placeholder.` });
+        // Not an error (validate.ts's own doctrine, fix round 1, I2): don't inflate the error-rate
+        // trace with correct collaborative behaviour. The USER-facing trace shows the question;
+        // the MODEL-facing ack carries the instruction. Task 5 gives this its own counter
+        // (telemetry.unspecifiedAsk) — no interim counter invented here.
+        addLog('info', `${fc.name} needs ${gate.needsContent.field} — telling the model to ask: "${gate.needsContent.question}"`);
+        ack({
+          success: false,
+          ask: gate.needsContent.question,
+          // I1: the model has no ask_content tool registered yet (that's Task 5) — tell it to ask
+          // by speech, not to call a tool that doesn't exist in this session.
+          error: `${gate.needsContent.question} Ask the user this out loud — do NOT call a tool for it, and do NOT send a placeholder value.`,
+        });
         return;
-      }
-
-      // Double-apply guard: if the button already confirmed this action, don't re-apply the
-      // voice-confirm call that follows (button sets confirmed=true, then the model also fires
-      // confirm=true — one apply is enough). Witness-mode calls (confirmed=false) are unaffected.
-      if (confirmed) {
-        const pa = pendingActionRef.current;
-        if (pa?.confirmed === true && pa.verb === fc.name && pa.target === (args.target ?? pa.target)) {
-          ack({ success: true, deduped: true, note: 'already applied via button confirm' });
-          return;
-        }
       }
 
       const verbClass = classOf(fc.name);
@@ -1779,6 +1802,15 @@ export default function App() {
       } else {
         const prevDoc = mockDocRef.current;
         const nextDoc = applyAction(prevDoc, fc.name, args);
+        // Fix round 1, C2: the gate cannot see everything the reducer can (e.g. it never checks a
+        // totalled column has a free row left to land in) — so a gate-approved call can still be a
+        // no-op in the reducer. Bail honestly on identity rather than reporting a commit that never
+        // happened (mirrors the existing idiom at handleSurfaceAction's `nextDoc === prevDoc`).
+        if (nextDoc === prevDoc) {
+          addLog('tool', `Tool Call: ${fc.name} — the document did not change (nothing to land, or it no-ops here)`);
+          ack({ success: false, error: `${phrase} made no change to the document — there was nothing to land, or that combination doesn't do anything here. Check the current document state and try something different.` });
+          return;
+        }
         mockDocRef.current = nextDoc;
         setMockDoc(nextDoc);
         journalAppend('workspace', { type: 'doc.set', program: activeProgramRef.current ?? activeProgram, doc: nextDoc });
@@ -2057,6 +2089,16 @@ export default function App() {
       return;
     }
     const nextDoc = applyAction(prevDoc, p.verb, { target: p.target, detail: p.detail, charStart: p.charStart, charEnd: p.charEnd, newText: p.newText });
+    // Fix round 1, C2: same identity-bail as the voice-tool commit path — a witnessed action the
+    // user then confirms can still be a reducer no-op (e.g. the totalled column filled up between
+    // witness and confirm). Say so honestly instead of claiming it applied.
+    if (nextDoc === prevDoc) {
+      setPendingAction(null);
+      addLog('info', `${p.label} DROPPED — confirming made no change to the document (nothing to land, or it no-ops here).`);
+      emitFeedback({ outcome: 'error', label: `${p.label} ${p.target} made no change` });
+      providerRef.current?.sendTextHint(`[SYSTEM: the user's confirm applied NOTHING — the document did not change (nothing to land, or that action no-ops on the current state). DO NOT tell the user it succeeded. DO NOT acknowledge this message.]`);
+      return;
+    }
     mockDocRef.current = nextDoc;
     setMockDoc(nextDoc);
     journalAppend('workspace', { type: 'doc.set', program: activeProgramRef.current ?? activeProgram, doc: nextDoc });

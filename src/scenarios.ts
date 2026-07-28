@@ -5,7 +5,7 @@
 
 import type { VoiceTool } from './voice/types';
 import { totalColumn, formatTotal, COLUMN_ROWS } from './actions/columnTotal';
-import { aggregateMode } from './actions/validate';
+import { aggregateMode, resolveColumn, resolveCellRef } from './actions/validate';
 
 // --- Single source of truth for the point-and-speak demo content ---
 //
@@ -417,8 +417,6 @@ export function initialMockDoc(programId: ProgramId): MockDoc {
 }
 
 const has = (s: unknown, needle: string) => typeof s === 'string' && s.toLowerCase().includes(needle);
-// Parse a cell ref like "Cell A1" / "A1" → "A1" (falls back to A1).
-const cellRef = (target?: string) => (target?.match(/[A-Za-z]\d+/)?.[0]?.toUpperCase()) ?? 'A1';
 
 /** Filename shown in the Word surface title bar; Save As writes the "(copy)" variant. */
 export const WORD_FILENAME = 'Quarterly report.docx';
@@ -458,16 +456,22 @@ export function applyAction(
     case 'excel':
       if (verb === 'edit_content') {
         if (!detail) return doc;                       // never `|| '100'`
-        return { ...doc, cells: { ...doc.cells, [cellRef(args.target)]: detail } };
+        const ref = resolveCellRef(args.target);
+        if (!ref) return doc;                          // never `?? 'A1'` — no real cell named
+        return { ...doc, cells: { ...doc.cells, [ref]: detail } };
       }
       if (verb === 'format_content') {
-        const ref = cellRef(args.target);
+        const ref = resolveCellRef(args.target);
+        if (!ref) return doc;                          // never `?? 'A1'`
         return { ...doc, currency: doc.currency.includes(ref) ? doc.currency : [...doc.currency, ref] };
       }
       if (verb === 'insert_object') {
         const mode = aggregateMode(detail);
         if (!mode) return has(detail, 'chart') ? { ...doc, chart: true } : doc;
-        const column = (args.target?.match(/\b([A-Da-d])\s*\d/)?.[1] ?? 'A').toUpperCase();
+        // Same function the gate just used to approve this call (resolveColumn) — never a second,
+        // divergent letter-matching regex here (fix round 1, C1).
+        const column = resolveColumn(doc.cells, args.target);
+        if (!column) return doc;                       // the validator already refused upstream
         const r = totalColumn(doc.cells, column, mode);
         if ('error' in r) return doc;                  // the validator already refused upstream
         // Land below the column's last used row, in the column's own idiom.

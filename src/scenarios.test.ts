@@ -47,11 +47,15 @@ describe('applyAction — functional surface verbs', () => {
   });
 
   it('excel: detail-less insert no longer defaults to a chart — it does nothing (honest gate, Task 4)', () => {
-    const before = initialMockDoc('excel');
+    // Fix round 1, M2: bound to seedCorpus(), the fixture the app actually boots — not
+    // initialMockDoc — since this is a NEW assertion about honest behaviour. And identity
+    // (toBe), not just deep equality: the reducer signals "no-op" by returning the SAME
+    // reference, and App.tsx's identity-bail (C2, fix round 1) depends on that exact contract.
+    const before = seedCorpus().excel;
     const doc = applyAction(before, 'insert_object', { target: 'Cell A1' });
     if (doc.kind !== 'excel') return;
     expect(doc.chart).toBe(false);
-    expect(doc).toEqual(before);
+    expect(doc).toBe(before);
   });
 
   it('excel: insert_object with "chart" in the detail creates a chart', () => {

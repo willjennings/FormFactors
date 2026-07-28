@@ -15,6 +15,10 @@ import type { DialValues } from './register/types';
 
 export type FormFactor = 'mobile' | 'tablet' | 'desktop';
 export type InputModality = 'voice' | 'typed' | 'direct';
+// 'rejected' added fix round 1, I5: the gate refusing a malformed call is itself a measurable
+// per-attempt outcome (the gate's firing rate is the headline number this plan produces) — it is
+// NOT a witness and NOT a commit, so folding it into either would misreport what happened.
+export type ActionDecision = 'commit' | 'witness' | 'rejected';
 
 export interface DeviceInfo {
   width: number;
@@ -44,7 +48,7 @@ export interface SessionConfig {
 export type TelemetryEvent =
   | { t: number; type: 'session_start'; config: SessionConfig }
   | { t: number; type: 'deixis'; keyword: string; resolved: string | null; target: string | null; confidence: 'high' | 'low'; correct: boolean | null; modality: InputModality }
-  | { t: number; type: 'action'; verb: string; verbClass: string; decision: 'commit' | 'witness'; modality: InputModality }
+  | { t: number; type: 'action'; verb: string; verbClass: string; decision: ActionDecision; modality: InputModality }
   | { t: number; type: 'grounding'; appReferent: string | null; modelTarget: string | null; agree: boolean | null; resolution: 'structural' | 'visual' | 'none' }
   | { t: number; type: 'map'; query: string }
   | { t: number; type: 'correction'; slotId?: string; overAgent?: boolean } // undo, or a ramble user-edit (overAgent = the key trust signal)
@@ -102,7 +106,7 @@ class Telemetry {
     const correct = target ? resolved === target : null;
     this.push({ type: 'deixis', keyword, resolved, target, confidence, correct, modality });
   }
-  action(verb: string, verbClass: string, decision: 'commit' | 'witness', modality: InputModality = 'voice') {
+  action(verb: string, verbClass: string, decision: ActionDecision, modality: InputModality = 'voice') {
     this.push({ type: 'action', verb, verbClass, decision, modality });
   }
   grounding(appReferent: string | null, modelTarget: string | null, agree: boolean | null, resolution: 'structural' | 'visual' | 'none' = 'none') {
