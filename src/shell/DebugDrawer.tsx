@@ -136,7 +136,10 @@ export function DebugDrawer(props: DrawerProps) {
           {/* "matched a candidate", not "from a chip": the count rises either when the user fires
               one of the ask's OWN chips or when what they typed/said normalises to a candidate's
               text, so it is about the candidate, not the widget. Firing an ordinary chip that
-              merely happens to sit in the row under a bare ask counts as neither. */}
+              merely happens to sit in the row under a bare ask counts as neither — true of
+              `viaCandidate` from the start, and true of `answered` only since chipCloseOfAsk: that
+              case used to be counted answered with no answer, which is what this line claimed it
+              was not. */}
           <span>{tm.asks.total} ({tm.asks.answered} answered, {tm.asks.viaCandidate} matched a candidate)</span>
           <span className="text-[var(--text-secondary)]">Errors</span>
           <span>{tm.errors}</span>

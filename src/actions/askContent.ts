@@ -51,6 +51,21 @@ export function isAskCandidateChip(ask: AskState | null, key: string): boolean {
   return askChips(ask).some((c) => c.key === key);
 }
 
+/** How a fired chip closes the open ask — the three arguments App's `clearAsk` takes, decided in
+ *  ONE place so the licence layer and the telemetry layer cannot reach opposite verdicts about the
+ *  same keypress. They did: the licence layer refuses to treat an ordinary chip fired under a bare
+ *  ask as an answer (it is how "Add a heading here" licensed writing "Heading"), while the call
+ *  site hardcoded `answered: true` — so that chip was counted `answered` with no answer, in
+ *  `asks.answered`, the headline number of this whole classification. Every other close path (Esc,
+ *  displacement, program swap) already passes false; this was the only site claiming an answer it
+ *  had no text for. An ordinary chip still CLOSES the question — the user moved on. */
+export function chipCloseOfAsk(ask: AskState | null, key: string, phrase: string):
+    { answered: boolean; viaChip: boolean; text?: string } {
+  return isAskCandidateChip(ask, key)
+    ? { answered: true, viaChip: true, text: phrase }
+    : { answered: false, viaChip: false };
+}
+
 // A COMPARISON key, never a rewrite of anyone's words: fold case and every run of punctuation or
 // whitespace to one space. Deliberately aggressive because the answer does not come back the way
 // it was offered — the transcript cleaner in App strips any character outside a plain ASCII set,

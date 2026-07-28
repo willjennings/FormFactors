@@ -17,6 +17,15 @@ export const INSERT_KINDS = ['chart', 'slide', 'shape', 'sum', 'average'] as con
 const SUM_WORDS = ['sum', 'total'];
 const AVG_WORDS = ['average', 'avg', 'mean'];
 
+/** What insert_object can actually make HERE. An aggregate needs cells, so only a spreadsheet
+ *  offers them. Both refusal messages below are built from this one derivation: the unknown-detail
+ *  message used to advertise `sum, average` on a deck where the aggregate branch four lines later
+ *  refuses exactly those two — the same loop-invitation that message's sibling was fixed to
+ *  remove, with the two strings inside one function disagreeing about what is valid. */
+function insertableKinds(doc: MockDoc): string[] {
+  return doc.kind === 'excel' ? [...INSERT_KINDS] : INSERT_KINDS.filter((k) => k !== 'sum' && k !== 'average');
+}
+
 /** Which aggregate the detail asks for, or null. `total`/`mean` included: the observed
  *  near-miss was `detail: "total"` silently inserting a chart. Token match, not substring —
  *  "subtotal row" and "meantime" are not aggregate requests; `detail` is model-generated free
@@ -45,18 +54,33 @@ function authorialField(doc: MockDoc, target?: string, detail?: string): { field
 
 const PLACEHOLDERS = ['heading', 'title', 'text', 'body', 'content', 'value'];
 
-function isPlaceholder(detail: string | undefined, field: string): boolean {
+/** Spec §4.1: a placeholder is `normText(detail)` equal to a generic noun, to the FIELD's own
+ *  noun, **or to the TARGET's noun**. That last clause was dropped when this landed, and it is the
+ *  one carrying the weight — because authorialField collapses every non-"head" target on a word
+ *  document to the single field `body`, so `d === normText(field)` fires only on the literal word
+ *  "body" and is otherwise dead. What a model emits is the noun it was handed: "add a subtitle
+ *  here" → target "subtitle", detail "Subtitle". Nine such nouns (subtitle, caption, footer,
+ *  header, label, summary, intro, section, paragraph) wrote themselves into the document in the
+ *  default register with no licence and no confirm — the origin bug, one noun over.
+ *
+ *  HONEST survives for free: the licence (userSuppliedLiteral) is keyed on the field and the
+ *  user's own text, so someone who answers "Subtitle" is still written "Subtitle". */
+function isPlaceholder(detail: string | undefined, field: string, target?: string): boolean {
   const d = normText(detail ?? '');
   if (!d) return true;                           // absent or blank
-  return PLACEHOLDERS.includes(d) || d === normText(field);
+  const t = normText(target ?? '');
+  return PLACEHOLDERS.includes(d) || d === normText(field) || (!!t && d === t);
 }
 
 /** What the USER themselves last said in answer to an ask — captured app-side when the ask closed,
  *  from what they actually sent. */
 export interface AskAnswer { field: string; text: string }
 
-/** An AskAnswer plus the identity of the transcript run it was captured from. */
-export interface HeldAnswer extends AskAnswer { turn: number }
+/** An AskAnswer plus the identity of the transcript run it was captured from, and whether it was
+ *  captured from SPEECH. Both are stamped at capture (App's clearAsk) and never re-derived, for
+ *  the same reason: what may be done to a held answer is a property of the answer, not of whatever
+ *  arrives afterwards. */
+export interface HeldAnswer extends AskAnswer { turn: number; voice: boolean }
 
 /** The accumulated speech of ONE transcript run, as two parts: everything already finished
  *  (`committed`) and the fragment still in flight (`fragment`). The whole utterance is
@@ -134,7 +158,18 @@ export function reviseHeldAnswer(
   if (!held) return null;
   if (held.turn !== ev.turn) return null;        // a later utterance: this answer's turn is over
   if (ev.askOpen) return held;                   // that text belongs to the new question
-  if (!ev.voice) return held;                    // typed and chip answers arrive complete
+  // MODALITY IS THE HELD ANSWER'S, NOT THE ARRIVING DELTA'S. This gated on `ev.voice`, which is
+  // the modality of whatever just arrived — so the sentence "typed and chip answers arrive
+  // complete" stated an intent the code could not enforce. Executed: the user TYPES "Q3 Summary"
+  // to answer, the hot mic picks up the word "heading" later in the SAME run (so round 3's turn
+  // identity does not apply), ev.voice is true, and the typed answer is rewritten to "heading" —
+  // which the gate then licenses. Only a SPOKEN answer is incomplete by construction (the ask
+  // closes on its first fragment), so only a spoken answer may grow.
+  if (!held.voice) return held;                  // typed and chip answers arrived complete
+  // …and it may only grow on more speech: the run accumulator folds typed text into the same run
+  // (App's processInputTranscript is the one seam both modalities cross), so an arriving typed
+  // delta would otherwise append itself to what the user said.
+  if (!ev.voice) return held;
   if (!ev.accumulated.trim()) return held;       // nothing to revise with
   return { ...held, text: ev.accumulated };
 }
@@ -212,7 +247,7 @@ export function validateActionCall(
     }
     // Real content passes untouched. A placeholder-shaped word passes ONLY on the user's own
     // say-so (see userSuppliedLiteral) — never on `confirm`, which the model sets itself.
-    if (!isPlaceholder(args.detail, field.field)) return { ok: true };
+    if (!isPlaceholder(args.detail, field.field, args.target)) return { ok: true };
     return userSuppliedLiteral(answer, field.field, args.detail) ? { ok: true } : { needsContent: field };
   }
 
@@ -221,7 +256,7 @@ export function validateActionCall(
   if (!mode) {
     const d = normText(args.detail ?? '');
     if (!d || !INSERT_KINDS.some((k) => d.includes(k))) {
-      return { error: `insert_object doesn't know "${args.detail ?? ''}". Valid: ${INSERT_KINDS.join(', ')}.` };
+      return { error: `insert_object doesn't know "${args.detail ?? ''}". Valid: ${insertableKinds(doc).join(', ')}.` };
     }
     return { ok: true };
   }
@@ -233,8 +268,7 @@ export function validateActionCall(
   // else silently. The alternatives offered exclude the aggregate words themselves — suggesting
   // "sum, average" as valid replacements for a refused "sum" is an invitation to loop.
   if (doc.kind !== 'excel') {
-    const insertable = INSERT_KINDS.filter((k) => k !== 'sum' && k !== 'average');
-    return { error: `insert_object can only total a column in a spreadsheet — this is a ${doc.kind} document, which has no cells. Here you can insert: ${insertable.join(', ')}.` };
+    return { error: `insert_object can only total a column in a spreadsheet — this is a ${doc.kind} document, which has no cells. Here you can insert: ${insertableKinds(doc).join(', ')}.` };
   }
   const column = resolveColumn(doc.cells, args.target);
   if (!column) return { error: 'Which column should I total? Point at a cell in it, or name it.' };

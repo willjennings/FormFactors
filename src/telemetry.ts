@@ -175,6 +175,10 @@ class Telemetry {
     const asks = this.events.filter(e => e.type === 'unspecified_ask') as Extract<TelemetryEvent, { type: 'unspecified_ask' }>[];
     const guid = this.events.filter(e => e.type === 'guidance') as Extract<TelemetryEvent, { type: 'guidance' }>[];
     const gk = (k: string) => guid.filter(e => e.kind === k).length;
+    // The actions that actually reached the document. Named once because two numbers below depend
+    // on the same distinction (see correctionRate).
+    const commits = actions.filter(a => a.decision === 'commit').length;
+    const witnesses = actions.filter(a => a.decision === 'witness').length;
     return {
       durationMs: this.config ? Date.now() - this.startedAt : 0,
       deixis: {
@@ -188,8 +192,8 @@ class Telemetry {
       },
       actions: {
         total: actions.length,
-        commits: actions.filter(a => a.decision === 'commit').length,
-        witnesses: actions.filter(a => a.decision === 'witness').length,
+        commits,
+        witnesses,
         // Reported so the three decisions SUM to total. Before this, `total` counted the
         // 'rejected' decision (added with the gate) while only commits and witnesses were
         // shown, so the readout silently lost every rejection between two numbers.
@@ -197,7 +201,12 @@ class Telemetry {
         byModality: { voice: actByMod('voice'), typed: actByMod('typed'), direct: actByMod('direct') },
       },
       corrections,
-      correctionRate: actions.length ? +(corrections / actions.length).toFixed(2) : 0,
+      // Denominator is what actually reached the document — commits and witnesses — NOT every
+      // action event. `actions` was widened to include the 'rejected' decision when the gate
+      // landed, which silently inverted this rate: an arm whose gate refuses MORE scored a LOWER
+      // correction rate, i.e. looked better at not needing correction, for refusing to act at all.
+      // A refusal is not a corrected action; it is an action that never happened.
+      correctionRate: commits + witnesses ? +(corrections / (commits + witnesses)).toFixed(2) : 0,
       errors,
       // Kept OUT of `errors` on purpose (validate.ts's header states the doctrine): asking the
       // user what their heading should say is the behaviour this testbed wants to see more of,

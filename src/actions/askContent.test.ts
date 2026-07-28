@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   askCallToState, ASK_CONTENT_TOOL, MAX_CANDIDATES, ASK_FIELDS,
-  askChips, chipRowFor, isAskCandidateChip, answeredFromCandidate, gateAskAck, type AskState,
+  askChips, chipRowFor, isAskCandidateChip, chipCloseOfAsk, answeredFromCandidate, gateAskAck, type AskState,
 } from './askContent';
 import { validateActionCall } from './validate';
 import { seedCorpus } from '../artifacts/seeds';
@@ -93,6 +93,33 @@ describe('isAskCandidateChip — whose chip was that', () => {
     expect(isAskCandidateChip(a, 'ask-2')).toBe(false);       // beyond the candidates offered
     expect(isAskCandidateChip(ask([]), 'word.heading')).toBe(false);
     expect(isAskCandidateChip(null, 'ask-0')).toBe(false);
+  });
+});
+
+describe('chipCloseOfAsk — one verdict per keypress, not one per layer', () => {
+  it('an ordinary chip under a BARE ask closes the question without answering it', () => {
+    // The licence layer already refused to treat this as an answer (isAskCandidateChip above);
+    // the quick-fire call site passed `answered: true` regardless, so the same keypress was an
+    // answer to telemetry and not an answer to the gate — and the wrong one fed `asks.answered`,
+    // the headline number of the whole classification.
+    expect(chipCloseOfAsk(ask([]), 'word.heading', 'Add a heading here'))
+      .toEqual({ answered: false, viaChip: false });
+    // No text either: `answered` with no answer is the shape that made it possible.
+    expect(chipCloseOfAsk(ask([]), 'word.heading', 'Add a heading here').text).toBeUndefined();
+    // Same under an ask that HAS candidates, when the chip fired is not one of them.
+    expect(chipCloseOfAsk(ask(['Q3 Summary']), 'word.heading', 'Add a heading here'))
+      .toEqual({ answered: false, viaChip: false });
+  });
+  it('one of the ask\'s OWN chips is an answer, and carries the words the user chose', () => {
+    expect(chipCloseOfAsk(ask(['Q3 Summary', 'Meridian Q3']), 'ask-1', 'Meridian Q3'))
+      .toEqual({ answered: true, viaChip: true, text: 'Meridian Q3' });
+  });
+  it('answered is never claimed without the text that justifies it', () => {
+    for (const [a, key] of [[ask([]), 'word.heading'], [ask(['Q3']), 'ask-0'],
+                            [null, 'ask-0'], [ask(['Q3']), 'ask-9']] as const) {
+      const c = chipCloseOfAsk(a, key, 'whatever');
+      expect(c.answered).toBe(!!c.text?.trim());
+    }
   });
 });
 

@@ -70,6 +70,41 @@ describe('unspecified asks — authorial content only', () => {
     expect(ask({ field: 'heading', text: 'make it bold' })).toBeTruthy();  // never said the word
     expect(ask({ field: 'heading', text: '' })).toBeTruthy();
   });
+  it('the TARGET\'s own noun is a placeholder too — spec §4.1\'s dropped clause', () => {
+    // authorialField collapses every non-"head" target on a word document to ONE field, `body`, so
+    // `d === normText(field)` fires only on the literal word "body" and is otherwise dead code.
+    // The clause that catches real emissions is the target's noun: a model handed "add a subtitle
+    // here" answers target "subtitle", detail "Subtitle". All nine of these WROTE THEMSELVES into
+    // the document in the default `guided` register, with no licence and no confirm.
+    for (const noun of ['subtitle', 'caption', 'footer', 'header', 'label',
+                        'summary', 'intro', 'section', 'paragraph']) {
+      const cap = noun[0].toUpperCase() + noun.slice(1);
+      const v = validateActionCall('edit_content', { target: noun, detail: cap }, word()) as any;
+      expect(v.ok, `"${cap}" wrote itself as the ${noun}`).toBeUndefined();
+      expect(v.needsContent).toBeTruthy();
+    }
+    // "add a heading here" — the origin utterance itself, in its likelier emission: the whole
+    // phrase echoed back as both target and detail, which the field clause alone lets through.
+    expect((validateActionCall('edit_content',
+      { target: 'heading here', detail: 'Heading here' }, word()) as any).needsContent).toBeTruthy();
+  });
+  it('...and the user who really wants that noun written can still say so (HONEST)', () => {
+    // The licence is keyed on the FIELD and the user's own text, so the new clause costs it
+    // nothing: answer "Subtitle" to "What would you like it to say?" and Subtitle is written.
+    expect(validateActionCall('edit_content', { target: 'subtitle', detail: 'Subtitle' }, word(),
+      { field: 'body', text: 'Subtitle' })).toEqual({ ok: true });
+    expect(validateActionCall('edit_content', { target: 'header', detail: 'Header' }, word(),
+      { field: 'heading', text: 'header' })).toEqual({ ok: true });
+    // …and mentioning it inside a sentence still is not asking for it.
+    expect((validateActionCall('edit_content', { target: 'subtitle', detail: 'Subtitle' }, word(),
+      { field: 'body', text: 'the subtitle should say Q3' }) as any).needsContent).toBeTruthy();
+  });
+  it('content that merely has a noun for a target is untouched', () => {
+    expect(validateActionCall('edit_content', { target: 'subtitle', detail: 'Q3 Summary' }, word()))
+      .toEqual({ ok: true });
+    expect(validateActionCall('edit_content', { target: 'header', detail: 'Q3 Summary' }, word()))
+      .toEqual({ ok: true });
+  });
   it('an answer never licenses a BLANK detail — silence is still not content', () => {
     const v = validateActionCall('edit_content', { target: 'heading', detail: '  ' }, word(),
       { field: 'heading', text: 'Heading' }) as any;
@@ -78,13 +113,13 @@ describe('unspecified asks — authorial content only', () => {
 });
 
 describe('reviseHeldAnswer — an answer belongs to the utterance it came from', () => {
-  const held = { field: 'heading', text: 'Q3', turn: 7 };
+  const held: HeldAnswer = { field: 'heading', text: 'Q3', turn: 7, voice: true };
   const ev = (o: Partial<{ turn: number; voice: boolean; askOpen: boolean; accumulated: string }> = {}) =>
     ({ turn: 7, voice: true, askOpen: false, accumulated: 'Q3 Summary', ...o });
 
   it('grows the answer across the deltas of ITS OWN spoken turn', () => {
     // The ask closes on the first fragment, so the whole utterance only arrives afterwards.
-    expect(reviseHeldAnswer(held, ev())).toEqual({ field: 'heading', text: 'Q3 Summary', turn: 7 });
+    expect(reviseHeldAnswer(held, ev())).toEqual({ field: 'heading', text: 'Q3 Summary', turn: 7, voice: true });
   });
   it('a LATER turn drops the answer instead of rewriting it — round 3\'s exploit', () => {
     // Executed chain: answer "Q3 Summary" → the model's retry is refused for some other reason
@@ -95,10 +130,10 @@ describe('reviseHeldAnswer — an answer belongs to the utterance it came from',
     expect(reviseHeldAnswer(held, ev({ turn: 8, accumulated: 'Heading' }))).toBeNull();
     // …and it is dropped, not merely left alone: a fragment captured from an utterance that has
     // since ended can never be completed, so keeping it would preserve the same hazard.
-    expect(reviseHeldAnswer({ field: 'heading', text: 'Heading', turn: 7 },
+    expect(reviseHeldAnswer({ field: 'heading', text: 'Heading', turn: 7, voice: true },
       ev({ turn: 9, accumulated: 'anything' }))).toBeNull();
   });
-  it('typed text arrives complete, so it is never revised by later accumulation', () => {
+  it('a spoken answer is not grown by typed text folded into the same run', () => {
     expect(reviseHeldAnswer(held, ev({ voice: false, accumulated: 'Q3 something else' }))).toEqual(held);
   });
   it('an open question owns what is being said now — the old answer is left alone', () => {
@@ -107,6 +142,33 @@ describe('reviseHeldAnswer — an answer belongs to the utterance it came from',
   it('nothing held, or nothing to revise with, changes nothing', () => {
     expect(reviseHeldAnswer(null, ev())).toBeNull();
     expect(reviseHeldAnswer(held, ev({ accumulated: '   ' }))).toEqual(held);
+  });
+});
+
+describe('reviseHeldAnswer — the modality is the ANSWER\'s, not the arriving delta\'s', () => {
+  // The guard read `ev.voice` — the modality of what just arrived — while the rule it was written
+  // for is about how the HELD answer was captured. HeldAnswer carried no modality at all, so the
+  // comment "typed and chip answers arrive complete" stated an intent the code could not enforce.
+  it('a TYPED answer is never rewritten by speech landing in the same run', () => {
+    // Executed against the old code: the user types "Q3 Summary" to answer, the hot mic picks up
+    // the word "heading" later in the SAME transcript run (so round 3's turn identity does not
+    // apply — it covers a LATER run), and the held answer became {text:'heading'}, which the gate
+    // then licensed. The document got "Heading".
+    const typed: HeldAnswer = { field: 'heading', text: 'Q3 Summary', turn: 3, voice: false };
+    const revised = reviseHeldAnswer(typed, { turn: 3, voice: true, askOpen: false, accumulated: 'heading' });
+    expect(revised).toEqual(typed);
+    expect((validateActionCall('edit_content', { target: 'heading', detail: 'Heading' },
+      word(), revised) as any).needsContent).toBeTruthy();
+  });
+  it('a chip answer is stamped typed too, so the same run\'s speech cannot rewrite it', () => {
+    const chip: HeldAnswer = { field: 'heading', text: 'Q3 Summary', turn: 3, voice: false };
+    expect(reviseHeldAnswer(chip, { turn: 3, voice: true, askOpen: false, accumulated: 'the heading' }))
+      .toEqual(chip);
+  });
+  it('a SPOKEN answer still grows across its own run — the honest path is untouched', () => {
+    const spoken: HeldAnswer = { field: 'heading', text: 'Q3', turn: 3, voice: true };
+    expect(reviseHeldAnswer(spoken, { turn: 3, voice: true, askOpen: false, accumulated: 'Q3 Summary' }))
+      .toEqual({ field: 'heading', text: 'Q3 Summary', turn: 3, voice: true });
   });
 });
 
@@ -154,6 +216,7 @@ describe('the licence across one spoken run — App.tsx\'s answer path, end to e
     }
     return out;
   };
+  const spoke = (field: string, text: string, turn = 1): HeldAnswer => ({ field, text, turn, voice: true });
   const gate = (held: HeldAnswer | null) =>
     validateActionCall('edit_content', { target: 'heading', detail: 'Heading' }, word(), held) as any;
 
@@ -162,7 +225,7 @@ describe('the licence across one spoken run — App.tsx\'s answer path, end to e
     // answer was revised against was the display one (App.tsx:2450 writes the raw delta back).
     // The user answered "Q3 Summary"; the run then carries "Head" → "Heading" (a prefix pair,
     // which is what every provider's partial-then-final looks like).
-    const held = speak({ field: 'heading', text: 'Q3 Summary', turn: 1 }, ['Q3 Summary', 'Head', 'Heading']);
+    const held = speak(spoke('heading', 'Q3 Summary'), ['Q3 Summary', 'Head', 'Heading']);
     expect(held?.text).toBe('Q3 Summary Heading');
     expect(gate(held).needsContent).toBeTruthy();      // asks again; writes nothing
     expect(gate(held).ok).toBeUndefined();
@@ -170,18 +233,17 @@ describe('the licence across one spoken run — App.tsx\'s answer path, end to e
   it('the user who really does want the word Heading is still licensed', () => {
     // The same prefix pair, but this time it IS the whole answer — the escape hatch has to survive
     // the fix, or refusing becomes unconditional on the primary modality.
-    const held = speak({ field: 'heading', text: 'Head', turn: 1 }, ['Head', 'Heading']);
+    const held = speak(spoke('heading', 'Head'), ['Head', 'Heading']);
     expect(gate(held)).toEqual({ ok: true });
   });
   it('a longer answer that merely opens with the word is refused', () => {
-    const held = speak({ field: 'heading', text: 'Heading', turn: 1 },
-      ['Heading', 'is what I want it to say, plus the date']);
+    const held = speak(spoke('heading', 'Heading'), ['Heading', 'is what I want it to say, plus the date']);
     expect(gate(held).needsContent).toBeTruthy();
   });
   it('a run that ENDS without further transcript leaves the answer standing', () => {
     // The drop is lazy on purpose: the user says "Heading", the model's turn start bumps the run,
     // and no new delta ever arrives. An eager drop at the boundary would kill the honest path.
-    const held: HeldAnswer = { field: 'heading', text: 'Heading', turn: 1 };
+    const held: HeldAnswer = spoke('heading', 'Heading');
     expect(speak(held, [], 2)).toEqual(held);
     expect(gate(held)).toEqual({ ok: true });
   });
@@ -197,6 +259,22 @@ describe('malformed calls — the model is addressed, never the user', () => {
   it('an unknown object kind names the valid set, derived from the same constant', () => {
     const v = validateActionCall('insert_object', { target: 'grid', detail: 'widget' }, excel()) as any;
     for (const k of INSERT_KINDS) expect(v.error).toContain(k);
+  });
+  it('the two refusals inside insert_object cannot disagree about what is valid', () => {
+    // The unknown-detail message advertised `sum, average` on a deck, where the aggregate branch
+    // four lines below refuses exactly those two — the same loop-invitation its sibling message
+    // was fixed to remove. Both are now derived from doc.kind.
+    for (const doc of [ppt(), word()]) {
+      const unknown = validateActionCall('insert_object', { target: 'Slide canvas', detail: 'widget' }, doc) as any;
+      expect(unknown.error).toMatch(/doesn't know/);
+      expect(unknown.error).not.toMatch(/\bsum\b/);
+      expect(unknown.error).not.toMatch(/\baverage\b/);
+      for (const k of ['chart', 'slide', 'shape']) expect(unknown.error).toContain(k);
+    }
+    // A spreadsheet still advertises all five: there the aggregates really are insertable.
+    const onGrid = validateActionCall('insert_object', { target: 'grid', detail: 'widget' }, excel()) as any;
+    expect(onGrid.error).toMatch(/\bsum\b/);
+    expect(onGrid.error).toMatch(/\baverage\b/);
   });
   it('aggregate errors match totalColumn EXACTLY, so validator and reducer cannot drift', () => {
     const v = validateActionCall('insert_object', { target: 'Cell A2', detail: 'sum' }, excel()) as any;

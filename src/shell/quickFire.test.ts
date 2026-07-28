@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { quickFireIndex } from './quickFire';
+import { quickFireIndex, digitSelectsTarget } from './quickFire';
 
 // Quick-fire chips (user finding 2026-07-18): clicking a chip forces the pointer OFF the
 // referent the question is about. Digits 1-9 fire chips while the pointer stays put.
@@ -27,5 +27,30 @@ describe('quickFireIndex', () => {
     expect(quickFireIndex('2', false, 9, { lastFire: { key: '2', at: 1000 }, now: 1500 })).toBe(1);
     // a DIFFERENT chip is not blocked by the cooldown
     expect(quickFireIndex('3', false, 9, { lastFire: { key: '2', at: 1000 }, now: 1100 })).toBe(2);
+  });
+});
+
+// Two window keydown listeners see the same digit. Quick-fire is mounted first, so it runs first
+// and calls clearAsk SYNCHRONOUSLY — by the time the deixis listener reads askRef it is already
+// null, so "is an ask open?" cannot be the question. The event's own defaultPrevented flag can.
+describe('digitSelectsTarget — a digit is claimed once', () => {
+  it('a digit quick-fire already claimed never also selects a target', () => {
+    // Pressing "2" to answer ask candidate 2 also ran selectTargetByNumber(2): it set the input
+    // modality to 'direct' (so the answered edit was attributed to the wrong modality), dropped a
+    // THIS marker, pushed a graded deixis event, and told the model to treat target 2 as what the
+    // user was pointing at — while they were answering a content question. Grounding
+    // reconciliation then graded the model's edit against that phantom referent.
+    for (const k of ['1', '2', '5', '9']) expect(digitSelectsTarget(k, false, true)).toBe(false);
+  });
+  it('an unclaimed digit still selects its target — pointer-free deixis is untouched', () => {
+    expect(digitSelectsTarget('1', false, false)).toBe(true);
+    expect(digitSelectsTarget('9', false, false)).toBe(true);
+  });
+  it('an open register band owns its digits, stated directly and not via the other listener', () => {
+    expect(digitSelectsTarget('3', true, false)).toBe(false);
+    expect(digitSelectsTarget('3', true, true)).toBe(false);
+  });
+  it('only 1-9: 0 and letters are other grammars', () => {
+    for (const k of ['0', 't', 'i', 'h', 'Escape', '`']) expect(digitSelectsTarget(k, false, false)).toBe(false);
   });
 });

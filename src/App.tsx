@@ -71,7 +71,7 @@ import { buildSpreadsheetSnapshot, formatSnapshotForModel } from './widgets/spre
 import { ProgramSurface } from './widgets/ProgramSurface';
 import { ProgramWindow } from './shell/ProgramWindow';
 import { Omnibox } from './shell/Omnibox';
-import { quickFireIndex, isEditableTarget } from './shell/quickFire';
+import { quickFireIndex, isEditableTarget, digitSelectsTarget } from './shell/quickFire';
 import { reduceActivity, initialActivity, type ActivityEntry } from './shell/activityStore';
 import { ActivityTrace } from './shell/ActivityTrace';
 import { DebugDrawer } from './shell/DebugDrawer';
@@ -119,7 +119,7 @@ import { validateActionCall, reviseHeldAnswer, accumulateRun, runUtterance, EMPT
   type HeldAnswer, type RunAccum } from './actions/validate';
 import { shouldDedupeConfirm } from './actions/dedupe';
 import {
-  ASK_CONTENT_TOOL, askCallToState, chipRowFor, isAskCandidateChip, answeredFromCandidate,
+  ASK_CONTENT_TOOL, askCallToState, chipRowFor, chipCloseOfAsk, answeredFromCandidate,
   gateAskAck, type AskState,
 } from './actions/askContent';
 import { feedsSummary } from './artifacts/feeds';
@@ -601,12 +601,19 @@ export default function App() {
   const lastAnswerRef = useRef<HeldAnswer | null>(null);
   /** Close the open ask, if any, and record the one telemetry event for it. Idempotent — every
    *  path that could end an ask calls this, and only the first call in a turn does anything.
-   *  `text` is what the user actually sent; it is remembered ONLY on a genuine answer. */
-  const clearAsk = (answered: boolean, viaChip: boolean, text?: string) => {
+   *  `text` is what the user actually sent; it is remembered ONLY on a genuine answer.
+   *
+   *  `voice` is the modality of THAT text, stamped here at capture and passed by the caller rather
+   *  than read from lastInputModalityRef, because the two disagree: the quick-fire path calls this
+   *  BEFORE sendTypedInput sets the modality, so the ref still holds whatever the last turn was.
+   *  reviseHeldAnswer needs the answer's own modality — only a spoken answer is incomplete when
+   *  the ask closes (it closes on the first fragment) and may therefore grow. */
+  const clearAsk = (answered: boolean, viaChip: boolean, text?: string, voice = false) => {
     const open = askRef.current;
     if (!open) return;
     askRef.current = null;
-    lastAnswerRef.current = answered && text?.trim() ? { field: open.field, text, turn: transcriptRunRef.current } : null;
+    lastAnswerRef.current = answered && text?.trim()
+      ? { field: open.field, text, turn: transcriptRunRef.current, voice } : null;
     // Its OWN counter, never the error rate: an ask is correct collaborative behaviour, and the
     // 'rejected' ActionDecision exists for gate ERRORS only (telemetry.ts / validate.ts).
     telemetry.unspecifiedAsk(open.field, answered, viaChip);
@@ -1935,6 +1942,11 @@ export default function App() {
         // counted, and worse than a missing event, it is a quiet falsehood in the measured record.
         if (nextDoc === prevDoc) {
           addLog('tool', `Tool Call: ${fc.name} — the document did not change (nothing to land, or it no-ops here)`);
+          // Recorded 'rejected', the same as a gate refusal above. Round 2 was right to stop
+          // calling this a commit and wrong to leave it emitting nothing at all: a refusal the
+          // gate makes was counted while an identical refusal the reducer makes vanished, so the
+          // two ends of the same per-attempt outcome were measured on different terms.
+          telemetry.action(fc.name, verbClass, 'rejected', lastInputModalityRef.current);
           ack({ success: false, error: `${phrase} made no change to the document — there was nothing to land, or that combination doesn't do anything here. Check the current document state and try something different.` });
           return;
         }
@@ -2380,7 +2392,13 @@ export default function App() {
     // fragment mid-run. What the gate finally reads is everything said in this run. A spoken
     // candidate is still under-counted as viaChip (judged here, on the fragment) — a counter,
     // not a gate.
-    clearAsk(repair !== 'cancel', answeredFromCandidate(askRef.current, cleanedText), cleanedText);
+    // The fourth argument is the ANSWER's modality, read here because this is where the answer is
+    // captured: both modalities reach this one seam with lastInputModalityRef already set for the
+    // turn (sendTypedInput sets 'typed' before calling in; the provider's onInputTranscript sets
+    // 'voice'). Stamping it now is what lets reviseHeldAnswer refuse to grow a typed answer on
+    // speech that merely lands in the same run.
+    clearAsk(repair !== 'cancel', answeredFromCandidate(askRef.current, cleanedText), cleanedText,
+      lastInputModalityRef.current === 'voice');
     if (repair === 'undo') {
       handleUndo();
     } else if (repair === 'cancel') {
@@ -2726,11 +2744,14 @@ export default function App() {
       // program's ordinary chips (chipRowFor), and the word program's own chip phrase is "Add a
       // heading here" — recording that as the user's answer let its mention of "heading" license
       // writing "Heading", from nothing but pressing one digit twice. A firing of any other chip
-      // still CLOSES the question (the user moved on) but supplies no answer and no candidate
-      // match. Closed BEFORE the send: sendTypedInput reaches processInputTranscript
-      // synchronously, and whichever call gets there first owns the event.
-      const fromAsk = isAskCandidateChip(askRef.current, sug.key);
-      clearAsk(true, fromAsk, fromAsk ? sug.phrase : undefined);
+      // still CLOSES the question (the user moved on) but supplies no answer, no candidate match
+      // and — the part this call site used to contradict — is not counted `answered`. That verdict
+      // now comes from ONE pure function (chipCloseOfAsk) rather than being decided twice, once
+      // per layer, in opposite directions. Closed BEFORE the send: sendTypedInput reaches
+      // processInputTranscript synchronously, and whichever call gets there first owns the event.
+      // A chip is never speech, so the answer is stamped typed (clearAsk's `voice` default).
+      const close = chipCloseOfAsk(askRef.current, sug.key, sug.phrase);
+      clearAsk(close.answered, close.viaChip, close.text);
       sendTypedInputRef.current(sug.phrase);
     };
     window.addEventListener('keydown', onKey);
@@ -3047,9 +3068,15 @@ export default function App() {
       if (e.key === 't') addMarker("this");
       if (e.key === 'i') addMarker("it");
       if (e.key === 'h') addMarker("here");
-      // G8: number keys 1–9 select a numbered target (pointer-free deixis).
-      // band-open digits belong to the register band (same-window second listener; preventDefault doesn't cross listeners)
-      if (e.key >= '1' && e.key <= '9' && !bandOpenRef.current) selectTargetByNumber(Number(e.key));
+      // G8: number keys 1–9 select a numbered target (pointer-free deixis) — but only a digit no
+      // earlier listener has claimed. This is the SECOND window keydown listener; the quick-fire /
+      // band one (mounted above, so it runs first) still runs whatever this one does, and
+      // preventDefault there cannot stop it — but it does set `defaultPrevented`, and that flag IS
+      // readable here. It has to be, because the ask cannot be consulted: quick-fire calls clearAsk
+      // synchronously, so `askRef.current` is already null by the time this line is reached. The
+      // band's own guard is kept as well: bandOpenRef states the grammar directly rather than
+      // depending on another listener having called preventDefault first.
+      if (digitSelectsTarget(e.key, bandOpenRef.current, e.defaultPrevented)) selectTargetByNumber(Number(e.key));
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);

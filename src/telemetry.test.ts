@@ -94,6 +94,25 @@ describe('unspecified asks are counted apart from errors', () => {
     expect(a.commits + a.witnesses + a.rejected).toBe(a.total);
     expect(a.rejected).toBe(1);
   });
+
+  it('correctionRate divides by what reached the document, never by refusals', () => {
+    // `actions` was widened to include 'rejected' when the gate landed, which INVERTED this rate:
+    // an arm whose gate refuses more scored lower, i.e. looked better at not needing correction —
+    // for refusing to act at all. A refusal is not a corrected action; it never happened.
+    telemetry.action('edit_content', 'mutate', 'commit');
+    telemetry.action('edit_content', 'mutate', 'witness');
+    telemetry.correction();
+    expect(telemetry.metrics().correctionRate).toBe(0.5);
+    // Three gate refusals later, the arm has corrected exactly as often as before.
+    for (let i = 0; i < 3; i++) telemetry.action('edit_content', 'mutate', 'rejected');
+    expect(telemetry.metrics().correctionRate).toBe(0.5);
+    expect(telemetry.metrics().corrections).toBe(1);
+  });
+
+  it('nothing reached the document, so there is no rate to report', () => {
+    telemetry.action('edit_content', 'mutate', 'rejected');
+    expect(telemetry.metrics().correctionRate).toBe(0);
+  });
 });
 
 describe('arm in telemetry', () => {
