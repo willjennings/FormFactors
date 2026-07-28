@@ -115,6 +115,7 @@ import { initialArtifactState, reduce as artifactReduce, MAX_ARTIFACTS } from '.
 import { pinEventFor } from './artifacts/pin';
 import { COMBINE_TOOL, READ_SOURCES_TOOL, validateCombineCall, sourceDetail, validSourceIds } from './artifacts/combineTools';
 import { REFINE_TOOL, validateRefineCall, describePatch } from './artifacts/refineTools';
+import { validateActionCall } from './actions/validate';
 import { feedsSummary } from './artifacts/feeds';
 import { artifactEntities, entityToSourceId } from './artifacts/entities';
 import { toggleTray, removeTray, clearTray, canFire, isTrayFull, pruneTray, restoreTray, type TrayMember } from './artifacts/combineTray';
@@ -1720,6 +1721,21 @@ export default function App() {
       const args = (fc.args ?? {}) as { target?: string; detail?: string; confirm?: boolean };
       const { label, target, detail } = describeAction(fc.name, args);
       const confirmed = args.confirm === true;
+
+      // THE GATE (spec §4). Nothing is witnessed or committed on missing information. An ask is
+      // NOT an error: {needsContent} addresses the USER (Task 5 gives it chips; until then the
+      // model asks by speech), {error} addresses the MODEL.
+      const gate = validateActionCall(fc.name, args, mockDocRef.current);
+      if ('error' in gate) {
+        addLog('tool', `Tool Call: ${fc.name} REJECTED — ${gate.error}`);
+        ack({ success: false, error: gate.error });
+        return;
+      }
+      if ('needsContent' in gate) {
+        addLog('info', `${fc.name} needs ${gate.needsContent.field} — asking the user.`);
+        ack({ success: false, error: `${gate.needsContent.question} Call ask_content with that question, then act on the user's answer. Do NOT send a placeholder.` });
+        return;
+      }
 
       // Double-apply guard: if the button already confirmed this action, don't re-apply the
       // voice-confirm call that follows (button sets confirmed=true, then the model also fires

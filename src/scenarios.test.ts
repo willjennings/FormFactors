@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { applyAction, initialMockDoc, serializeMockDoc, ACT_TOOL, classOf } from './scenarios';
 import type { MockDoc } from './scenarios';
+import { seedCorpus } from './artifacts/seeds';
 
 describe('applyAction — functional surface verbs', () => {
   it('word: Save As marks saved and records the copy filename', () => {
@@ -45,8 +46,16 @@ describe('applyAction — functional surface verbs', () => {
     expect(applyAction(doc, 'insert_object', { detail: 'SUM' })).toBe(doc);
   });
 
-  it('excel: detail-less insert still creates a chart', () => {
-    const doc = applyAction(initialMockDoc('excel'), 'insert_object', { target: 'Cell A1' });
+  it('excel: detail-less insert no longer defaults to a chart — it does nothing (honest gate, Task 4)', () => {
+    const before = initialMockDoc('excel');
+    const doc = applyAction(before, 'insert_object', { target: 'Cell A1' });
+    if (doc.kind !== 'excel') return;
+    expect(doc.chart).toBe(false);
+    expect(doc).toEqual(before);
+  });
+
+  it('excel: insert_object with "chart" in the detail creates a chart', () => {
+    const doc = applyAction(seedCorpus().excel, 'insert_object', { target: 'grid', detail: 'Make a chart from this' });
     if (doc.kind !== 'excel') return;
     expect(doc.chart).toBe(true);
   });

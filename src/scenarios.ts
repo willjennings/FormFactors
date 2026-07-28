@@ -4,6 +4,8 @@
  */
 
 import type { VoiceTool } from './voice/types';
+import { totalColumn, formatTotal, COLUMN_ROWS } from './actions/columnTotal';
+import { aggregateMode } from './actions/validate';
 
 // --- Single source of truth for the point-and-speak demo content ---
 //
@@ -420,7 +422,6 @@ const cellRef = (target?: string) => (target?.match(/[A-Za-z]\d+/)?.[0]?.toUpper
 
 /** Filename shown in the Word surface title bar; Save As writes the "(copy)" variant. */
 export const WORD_FILENAME = 'Quarterly report.docx';
-const A_CELLS = ['A1', 'A2', 'A3', 'A4', 'A5', 'A6']; // the grid's A column (see spreadsheetGrid ROWS)
 
 /**
  * Pure reducer: given the current mock doc and an action verb call, return the next doc.
@@ -440,8 +441,12 @@ export function applyAction(
     case 'word':
       if (verb === 'format_content') return { ...doc, bold: true };
       if (verb === 'edit_content') {
-        if (has(args.target, 'head') || has(detail, 'head')) return { ...doc, heading: detail || 'Heading' };
-        return { ...doc, text: detail || doc.text };
+        // No `|| 'Heading'`, no `|| doc.text`: the validator guarantees a payload before we get
+        // here, so an absent one means something upstream is wrong — write nothing rather than
+        // inventing the user's prose.
+        if (!detail) return doc;
+        if (has(args.target, 'head') || has(detail, 'head')) return { ...doc, heading: detail };
+        return { ...doc, text: detail };
       }
       if (verb === 'revise_text') {
         const t = doc.text;
@@ -451,21 +456,25 @@ export function applyAction(
       }
       return doc;
     case 'excel':
-      if (verb === 'edit_content') return { ...doc, cells: { ...doc.cells, [cellRef(args.target)]: detail || '100' } };
+      if (verb === 'edit_content') {
+        if (!detail) return doc;                       // never `|| '100'`
+        return { ...doc, cells: { ...doc.cells, [cellRef(args.target)]: detail } };
+      }
       if (verb === 'format_content') {
         const ref = cellRef(args.target);
         return { ...doc, currency: doc.currency.includes(ref) ? doc.currency : [...doc.currency, ref] };
       }
       if (verb === 'insert_object') {
-        if (has(detail, 'sum') || has(detail, 'aver') || has(detail, 'avg')) {
-          const isAvg = has(detail, 'aver') || has(detail, 'avg');
-          const nums = A_CELLS.map(r => parseFloat(doc.cells[r] ?? '')).filter(n => Number.isFinite(n));
-          const target = A_CELLS.find(r => !(doc.cells[r] ?? '').trim());
-          if (!nums.length || !target) return doc;
-          const value = isAvg ? nums.reduce((a, b) => a + b, 0) / nums.length : nums.reduce((a, b) => a + b, 0);
-          return { ...doc, cells: { ...doc.cells, [target]: String(Math.round(value * 100) / 100) } };
-        }
-        return { ...doc, chart: true };
+        const mode = aggregateMode(detail);
+        if (!mode) return has(detail, 'chart') ? { ...doc, chart: true } : doc;
+        const column = (args.target?.match(/\b([A-Da-d])\s*\d/)?.[1] ?? 'A').toUpperCase();
+        const r = totalColumn(doc.cells, column, mode);
+        if ('error' in r) return doc;                  // the validator already refused upstream
+        // Land below the column's last used row, in the column's own idiom.
+        const lastUsed = Math.max(...r.usedRefs.map((ref) => Number(ref.slice(1))));
+        const free = COLUMN_ROWS.find((row) => row > lastUsed && !(doc.cells[`${column}${row}`] ?? '').trim());
+        if (!free) return doc;
+        return { ...doc, cells: { ...doc.cells, [`${column}${free}`]: formatTotal(r.value, r.unit) } };
       }
       return doc;
     case 'powerpoint':
@@ -475,8 +484,9 @@ export function applyAction(
         return { ...doc, slides: [...doc.slides, `Slide ${doc.slides.length + 1}`] };
       }
       if (verb === 'edit_content') {
+        if (!detail) return doc;                       // never `|| slides[last]`
         const slides = [...doc.slides];
-        slides[slides.length - 1] = detail || slides[slides.length - 1];
+        slides[slides.length - 1] = detail;
         return { ...doc, slides };
       }
       if (verb === 'format_content') return { ...doc, transition: detail || 'Fade' };
