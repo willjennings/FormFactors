@@ -118,7 +118,8 @@ import { REFINE_TOOL, validateRefineCall, describePatch } from './artifacts/refi
 import { validateActionCall } from './actions/validate';
 import { shouldDedupeConfirm } from './actions/dedupe';
 import {
-  ASK_CONTENT_TOOL, askCallToState, chipRowFor, answeredFromCandidate, gateAskAck, type AskState,
+  ASK_CONTENT_TOOL, askCallToState, chipRowFor, isAskCandidateChip, answeredFromCandidate,
+  gateAskAck, type AskState,
 } from './actions/askContent';
 import { feedsSummary } from './artifacts/feeds';
 import { artifactEntities, entityToSourceId } from './artifacts/entities';
@@ -576,9 +577,13 @@ export default function App() {
   // effect is only a backstop for any future reader that sets `ask` some other way.
   const askRef = useRef<AskState | null>(null);
   useEffect(() => { askRef.current = ask; }, [ask]);
-  // The user's OWN answer to the last ask — their words, captured here as they were sent, never
-  // anything the model reported back. The gate reads it as the one licence for writing a
-  // placeholder-shaped word (validate.ts's userSuppliedLiteral); nothing else may widen the gate.
+  // The user's OWN answer to the last ask, exactly as they sent it: typed, spoken, or a candidate
+  // they chose by firing its chip (seeing those exact words and picking them is consent — but a
+  // longer model phrase narrowed to a bare placeholder afterwards is not, which is why the gate
+  // requires equality). Never text the model merely proposed and the user never touched. The gate
+  // reads this as the ONE licence for writing a placeholder-shaped word (userSuppliedLiteral);
+  // nothing else may widen the gate, and it is cleared wherever authority goes stale — a new ask,
+  // a program swap, undo, reset — the same convention pendingAction follows.
   const lastAnswerRef = useRef<{ field: string; text: string } | null>(null);
   /** Close the open ask, if any, and record the one telemetry event for it. Idempotent — every
    *  path that could end an ask calls this, and only the first call in a turn does anything.
@@ -599,6 +604,10 @@ export default function App() {
    *  rather than vanishing uncounted. */
   const openAsk = (a: AskState) => {
     if (askRef.current && askRef.current.field !== a.field) clearAsk(false, false);
+    // A question is open, so any earlier answer's authority is over: the gate's `needsContent`
+    // branch returns before the spend below it, which would otherwise leave ask #1's licence live
+    // while ask #2 stands unanswered.
+    lastAnswerRef.current = null;
     askRef.current = a;
     setAsk(a);
   };
@@ -1788,17 +1797,18 @@ export default function App() {
       const confirmed = args.confirm === true;
 
       // THE GATE (spec §4). Nothing is witnessed or committed on missing information. An ask is
-      // NOT an error: {needsContent} addresses the USER — it puts the question on screen a few
-      // lines below (bare; ask_content is what adds candidate chips to it), while {error}
-      // addresses the MODEL. validateActionCall is pure,
-      // so hoisting it above the double-apply guard below is free: the guard does not read it.
+      // NOT an error: {needsContent} addresses the USER — its branch (below, past the dedupe guard
+      // and the {error} return) puts the question on screen, bare; ask_content is what adds
+      // candidate chips to it. {error} addresses the MODEL. validateActionCall is pure, so
+      // hoisting it above the double-apply guard below is free: the guard does not read it.
       //
       // The fourth argument is the user's OWN last answer to an ask, and it is the only thing that
-      // can license writing a placeholder-shaped word ("Heading" as a heading). It replaced
-      // `confirm === true`, which is a MODEL-set argument — never the app's confirm button — and
-      // therefore let the guided register (honest:false, the control arm) walk straight past this
-      // gate on its first call. Read from the ref for the usual reason: this handler runs from the
-      // provider callback bound at connect time, where the state closure is stale.
+      // can license writing a placeholder-shaped word ("Heading" as a heading) — and only when
+      // their whole answer WAS that word. It replaced `confirm === true`, a MODEL-set argument,
+      // never the app's confirm button, which let the guided register (honest:false, the control
+      // arm) walk straight past this gate on its first call. Read from the ref for the usual
+      // reason: this handler runs from the provider callback bound at connect time (see the note
+      // at handleVoiceToolCall), where the state closure is stale.
       const gate = validateActionCall(fc.name, args, mockDocRef.current, lastAnswerRef.current);
 
       // Double-apply guard (fix round 1, I3; tightened round 2; rebuilt round 3; tightened again
@@ -1920,9 +1930,11 @@ export default function App() {
     } else if (fc.name === 'ask_content') {
       // The FRONT DOOR of the ask (spec §6): the model noticed the user left the words open and
       // asked back instead of guessing. Candidates are offers, not defaults — they render as the
-      // chip row and nothing applies unless the user sends one. An ask already open (from the
-      // gate backstop above) is REPLACED, not stacked — one question on screen at a time, and
-      // one telemetry event when it closes.
+      // chip row and nothing applies unless the user fires one. An ask already open (from the gate
+      // backstop above) is REPLACED, not stacked: one question on screen at a time. Same field —
+      // the ordinary case, this question gaining its candidates — is one ask and one event; a
+      // different field is a different question, and openAsk records the displaced one abandoned,
+      // so that case emits two.
       const v = askCallToState(fc.args);
       if ('error' in v) {
         addLog('tool', `Tool Call: ask_content REJECTED — ${v.error}`);
@@ -2322,15 +2334,17 @@ export default function App() {
     // recorded as unanswered rather than dressed up as an answer; any OTHER change of subject is
     // still recorded answered, because the app cannot read intent and only that one form of
     // decline is legible to it. Pure noise returned above without touching the ask at all.
-    // The quick-fire path has already closed it by here (viaChip),
-    // and clearAsk is idempotent, so a chip answer is counted once.
+    // The quick-fire path has already closed it by here — recording an answer only if the chip
+    // fired was the ask's own — and clearAsk is idempotent, so a chip answer is counted once.
     //
-    // KNOWN LIMIT, deliberately taken: voice arrives here as partial deltas too (the provider
-    // callback ignores isFinal), so a SPOKEN answer closes the ask on its first fragment and its
-    // viaChip is judged on that fragment — a spoken candidate read off the screen can be recorded
-    // viaChip:false. Gating on isFinal instead would tie the ask's only voice exit to a
-    // turnComplete flag Gemini may deliver on a message carrying no transcript at all, leaving
-    // the question stuck open on the primary modality. A soft under-count beats a stuck ask.
+    // VOICE arrives here as partial deltas, so the ask closes on the FIRST fragment. That exit
+    // stays: gating on isFinal would tie the only voice exit to a turnComplete flag Gemini may
+    // deliver on a message carrying no transcript at all, leaving the question stuck open on the
+    // primary modality. But the fragment must not stand as the answer — it now feeds the GATE, and
+    // a first fragment of "the heading" out of "the heading should say Q3 Summary" would license
+    // writing "Heading". The accumulation below revises the recorded answer as the rest of the
+    // utterance arrives, so what the gate finally reads is the whole thing. A spoken candidate is
+    // still under-counted as viaChip (judged here, on the fragment) — a counter, not a gate.
     clearAsk(repair !== 'cancel', answeredFromCandidate(askRef.current, cleanedText), cleanedText);
     if (repair === 'undo') {
       handleUndo();
@@ -2378,6 +2392,16 @@ export default function App() {
 
     // Update ref for next turn comparison
     lastProcessedTranscriptionRef.current = currentText;
+
+    // THE ANSWER IS THE WHOLE UTTERANCE, not the fragment that happened to close the ask. Each
+    // further delta of the same spoken turn revises the recorded answer to the sentence
+    // accumulated just above, so a licence survives only if the user's ENTIRE answer was the bare
+    // word. Voice only: a typed submit arrives complete in one call, and `currentText` would
+    // prepend any voice transcript from the last 3s to it. Skipped while a question is open
+    // (that text belongs to the new ask, not the old answer) and once the licence is spent.
+    if (lastAnswerRef.current && !askRef.current && lastInputModalityRef.current === 'voice') {
+      lastAnswerRef.current = { ...lastAnswerRef.current, text: currentText };
+    }
 
     const detectedKeywords: string[] = [];
     let tempText = lowerText;
@@ -2658,11 +2682,15 @@ export default function App() {
       setQuickFireEcho({ n: i + 1, phrase: sug.phrase, referent: hovered ? displayName(hovered) : null, at: Date.now() });
       lastActivityRef.current = Date.now();
       setFirstRunHint(false);
-      // While an ask is open these ARE its candidates (the suggestions memo hands the row over),
-      // so a digit here is direct evidence of a chip answer rather than the text-match inference
-      // processInputTranscript falls back on. Closed BEFORE the send: sendTypedInput reaches
-      // processInputTranscript synchronously, and whichever call gets there first owns the event.
-      clearAsk(true, true, sug.phrase);
+      // Only the ASK's own chips are an answer to it. Under a bare ask the row still holds the
+      // program's ordinary chips (chipRowFor), and the word program's own chip phrase is "Add a
+      // heading here" — recording that as the user's answer let its mention of "heading" license
+      // writing "Heading", from nothing but pressing one digit twice. A firing of any other chip
+      // still CLOSES the question (the user moved on) but supplies no answer and no candidate
+      // match. Closed BEFORE the send: sendTypedInput reaches processInputTranscript
+      // synchronously, and whichever call gets there first owns the event.
+      const fromAsk = isAskCandidateChip(askRef.current, sug.key);
+      clearAsk(true, fromAsk, fromAsk ? sug.phrase : undefined);
       sendTypedInputRef.current(sug.phrase);
     };
     window.addEventListener('keydown', onKey);
@@ -3963,6 +3991,7 @@ export default function App() {
     annotationDispatchRef.current?.({ type: 'annotate.clear' });
     teachingDispatchRef.current?.({ type: 'teach.clear' });
     setPendingAction(null);
+    lastAnswerRef.current = null;   // an answer about the OLD document licenses nothing in the new one
     setPendingBeautify(null); // the post-swap session never made this proposal — drop it, don't let a confirm hint a session about a card it didn't propose
     railDispatch({ type: 'rail.dismiss' }); // answers about the OLD program are stale context in the new one (human smoke: Excel's "Cell A3" card survived into PowerPoint)
     // Corpus persistence (spec §3): the outgoing doc is SAVED, the incoming restored (or
@@ -4056,6 +4085,7 @@ export default function App() {
     journalAppend('workspace', { type: 'doc.set', program: activeProgramRef.current ?? activeProgram, doc: last.doc });
     setUndoStack(undoStack.slice(0, -1));
     setPendingAction(null);
+    lastAnswerRef.current = null;   // they just took the write back; it licenses nothing further
     telemetry.correction(); // undo = a correction signal for the testbed
     emitFeedback({ outcome: 'undo', label: `Undid ${last.label}` });
   };
@@ -4068,6 +4098,7 @@ export default function App() {
     entitiesRef.current = baseEntities;
     setShareRequest(null);
     setPendingAction(null);
+    lastAnswerRef.current = null;   // stale authority goes with the rest of the session state
     // Reset restores the Meridian SEED (not the unrelated initialMockDoc placeholder) so the
     // coherent-story invariant survives a reset; drop any saved corpus entry for the active
     // program — the live doc is the truth, and a stale copy would resurrect the pre-reset doc

@@ -55,23 +55,27 @@ function isPlaceholder(detail: string | undefined, field: string): boolean {
  *  the ask closed, never anything the model reported. */
 export interface AskAnswer { field: string; text: string }
 
-/** May a placeholder-SHAPED word be written after all? Only on the user's own say-so.
+/** May a placeholder-SHAPED word be written after all? Only when the user's whole answer WAS that
+ *  word. Nothing else — not `confirm` (a model-set argument, which is how the origin bug walked
+ *  through the default register), and not a mention inside a longer sentence.
  *
- *  This replaces `if (args.confirm === true) return { ok: true }`, whose comment claimed "the user
- *  has SEEN the witness card and confirmed" while `confirm` is just a model-set argument — and in
- *  the `guided` register (honest:false, the control arm carrying DEFAULT_DIALS) the prompt tells
- *  the model to call verbs with confirm=true immediately, so that line handed the origin bug a
- *  bypass in exactly the register the user was driving.
+ *  EQUALITY, not containment (fix round 2). Containment could not tell asking for a word from
+ *  mentioning one, and this question — "What would you like the heading to say?" — primes the user
+ *  to say "heading": `"the heading should say Q3 Summary"` licensed writing "Heading", which is the
+ *  origin bug with the user's real answer discarded. The failure modes are asymmetric: equality
+ *  costs one extra re-ask, containment silently writes the placeholder.
  *
- *  The escape hatch still has to exist: someone may genuinely want the word "Heading" as their
- *  heading, and without a way through, answering the question re-asks it forever. So the evidence
- *  required is the user SAYING the word in answer to this field's question — token containment,
- *  not equality, because people answer "just the word Heading, literally", not a bare echo. */
+ *  The escape hatch survives without a stop-word list, which I evaluated and rejected: to accept
+ *  "the word Heading" a list must strip "the", and stripping "the" licenses the spoken fragment
+ *  "the heading" and (with "make"/"it") "make it a heading" — so every version either fails the
+ *  phrasing it exists for or admits one it must not. A user who says "just the word Heading" is
+ *  simply asked once more and answers "Heading", which passes. One extra exchange, no list to
+ *  get wrong. */
 export function userSuppliedLiteral(answer: AskAnswer | null | undefined, field: string, detail?: string): boolean {
   if (!answer || answer.field !== field) return false;
   const d = normText(detail ?? '');
   if (!d) return false;                          // silence is never licensed, however they answered
-  return normText(answer.text).split(' ').filter(Boolean).includes(d);
+  return normText(answer.text) === d;
 }
 
 /** Cell ref named by a target string ("Cell A1", "A1"), or null if none is named. Never guesses
@@ -138,12 +142,15 @@ export function validateActionCall(
     return { ok: true };
   }
   // An aggregate needs cells. insert_object is offered to powerpoint as well as excel, and the
-  // reducer's powerpoint branch ignores `detail` entirely and appends "Slide N" — so falling
-  // through to {ok:true} here answered "total that column" with a blank slide, acked as done.
-  // Same near-miss class as `detail:"total"` inserting a chart (see aggregateMode above): the
-  // fix is to refuse where the capability does not exist, not to do something else silently.
+  // reducer's powerpoint branch reads `detail` only for "dup" (scenarios.ts) and otherwise appends
+  // "Slide N" — so falling through to {ok:true} here answered "total that column" with a blank
+  // slide, acked as done. Same near-miss class as `detail:"total"` inserting a chart (see
+  // aggregateMode above): refuse where the capability does not exist, rather than do something
+  // else silently. The alternatives offered exclude the aggregate words themselves — suggesting
+  // "sum, average" as valid replacements for a refused "sum" is an invitation to loop.
   if (doc.kind !== 'excel') {
-    return { error: `insert_object can only total a column in a spreadsheet — this is a ${doc.kind} document, which has no cells. Valid here: ${INSERT_KINDS.join(', ')}.` };
+    const insertable = INSERT_KINDS.filter((k) => k !== 'sum' && k !== 'average');
+    return { error: `insert_object can only total a column in a spreadsheet — this is a ${doc.kind} document, which has no cells. Here you can insert: ${insertable.join(', ')}.` };
   }
   const column = resolveColumn(doc.cells, args.target);
   if (!column) return { error: 'Which column should I total? Point at a cell in it, or name it.' };

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   askCallToState, ASK_CONTENT_TOOL, MAX_CANDIDATES, ASK_FIELDS,
-  askChips, chipRowFor, answeredFromCandidate, gateAskAck, type AskState,
+  askChips, chipRowFor, isAskCandidateChip, answeredFromCandidate, gateAskAck, type AskState,
 } from './askContent';
 import { validateActionCall } from './validate';
 import { seedCorpus } from '../artifacts/seeds';
@@ -78,6 +78,21 @@ describe('chipRowFor — an ask takes the row only when it has something to put 
     // cost the user every chip and hand back none, on the one path this whole plan exists for.
     expect(chipRowFor(ask([]), normal)).toEqual(normal);
     expect(chipRowFor(null, normal)).toEqual(normal);
+  });
+});
+
+describe('isAskCandidateChip — whose chip was that', () => {
+  it('only the ask\'s own chips are the ask\'s', () => {
+    const a = ask(['Q3 Summary', 'Meridian Q3']);
+    expect(isAskCandidateChip(a, 'ask-0')).toBe(true);
+    expect(isAskCandidateChip(a, 'ask-1')).toBe(true);
+    // The word program's own chip ("Add a heading here") sits in the row under a BARE ask, and
+    // firing it must not be recorded as the user answering the question — that phrase mentions
+    // "heading", which was chain A of the origin bug reaching the document.
+    expect(isAskCandidateChip(a, 'word.heading')).toBe(false);
+    expect(isAskCandidateChip(a, 'ask-2')).toBe(false);       // beyond the candidates offered
+    expect(isAskCandidateChip(ask([]), 'word.heading')).toBe(false);
+    expect(isAskCandidateChip(null, 'ask-0')).toBe(false);
   });
 });
 

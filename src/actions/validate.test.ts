@@ -41,9 +41,26 @@ describe('unspecified asks — authorial content only', () => {
   it('the USER\'s own answer licenses the literal word — this is what confirm was pretending to be', () => {
     const said = { field: 'heading', text: 'Heading' };
     expect(validateActionCall('edit_content', { target: 'heading', detail: 'Heading' }, word(), said)).toEqual({ ok: true });
-    // …and in the framing people actually use, not just as a bare echo:
-    expect(validateActionCall('edit_content', { target: 'heading', detail: 'heading' }, word(),
-      { field: 'heading', text: 'just the word Heading, literally' })).toEqual({ ok: true });
+    // Case and surrounding punctuation are not meaning; the answer still has to BE the word.
+    expect(validateActionCall('edit_content', { target: 'heading', detail: 'Heading' }, word(),
+      { field: 'heading', text: '  heading.  ' })).toEqual({ ok: true });
+  });
+  it('MENTIONING the word is not asking for it — round 2\'s probe table, verbatim', () => {
+    // Token containment could not tell these apart, and the question itself
+    // ("What would you like the heading to say?") primes the user to say "heading".
+    // The first line IS the origin bug: they asked for Q3 Summary and got "Heading".
+    const gate = (detail: string, text: string) =>
+      validateActionCall('edit_content', { target: 'heading', detail }, word(), { field: 'heading', text }) as any;
+    expect(gate('Heading', 'the heading should say Q3 Summary').needsContent).toBeTruthy();
+    expect(gate('Heading', 'the heading should be short').needsContent).toBeTruthy();
+    expect(gate('title', 'give it a nice title please').needsContent).toBeTruthy();
+    expect(gate('Heading', 'Q3 Summary').needsContent).toBeTruthy();
+    // Chain A: the word program's OWN chip phrase, fired twice (scenarios.ts word.heading hint).
+    expect(gate('Heading', 'Add a heading here').needsContent).toBeTruthy();
+    // Chain C: a first spoken fragment, and the accumulated utterance it grows into.
+    expect(gate('Heading', 'the heading').needsContent).toBeTruthy();
+    // The model authoring its own licence: a candidate narrowed afterwards to the bare word.
+    expect(gate('Heading', 'Heading for the Q3 report').needsContent).toBeTruthy();
   });
   it('someone else\'s answer, another field\'s answer, or no answer licenses nothing', () => {
     const ask = (a: any) => (validateActionCall('edit_content', { target: 'heading', detail: 'Heading' }, word(), a) as any).needsContent;
@@ -76,15 +93,18 @@ describe('malformed calls — the model is addressed, never the user', () => {
     expect(v.error).toBe(direct.error);
   });
   it('an aggregate outside a spreadsheet REFUSES — the PowerPoint blank-slide near-miss', () => {
-    // insert_object is offered to excel AND powerpoint. The reducer's powerpoint branch ignores
-    // `detail` entirely and appends "Slide N", so "total that column" in a deck used to fall
-    // through to {ok:true} and append a blank slide, acked success/done. Same near-miss class as
-    // `detail:"total"` silently inserting a chart — refuse where the capability doesn't exist.
+    // insert_object is offered to excel AND powerpoint. The reducer's powerpoint branch reads
+    // `detail` only for "dup" (scenarios.ts) and otherwise appends "Slide N", so "total that
+    // column" in a deck used to fall through to {ok:true} and append a blank slide, acked
+    // success/done. Same near-miss class as `detail:"total"` silently inserting a chart.
     for (const detail of ['total', 'sum', 'average']) {
       const v = validateActionCall('insert_object', { target: 'Slide canvas', detail }, ppt()) as any;
       expect(v.ok).toBeUndefined();
       expect(v.error).toMatch(/spreadsheet/i);
-      for (const k of INSERT_KINDS) expect(v.error).toContain(k);   // …and names what IS valid
+      // Names what IS insertable here — and never offers back the two words it just refused.
+      for (const k of ['chart', 'slide', 'shape']) expect(v.error).toContain(k);
+      expect(v.error).not.toMatch(/\bsum\b/);
+      expect(v.error).not.toMatch(/\baverage\b/);
     }
     // A deck's real inserts are untouched.
     expect(validateActionCall('insert_object', { target: 'Slide canvas', detail: 'slide' }, ppt())).toEqual({ ok: true });

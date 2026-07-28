@@ -133,9 +133,10 @@ export function DebugDrawer(props: DrawerProps) {
           {/* Deliberately its OWN row, immediately above Errors and never added into it: asking
               the user what their heading should say is correct behaviour, not a failure. */}
           <span className="text-[var(--text-secondary)]">Asks</span>
-          {/* "matched a candidate", not "from a chip": the metric is a normalised TEXT match, so
-              a typed answer identical to a candidate counts too. The key name is honest; this
-              label has to be as well. */}
+          {/* "matched a candidate", not "from a chip": the count rises either when the user fires
+              one of the ask's OWN chips or when what they typed/said normalises to a candidate's
+              text, so it is about the candidate, not the widget. Firing an ordinary chip that
+              merely happens to sit in the row under a bare ask counts as neither. */}
           <span>{tm.asks.total} ({tm.asks.answered} answered, {tm.asks.viaCandidate} matched a candidate)</span>
           <span className="text-[var(--text-secondary)]">Errors</span>
           <span>{tm.errors}</span>

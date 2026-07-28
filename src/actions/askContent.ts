@@ -33,10 +33,6 @@ export function askChips(ask: AskState | null): AskChip[] {
   return ask.candidates.map((phrase, i) => ({ key: `ask-${i}`, label: 'Answer', phrase, color: ASK_CHIP_COLOR }));
 }
 
-// A COMPARISON key, never a rewrite of anyone's words: fold case and every run of punctuation or
-// whitespace to one space. Deliberately aggressive because the answer does not come back the way
-// it was offered — the transcript cleaner in App strips any character outside a plain ASCII set,
-// so an offered "Meridian — Q3" returns as "Meridian Q3" and must still count as the same answer.
 /** The chip row: an ask takes it over only when it has candidates to put there. A question with
  *  nothing to offer leaves the ordinary chips alone — the gate's own backstop opens exactly that
  *  kind of ask (no candidates until the model calls ask_content), and that is the origin path, so
@@ -47,6 +43,18 @@ export function chipRowFor(ask: AskState | null, fallback: AskChip[]): AskChip[]
   return chips.length ? chips : fallback;
 }
 
+/** Was the chip that just fired one of the ASK's own? Under a bare ask the row still holds the
+ *  program's ordinary chips (chipRowFor), and one of them is literally "Add a heading here" — so
+ *  firing a chip is not by itself the user answering the question, and treating it as one let that
+ *  phrase license writing "Heading". Keyed on the chip's key, which askChips owns. */
+export function isAskCandidateChip(ask: AskState | null, key: string): boolean {
+  return askChips(ask).some((c) => c.key === key);
+}
+
+// A COMPARISON key, never a rewrite of anyone's words: fold case and every run of punctuation or
+// whitespace to one space. Deliberately aggressive because the answer does not come back the way
+// it was offered — the transcript cleaner in App strips any character outside a plain ASCII set,
+// so an offered "Meridian — Q3" returns as "Meridian Q3" and must still count as the same answer.
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
 /** Did the answer come from a candidate we offered? The measurement question is whether offering
