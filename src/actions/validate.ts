@@ -18,12 +18,13 @@ const SUM_WORDS = ['sum', 'total'];
 const AVG_WORDS = ['average', 'avg', 'mean'];
 
 /** Which aggregate the detail asks for, or null. `total`/`mean` included: the observed
- *  near-miss was `detail: "total"` silently inserting a chart. */
+ *  near-miss was `detail: "total"` silently inserting a chart. Token match, not substring —
+ *  "subtotal row" and "meantime" are not aggregate requests; `detail` is model-generated free
+ *  text, not a constrained enum, so substring matching reintroduces the same failure class. */
 export function aggregateMode(detail?: string): 'sum' | 'average' | null {
-  const d = normText(detail ?? '');
-  if (!d) return null;
-  if (AVG_WORDS.some((w) => d.includes(w))) return 'average';
-  if (SUM_WORDS.some((w) => d.includes(w))) return 'sum';
+  const words = normText(detail ?? '').split(' ').filter(Boolean);
+  if (words.some((w) => AVG_WORDS.includes(w))) return 'average';
+  if (words.some((w) => SUM_WORDS.includes(w))) return 'sum';
   return null;
 }
 
@@ -52,8 +53,12 @@ function isPlaceholder(detail: string | undefined, field: string): boolean {
 
 /** Column for an aggregate: the target's letter, else the only numeric column, else ask. */
 function resolveColumn(cells: Record<string, string>, target?: string): string | null {
-  const fromTarget = target?.match(/\b([A-Da-d])\s*\d/)?.[1] ?? target?.match(/\bcolumn\s+([A-Da-d])\b/i)?.[1];
-  if (fromTarget) return fromTarget.toUpperCase();
+  const named = target?.match(/\b([A-Da-d])\s*\d/)?.[1]
+    ?? target?.match(/\bcolumn\s+([A-Da-d])\b/i)?.[1]
+    ?? target?.trim().match(/^([A-Da-d])$/)?.[1];
+  // A NAMED column is honoured even if it turns out unusable — totalColumn then refuses
+  // honestly. Substituting a different column would be a silently wrong answer.
+  if (named) return named.toUpperCase();
   const numeric = ['A', 'B', 'C', 'D'].filter((c) => 'value' in totalColumn(cells, c, 'sum'));
   return numeric.length === 1 ? numeric[0] : null;
 }

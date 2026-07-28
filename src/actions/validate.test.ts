@@ -74,4 +74,27 @@ describe('exempt verbs and vocabulary', () => {
     expect(aggregateMode('avg')).toBe('average');
     expect(aggregateMode('chart')).toBeNull();
   });
+  it('aggregateMode matches whole words, not substrings — "subtotal" is not "total"', () => {
+    expect(aggregateMode('subtotal row')).toBeNull();
+    expect(aggregateMode('meantime')).toBeNull();
+    expect(aggregateMode('resume the chart')).toBeNull();
+    expect(aggregateMode('total')).toBe('sum');
+    expect(aggregateMode('mean')).toBe('average');
+  });
+  it('a NAMED column that turns out unusable is honoured, never silently swapped for another', () => {
+    const doc: MockDoc = { kind: 'excel', currency: [], chart: false, saved: false,
+      cells: { A1: '1', A2: '2', B1: 'x', B2: 'y' } };
+    const v = validateActionCall('insert_object', { target: 'B', detail: 'sum' }, doc) as any;
+    expect(v.error).toBeTruthy();
+    expect(v.error).toContain('B');
+    expect(v.ok).toBeUndefined();
+  });
+  it('confirm never bypasses a malformed call — only the placeholder-content ask', () => {
+    const v = validateActionCall('edit_content', { target: 'Cell B5', confirm: true }, excel()) as any;
+    expect(v.error).toBeTruthy();
+  });
+  it('a genuine multi-word heading containing a placeholder word is real content', () => {
+    expect(validateActionCall('edit_content', { target: 'heading', detail: 'Title of the report' }, word()))
+      .toEqual({ ok: true });
+  });
 });
