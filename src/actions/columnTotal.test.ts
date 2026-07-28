@@ -26,7 +26,7 @@ describe('parseCellValue', () => {
 });
 
 describe('formatTotal', () => {
-  it('round-trips every numeric value in the shipped corpus', () => {
+  it('round-trips the numeric values the shipped corpus contains (currently 3)', () => {
     for (const raw of Object.values(excelCells())) {
       const p = parseCellValue(raw);
       if (p) expect(formatTotal(p.n, p.unit)).toBe(raw);
@@ -41,6 +41,13 @@ describe('formatTotal', () => {
   it('trims trailing zeros', () => {
     expect(formatTotal(7_000_000, '$')).toBe('$7M');
     expect(formatTotal(2.5, '')).toBe('2.5');
+  });
+  it('round-trips shapes the corpus does not contain', () => {
+    for (const raw of ['$900K', '$1.2B', '$500', '42', '-3.5', '0', '18%', '$7.6M']) {
+      const p = parseCellValue(raw);
+      expect(p, `${raw} should parse`).not.toBeNull();
+      expect(formatTotal(p!.n, p!.unit)).toBe(raw);
+    }
   });
 });
 
