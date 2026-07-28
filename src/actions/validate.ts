@@ -58,6 +58,58 @@ export interface AskAnswer { field: string; text: string }
 /** An AskAnswer plus the identity of the transcript run it was captured from. */
 export interface HeldAnswer extends AskAnswer { turn: number }
 
+/** The accumulated speech of ONE transcript run, as two parts: everything already finished
+ *  (`committed`) and the fragment still in flight (`fragment`). The whole utterance is
+ *  `runUtterance` — see below for why this is not just a string.
+ *
+ *  Providers deliver a run as deltas of three different kinds, and telling them apart is the
+ *  entire job: a GROWING partial ("Head" → "Heading"), a NEW piece of a longer utterance ("the
+ *  heading" → "should say Q3 Summary"), and the closing event, which restates the WHOLE run
+ *  (azure.ts / openai.ts pass `ev.transcript` there, not an increment). A partial replaces what it
+ *  grew from, a new piece is appended, a restatement replaces the lot — and each of those is a
+ *  superset of what it replaces, so the utterance only ever grows.
+ *
+ *  App's display accumulator (App.tsx:2406-2415) does exactly this test, but against the previous
+ *  RAW delta, which `:2471` writes back over the accumulated value for the keyword diff. So its
+ *  result can COLLAPSE mid-run: held "Q3 Summary", delta "Head", delta "Heading" leaves it holding
+ *  "Heading" — the bare placeholder, licensed by a licence the user never gave for that word (fix
+ *  round 4). Hence a separate accumulation whose committed half is APPEND-ONLY: only the trailing
+ *  in-flight fragment can ever be rewritten, so the utterance can grow and can never shrink to a
+ *  word the user said as part of something longer.
+ *
+ *  Literal append (`acc + ' ' + delta`) was the obvious version and is wrong in the other
+ *  direction: the ordinary one-word run `delta "Heading"` + `completed "Heading"` would accumulate
+ *  "Heading Heading", so the user who genuinely wants the word Heading could never say so on
+ *  voice — the escape hatch userSuppliedLiteral exists for would be dead on the primary modality. */
+export interface RunAccum { committed: string; fragment: string }
+
+export const EMPTY_RUN_ACCUM: RunAccum = { committed: '', fragment: '' };
+
+const startsCI = (s: string, p: string) => s.toLowerCase().startsWith(p.toLowerCase());
+
+/** Fold one transcript delta into the run. Growth only: every return value CONTAINS the previous
+ *  utterance, which is the property the licence depends on. */
+export function accumulateRun(acc: RunAccum, delta: string): RunAccum {
+  const d = delta.trim();
+  if (!d) return acc;                            // noise-only deltas add nothing
+  const whole = runUtterance(acc);
+  // The run's closing event carries the WHOLE transcript, not an increment (azure.ts:151-152 and
+  // openai.ts:135-136 pass `ev.transcript` on `…transcription.completed`). A delta that begins
+  // with everything said so far therefore restates the run rather than extending it — replacing
+  // is safe BECAUSE it is a prefix (the new text contains the old, so nothing can be lost), and
+  // appending would double the utterance.
+  if (whole && startsCI(d, whole)) return { committed: '', fragment: d };
+  const prev = acc.fragment.trim();
+  // A delta that begins with the fragment in flight is that same fragment, grown.
+  if (prev && startsCI(d, prev)) return { ...acc, fragment: d };
+  return { committed: [acc.committed, prev].filter(Boolean).join(' '), fragment: d };
+}
+
+/** Everything said in the run so far. */
+export function runUtterance(acc: RunAccum): string {
+  return [acc.committed, acc.fragment].filter(Boolean).join(' ');
+}
+
 /** What becomes of a held answer when more transcript arrives.
  *
  *  A spoken answer closes the ask on its FIRST fragment, so the rest of the utterance only lands
@@ -67,6 +119,9 @@ export interface HeldAnswer extends AskAnswer { turn: number }
  *  accumulator restarts after 3s, and the user's NEXT turn simply opening with the bare word
  *  ("Heading… can you make that bigger?") rewrote the licence to "Heading". That wrote the literal
  *  word a turn after they said it, about something else entirely.
+ *
+ *  `accumulated` is the whole run (runUtterance above), never the display accumulator: this rule
+ *  can only be as honest as the text it is handed.
  *
  *  A later run therefore DROPS the answer rather than leaving it: it was captured from a fragment
  *  of an utterance that has since ended, so it can never be completed, and keeping it would

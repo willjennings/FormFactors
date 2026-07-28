@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { validateActionCall, aggregateMode, reviseHeldAnswer, INSERT_KINDS } from './validate';
+import { validateActionCall, aggregateMode, reviseHeldAnswer, accumulateRun, runUtterance,
+  EMPTY_RUN_ACCUM, INSERT_KINDS, type HeldAnswer } from './validate';
 import { totalColumn } from './columnTotal';
 import { seedCorpus } from '../artifacts/seeds';
 import type { MockDoc } from '../scenarios';
@@ -106,6 +107,83 @@ describe('reviseHeldAnswer — an answer belongs to the utterance it came from',
   it('nothing held, or nothing to revise with, changes nothing', () => {
     expect(reviseHeldAnswer(null, ev())).toBeNull();
     expect(reviseHeldAnswer(held, ev({ accumulated: '   ' }))).toEqual(held);
+  });
+});
+
+describe('accumulateRun — what the user actually said in this run', () => {
+  const heard = (...deltas: string[]) => runUtterance(deltas.reduce(accumulateRun, EMPTY_RUN_ACCUM));
+
+  it('a GROWING partial replaces the fragment it grew from', () => {
+    // azure.ts / openai.ts deliver a one-word utterance as `transcription.delta "Heading"` then
+    // `transcription.completed "Heading"`. Literal append ("Heading Heading") would leave the
+    // literal-word user unable to say the word at all on voice.
+    expect(heard('Head', 'Heading')).toBe('Heading');
+    expect(heard('Heading', 'Heading')).toBe('Heading');
+    expect(heard('the head', 'the heading should say Q3')).toBe('the heading should say Q3');
+  });
+  it('a NEW piece is appended — the utterance grows across deltas', () => {
+    expect(heard('the heading', 'should say Q3 Summary')).toBe('the heading should say Q3 Summary');
+  });
+  it('the closing event restates the run, so it replaces it instead of doubling it', () => {
+    // azure.ts/openai.ts send the full `ev.transcript` on `…transcription.completed`. Replacing is
+    // safe only because it is a PREFIX of nothing lost — it contains everything already heard.
+    expect(heard('the heading', 'should say Q3 Summary', 'the heading should say Q3 Summary'))
+      .toBe('the heading should say Q3 Summary');
+  });
+  it('committed speech is APPEND-ONLY: no later delta can shrink the run to one of its words', () => {
+    // The defect this exists for: "Q3 Summary" then "Head" then "Heading" must not end up as
+    // "Heading". Only the fragment in flight is ever rewritten.
+    expect(heard('Q3 Summary', 'Head', 'Heading')).toBe('Q3 Summary Heading');
+    expect(heard('Q3 Summary', 'Heading')).toBe('Q3 Summary Heading');
+  });
+  it('blank and whitespace deltas change nothing', () => {
+    expect(accumulateRun(EMPTY_RUN_ACCUM, '   ')).toEqual(EMPTY_RUN_ACCUM);
+    expect(heard('Heading', '  ')).toBe('Heading');
+    expect(runUtterance(EMPTY_RUN_ACCUM)).toBe('');
+  });
+});
+
+describe('the licence across one spoken run — App.tsx\'s answer path, end to end', () => {
+  // Mirrors processInputTranscript: every delta folds into the run, then revises the held answer.
+  const speak = (held: HeldAnswer | null, deltas: string[], turn = 1) => {
+    let acc = EMPTY_RUN_ACCUM;
+    let out = held;
+    for (const d of deltas) {
+      acc = accumulateRun(acc, d);
+      out = reviseHeldAnswer(out, { turn, voice: true, askOpen: false, accumulated: runUtterance(acc) });
+    }
+    return out;
+  };
+  const gate = (held: HeldAnswer | null) =>
+    validateActionCall('edit_content', { target: 'heading', detail: 'Heading' }, word(), held) as any;
+
+  it('a live licence cannot be rewritten to the bare placeholder INSIDE its own run', () => {
+    // Round 3 closed this across runs; it reappeared within one, because the accumulation the
+    // answer was revised against was the display one (App.tsx:2450 writes the raw delta back).
+    // The user answered "Q3 Summary"; the run then carries "Head" → "Heading" (a prefix pair,
+    // which is what every provider's partial-then-final looks like).
+    const held = speak({ field: 'heading', text: 'Q3 Summary', turn: 1 }, ['Q3 Summary', 'Head', 'Heading']);
+    expect(held?.text).toBe('Q3 Summary Heading');
+    expect(gate(held).needsContent).toBeTruthy();      // asks again; writes nothing
+    expect(gate(held).ok).toBeUndefined();
+  });
+  it('the user who really does want the word Heading is still licensed', () => {
+    // The same prefix pair, but this time it IS the whole answer — the escape hatch has to survive
+    // the fix, or refusing becomes unconditional on the primary modality.
+    const held = speak({ field: 'heading', text: 'Head', turn: 1 }, ['Head', 'Heading']);
+    expect(gate(held)).toEqual({ ok: true });
+  });
+  it('a longer answer that merely opens with the word is refused', () => {
+    const held = speak({ field: 'heading', text: 'Heading', turn: 1 },
+      ['Heading', 'is what I want it to say, plus the date']);
+    expect(gate(held).needsContent).toBeTruthy();
+  });
+  it('a run that ENDS without further transcript leaves the answer standing', () => {
+    // The drop is lazy on purpose: the user says "Heading", the model's turn start bumps the run,
+    // and no new delta ever arrives. An eager drop at the boundary would kill the honest path.
+    const held: HeldAnswer = { field: 'heading', text: 'Heading', turn: 1 };
+    expect(speak(held, [], 2)).toEqual(held);
+    expect(gate(held)).toEqual({ ok: true });
   });
 });
 

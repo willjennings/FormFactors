@@ -115,7 +115,8 @@ import { initialArtifactState, reduce as artifactReduce, MAX_ARTIFACTS } from '.
 import { pinEventFor } from './artifacts/pin';
 import { COMBINE_TOOL, READ_SOURCES_TOOL, validateCombineCall, sourceDetail, validSourceIds } from './artifacts/combineTools';
 import { REFINE_TOOL, validateRefineCall, describePatch } from './artifacts/refineTools';
-import { validateActionCall, reviseHeldAnswer, type HeldAnswer } from './actions/validate';
+import { validateActionCall, reviseHeldAnswer, accumulateRun, runUtterance, EMPTY_RUN_ACCUM,
+  type HeldAnswer, type RunAccum } from './actions/validate';
 import { shouldDedupeConfirm } from './actions/dedupe';
 import {
   ASK_CONTENT_TOOL, askCallToState, chipRowFor, isAskCandidateChip, answeredFromCandidate,
@@ -589,10 +590,13 @@ export default function App() {
   // gate's deliberate scope: it stops invented FILLER, and proves nothing about provenance.
   //
   // Read by the gate as the ONE licence for writing a placeholder-shaped word
-  // (userSuppliedLiteral), and cleared wherever that authority goes stale: a new ask, a later
-  // transcript run (reviseHeldAnswer), a program swap, undo, reset — the same convention
-  // pendingAction follows. NB the HeldAnswer annotation below is documentation, not enforcement:
-  // this repo has no React type definitions installed, so every hook and ref here is `any` to
+  // (userSuppliedLiteral), and cleared wherever that authority goes stale: a new ask, the first
+  // delta of a LATER transcript run (reviseHeldAnswer — lazily, on arriving transcript rather than
+  // at the run boundary itself, so an answer whose run merely ended still stands: the user says
+  // "Heading", the model's turn bumps the run, and nothing further is spoken), undo, reset, a
+  // program swap — the same convention pendingAction follows. NB the HeldAnswer annotation below
+  // is documentation, not enforcement: this
+  // repo has no React type definitions installed, so every hook and ref here is `any` to
   // tsc (verified 2026-07-28 — a plain variable catches the same mismatch, a ref does not).
   const lastAnswerRef = useRef<HeldAnswer | null>(null);
   /** Close the open ask, if any, and record the one telemetry event for it. Idempotent — every
@@ -752,10 +756,21 @@ export default function App() {
   // Which transcript accumulation RUN we are in. A held answer is stamped with this (see
   // reviseHeldAnswer) so one turn's words can never be appended to another turn's answer.
   const transcriptRunRef = useRef(0);
-  /** End the current run: clear the accumulator and bump its id, always together. Apart, the
+  // What the user has actually SAID in this run, accumulated append-only (accumulateRun). Kept
+  // apart from lastProcessedTranscriptionRef because that one is not an accumulation: `:2471`
+  // writes the raw delta back over it for the keyword diff, so it collapses to the latest fragment
+  // whenever one delta is a prefix of the next — which is every one-word utterance on azure/openai
+  // (`delta "Heading"` then `completed "Heading"`). This ref is what the gate's licence is revised
+  // against; the other stays exactly as it is, for display and keyword detection.
+  const runAccumRef = useRef<RunAccum>(EMPTY_RUN_ACCUM);
+  /** End the current run: clear both accumulators and bump the run id, always together. Apart, an
    *  accumulator restarts with the same identity and a later utterance looks like a continuation
    *  of the one that answered the question. */
-  const endTranscriptRun = () => { lastProcessedTranscriptionRef.current = ""; transcriptRunRef.current += 1; };
+  const endTranscriptRun = () => {
+    lastProcessedTranscriptionRef.current = "";
+    runAccumRef.current = EMPTY_RUN_ACCUM;
+    transcriptRunRef.current += 1;
+  };
 
   const [sendFrequency, setSendFrequency] = useState(150); // Increased frequency for better AI responsiveness
   // PHASE G: an outward share request — witness recipient + payload before sending.
@@ -2359,9 +2374,12 @@ export default function App() {
     // deliver on a message carrying no transcript at all, leaving the question stuck open on the
     // primary modality. But the fragment must not stand as the answer — it now feeds the GATE, and
     // a first fragment of "the heading" out of "the heading should say Q3 Summary" would license
-    // writing "Heading". The accumulation below revises the recorded answer as the rest of the
-    // utterance arrives, so what the gate finally reads is the whole thing. A spoken candidate is
-    // still under-counted as viaChip (judged here, on the fragment) — a counter, not a gate.
+    // writing "Heading". So the recorded answer is revised as the rest of the utterance arrives —
+    // against runAccumRef (below), NOT against the display accumulation, which is not one: `:2471`
+    // puts the raw delta back for the keyword diff, so `currentText` can collapse to a single
+    // fragment mid-run. What the gate finally reads is everything said in this run. A spoken
+    // candidate is still under-counted as viaChip (judged here, on the fragment) — a counter,
+    // not a gate.
     clearAsk(repair !== 'cancel', answeredFromCandidate(askRef.current, cleanedText), cleanedText);
     if (repair === 'undo') {
       handleUndo();
@@ -2411,15 +2429,18 @@ export default function App() {
     lastProcessedTranscriptionRef.current = currentText;
 
     // THE ANSWER IS THE WHOLE UTTERANCE, not the fragment that happened to close the ask — and it
-    // belongs to the run it was captured in. reviseHeldAnswer (pure, tested) owns the rule: grow
-    // it across the deltas of its OWN spoken run, drop it once a later run begins, leave typed
-    // answers alone (they arrive complete, and `currentText` would prepend any voice transcript
-    // from the last 3s to them).
+    // belongs to the run it was captured in. Two pure, tested functions own the rule:
+    // accumulateRun keeps this run's speech (append-only: only the fragment in flight can be
+    // rewritten, so the utterance never shrinks back to one of its words), and reviseHeldAnswer
+    // decides what that does to the held answer — grow it across the deltas of its OWN spoken run,
+    // drop it once a later run begins, leave typed answers alone (they arrive complete, and this
+    // accumulation would prepend any voice transcript from the last 3s to them).
+    runAccumRef.current = accumulateRun(runAccumRef.current, cleanedText);
     lastAnswerRef.current = reviseHeldAnswer(lastAnswerRef.current, {
       turn: transcriptRunRef.current,
       voice: lastInputModalityRef.current === 'voice',
       askOpen: !!askRef.current,
-      accumulated: currentText,
+      accumulated: runUtterance(runAccumRef.current),
     });
 
     const detectedKeywords: string[] = [];
