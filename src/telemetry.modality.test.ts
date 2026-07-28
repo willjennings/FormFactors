@@ -20,11 +20,15 @@ describe('telemetry modality slicing', () => {
     expect(m.deixis.byModality.voice).toEqual({ n: 1, correct: 1 });
   });
 
-  it('slices actions by modality', () => {
+  it('slices actions by modality, rejections included so the slice sums', () => {
     telemetry.action('format_content', 'transform', 'commit', 'typed');
     telemetry.action('save_file', 'mutate', 'witness'); // defaults to voice
+    telemetry.action('edit_content', 'mutate', 'rejected', 'typed');
     const m = telemetry.metrics();
-    expect(m.actions.byModality.typed).toEqual({ total: 1, commits: 1, witnesses: 0 });
-    expect(m.actions.byModality.voice).toEqual({ total: 1, commits: 0, witnesses: 1 });
+    expect(m.actions.byModality.typed).toEqual({ total: 2, commits: 1, witnesses: 0, rejected: 1 });
+    expect(m.actions.byModality.voice).toEqual({ total: 1, commits: 0, witnesses: 1, rejected: 0 });
+    for (const s of Object.values(m.actions.byModality)) {
+      expect(s.commits + s.witnesses + s.rejected).toBe(s.total);
+    }
   });
 });

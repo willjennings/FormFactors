@@ -51,6 +51,29 @@ function isPlaceholder(detail: string | undefined, field: string): boolean {
   return PLACEHOLDERS.includes(d) || d === normText(field);
 }
 
+/** What the USER themselves last said in answer to an ask — their words, captured app-side when
+ *  the ask closed, never anything the model reported. */
+export interface AskAnswer { field: string; text: string }
+
+/** May a placeholder-SHAPED word be written after all? Only on the user's own say-so.
+ *
+ *  This replaces `if (args.confirm === true) return { ok: true }`, whose comment claimed "the user
+ *  has SEEN the witness card and confirmed" while `confirm` is just a model-set argument — and in
+ *  the `guided` register (honest:false, the control arm carrying DEFAULT_DIALS) the prompt tells
+ *  the model to call verbs with confirm=true immediately, so that line handed the origin bug a
+ *  bypass in exactly the register the user was driving.
+ *
+ *  The escape hatch still has to exist: someone may genuinely want the word "Heading" as their
+ *  heading, and without a way through, answering the question re-asks it forever. So the evidence
+ *  required is the user SAYING the word in answer to this field's question — token containment,
+ *  not equality, because people answer "just the word Heading, literally", not a bare echo. */
+export function userSuppliedLiteral(answer: AskAnswer | null | undefined, field: string, detail?: string): boolean {
+  if (!answer || answer.field !== field) return false;
+  const d = normText(detail ?? '');
+  if (!d) return false;                          // silence is never licensed, however they answered
+  return normText(answer.text).split(' ').filter(Boolean).includes(d);
+}
+
 /** Cell ref named by a target string ("Cell A1", "A1"), or null if none is named. Never guesses
  *  A1 — an unnamed cell means write nothing (fix round 1, I4). Shared by the gate and the reducer
  *  (scenarios.ts) so "is this a real cell" can't be answered two different ways, same as C1. */
@@ -75,6 +98,9 @@ export function resolveColumn(cells: Record<string, string>, target?: string): s
 
 export function validateActionCall(
   verb: string, args: { target?: string; detail?: string; confirm?: boolean }, doc: MockDoc,
+  /** The user's own last answer to an ask (App passes `lastAnswerRef.current`). Absent in the
+   *  ordinary case; only ever WIDENS what is allowed, and only on the user's words. */
+  answer?: AskAnswer | null,
 ): ActionValidation {
   // format_content / save_file / photo_edit have honest defaults or no payload.
   if (verb !== 'edit_content' && verb !== 'insert_object') return { ok: true };
@@ -96,9 +122,10 @@ export function validateActionCall(
       }
       return { ok: true };
     }
-    // The user has SEEN the witness card and confirmed: their words win, placeholder or not.
-    if (args.confirm === true) return { ok: true };
-    return isPlaceholder(args.detail, field.field) ? { needsContent: field } : { ok: true };
+    // Real content passes untouched. A placeholder-shaped word passes ONLY on the user's own
+    // say-so (see userSuppliedLiteral) — never on `confirm`, which the model sets itself.
+    if (!isPlaceholder(args.detail, field.field)) return { ok: true };
+    return userSuppliedLiteral(answer, field.field, args.detail) ? { ok: true } : { needsContent: field };
   }
 
   // insert_object
@@ -110,7 +137,14 @@ export function validateActionCall(
     }
     return { ok: true };
   }
-  if (doc.kind !== 'excel') return { ok: true };
+  // An aggregate needs cells. insert_object is offered to powerpoint as well as excel, and the
+  // reducer's powerpoint branch ignores `detail` entirely and appends "Slide N" — so falling
+  // through to {ok:true} here answered "total that column" with a blank slide, acked as done.
+  // Same near-miss class as `detail:"total"` inserting a chart (see aggregateMode above): the
+  // fix is to refuse where the capability does not exist, not to do something else silently.
+  if (doc.kind !== 'excel') {
+    return { error: `insert_object can only total a column in a spreadsheet — this is a ${doc.kind} document, which has no cells. Valid here: ${INSERT_KINDS.join(', ')}.` };
+  }
   const column = resolveColumn(doc.cells, args.target);
   if (!column) return { error: 'Which column should I total? Point at a cell in it, or name it.' };
   const r = totalColumn(doc.cells, column, mode);

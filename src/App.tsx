@@ -118,7 +118,7 @@ import { REFINE_TOOL, validateRefineCall, describePatch } from './artifacts/refi
 import { validateActionCall } from './actions/validate';
 import { shouldDedupeConfirm } from './actions/dedupe';
 import {
-  ASK_CONTENT_TOOL, askCallToState, askChips, answeredFromCandidate, gateAskAck, type AskState,
+  ASK_CONTENT_TOOL, askCallToState, chipRowFor, answeredFromCandidate, gateAskAck, type AskState,
 } from './actions/askContent';
 import { feedsSummary } from './artifacts/feeds';
 import { artifactEntities, entityToSourceId } from './artifacts/entities';
@@ -576,17 +576,31 @@ export default function App() {
   // effect is only a backstop for any future reader that sets `ask` some other way.
   const askRef = useRef<AskState | null>(null);
   useEffect(() => { askRef.current = ask; }, [ask]);
-  const openAsk = (a: AskState) => { askRef.current = a; setAsk(a); };
+  // The user's OWN answer to the last ask — their words, captured here as they were sent, never
+  // anything the model reported back. The gate reads it as the one licence for writing a
+  // placeholder-shaped word (validate.ts's userSuppliedLiteral); nothing else may widen the gate.
+  const lastAnswerRef = useRef<{ field: string; text: string } | null>(null);
   /** Close the open ask, if any, and record the one telemetry event for it. Idempotent — every
-   *  path that could end an ask calls this, and only the first call in a turn does anything. */
-  const clearAsk = (answered: boolean, viaChip: boolean) => {
+   *  path that could end an ask calls this, and only the first call in a turn does anything.
+   *  `text` is what the user actually sent; it is remembered ONLY on a genuine answer. */
+  const clearAsk = (answered: boolean, viaChip: boolean, text?: string) => {
     const open = askRef.current;
     if (!open) return;
     askRef.current = null;
+    lastAnswerRef.current = answered && text?.trim() ? { field: open.field, text } : null;
     // Its OWN counter, never the error rate: an ask is correct collaborative behaviour, and the
     // 'rejected' ActionDecision exists for gate ERRORS only (telemetry.ts / validate.ts).
     telemetry.unspecifiedAsk(open.field, answered, viaChip);
     setAsk(null);
+  };
+  /** Put a question on screen. A second ask about the SAME field is the same question being
+   *  refined (the gate's bare backstop, then ask_content adding candidates) — one ask, one event.
+   *  A different field is a different question, so the one being displaced is recorded abandoned
+   *  rather than vanishing uncounted. */
+  const openAsk = (a: AskState) => {
+    if (askRef.current && askRef.current.field !== a.field) clearAsk(false, false);
+    askRef.current = a;
+    setAsk(a);
   };
   // A program swap abandons the question — it was about a document no longer on screen. Fires on
   // mount too, where askRef is null and clearAsk is a no-op, so no phantom event is recorded.
@@ -595,11 +609,13 @@ export default function App() {
   // `suggestions` prop) and quick-fire (via suggestionsRef below), so 'none' can never leave
   // an invisible hot surface with a live keyboard shortcut.
   const suggestions = useMemo(
-    // An open ask OWNS the chip row in every register: declining to invent the user's words is
-    // not scaffolding, so no chipDensity gate applies to it. Both the rendered chips and the
-    // quick-fire digit path read this one value, so the candidates are digit-fireable with no
-    // new fire path — and while the question stands, no unrelated chip is hot.
-    () => ask ? askChips(ask) : visibleSuggestions(allSuggestions, dials.chipDensity, grounding.length),
+    // An ask with candidates OWNS the chip row in every register: declining to invent the user's
+    // words is not scaffolding, so no chipDensity gate applies to it. Both the rendered chips and
+    // the quick-fire digit path read this one value, so the candidates are digit-fireable with no
+    // new fire path. An ask with NOTHING to offer leaves the ordinary chips alone (chipRowFor) —
+    // the gate's backstop opens exactly that ask, and taking every chip away to hand back none
+    // would be worst on the very path this plan exists for.
+    () => chipRowFor(ask, visibleSuggestions(allSuggestions, dials.chipDensity, grounding.length)),
     [ask, allSuggestions, dials.chipDensity, grounding.length],
   );
   const suggestionsRef = useRef(suggestions);
@@ -1772,10 +1788,18 @@ export default function App() {
       const confirmed = args.confirm === true;
 
       // THE GATE (spec §4). Nothing is witnessed or committed on missing information. An ask is
-      // NOT an error: {needsContent} addresses the USER (Task 5 gives it chips; until then the
-      // model asks by speech), {error} addresses the MODEL. validateActionCall is pure, so hoisting
-      // it above the double-apply guard below is free — the guard no longer depends on its result.
-      const gate = validateActionCall(fc.name, args, mockDocRef.current);
+      // NOT an error: {needsContent} addresses the USER — it puts the question on screen a few
+      // lines below (bare; ask_content is what adds candidate chips to it), while {error}
+      // addresses the MODEL. validateActionCall is pure,
+      // so hoisting it above the double-apply guard below is free: the guard does not read it.
+      //
+      // The fourth argument is the user's OWN last answer to an ask, and it is the only thing that
+      // can license writing a placeholder-shaped word ("Heading" as a heading). It replaced
+      // `confirm === true`, which is a MODEL-set argument — never the app's confirm button — and
+      // therefore let the guided register (honest:false, the control arm) walk straight past this
+      // gate on its first call. Read from the ref for the usual reason: this handler runs from the
+      // provider callback bound at connect time, where the state closure is stale.
+      const gate = validateActionCall(fc.name, args, mockDocRef.current, lastAnswerRef.current);
 
       // Double-apply guard (fix round 1, I3; tightened round 2; rebuilt round 3; tightened again
       // round 4 — see dedupe.ts for the full history and the exact comparison). A confirm:true call
@@ -1811,13 +1835,23 @@ export default function App() {
         // THE BACKSTOP: the app puts the question on screen ITSELF rather than only telling the
         // model to ask. The prompt rule + ask_content are the front door (the model asks before
         // ever calling the verb); this is what happens when it walks past them, and it is the
-        // path the origin bug took. A model that goes on to call ask_content replaces this ask
-        // with its own question and candidates.
+        // path the origin bug took. It opens BARE — no candidates, because the app has no business
+        // inventing answers either — so the ordinary chip row stays put (chipRowFor) until a
+        // model that goes on to call ask_content refines this same field's question with real
+        // candidates, which openAsk treats as the one ask it is.
         openAsk({ field: gate.needsContent.field, question: gate.needsContent.question, candidates: [] });
         addLog('info', `${fc.name} needs ${gate.needsContent.field} — asking the user: "${gate.needsContent.question}"`);
         ack(gateAskAck(fc.name, gate.needsContent));
         return;
       }
+
+      // The gate let this through, so the answer licence is SPENT. It exists to carry one retry —
+      // the one relaying the user's own words — not to stand open: left in place, a later "add a
+      // heading" would write "Heading" again on a say-so from several turns ago, which is the
+      // origin bug with a stale licence. Clearing it on any gate-passed verb errs toward asking
+      // again, which is the safe direction. The user-confirm loop is unaffected: a confirm:true
+      // retry of an already-confirmed pending action dedupes above and never reaches here.
+      lastAnswerRef.current = null;
 
       const verbClass = classOf(fc.name);
       const phrase = `${label} ${target}${detail ? ` (${detail})` : ''}`;
@@ -2297,7 +2331,7 @@ export default function App() {
     // viaChip:false. Gating on isFinal instead would tie the ask's only voice exit to a
     // turnComplete flag Gemini may deliver on a message carrying no transcript at all, leaving
     // the question stuck open on the primary modality. A soft under-count beats a stuck ask.
-    clearAsk(repair !== 'cancel', answeredFromCandidate(askRef.current, cleanedText));
+    clearAsk(repair !== 'cancel', answeredFromCandidate(askRef.current, cleanedText), cleanedText);
     if (repair === 'undo') {
       handleUndo();
     } else if (repair === 'cancel') {
@@ -2628,7 +2662,7 @@ export default function App() {
       // so a digit here is direct evidence of a chip answer rather than the text-match inference
       // processInputTranscript falls back on. Closed BEFORE the send: sendTypedInput reaches
       // processInputTranscript synchronously, and whichever call gets there first owns the event.
-      clearAsk(true, true);
+      clearAsk(true, true, sug.phrase);
       sendTypedInputRef.current(sug.phrase);
     };
     window.addEventListener('keydown', onKey);

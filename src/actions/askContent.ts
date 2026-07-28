@@ -37,6 +37,16 @@ export function askChips(ask: AskState | null): AskChip[] {
 // whitespace to one space. Deliberately aggressive because the answer does not come back the way
 // it was offered — the transcript cleaner in App strips any character outside a plain ASCII set,
 // so an offered "Meridian — Q3" returns as "Meridian Q3" and must still count as the same answer.
+/** The chip row: an ask takes it over only when it has candidates to put there. A question with
+ *  nothing to offer leaves the ordinary chips alone — the gate's own backstop opens exactly that
+ *  kind of ask (no candidates until the model calls ask_content), and that is the origin path, so
+ *  blanking the row there would take every chip away and hand back none. Typed against AskChip,
+ *  which is structurally the shell's Suggestion, so either kind can be the fallback. */
+export function chipRowFor(ask: AskState | null, fallback: AskChip[]): AskChip[] {
+  const chips = askChips(ask);
+  return chips.length ? chips : fallback;
+}
+
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
 /** Did the answer come from a candidate we offered? The measurement question is whether offering
@@ -72,9 +82,18 @@ export function askCallToState(args: unknown): { ask: AskState } | { error: stri
   }
   const question = String(a.question ?? '').trim();
   if (!question) return { error: 'ask_content needs a short question to speak.' };
-  const raw = Array.isArray(a.candidates) ? a.candidates.map(String) : [];
+  const raw = Array.isArray(a.candidates) ? a.candidates : [];
   if (raw.length > MAX_CANDIDATES) {
     return { error: `ask_content takes at most ${MAX_CANDIDATES} candidates — pick your best ${MAX_CANDIDATES}.` };
   }
-  return { ask: { field, question, candidates: raw.map((c) => c.trim()).filter(Boolean) } };
+  // Typed BEFORE stringifying, and refused rather than dropped. `map(String)` here turned
+  // [null, undefined, {}] into three fireable chips reading "null", "undefined" and
+  // "[object Object]"; firing one sends that text as the user's own words, and "null" is not in
+  // the gate's PLACEHOLDERS, so the literal word would have landed in the document — the origin
+  // bug rebuilt by the surface that exists to prevent it. An error is also the more useful
+  // answer: the model can re-send real candidates, where a silent drop just loses the chips.
+  if (raw.some((c) => typeof c !== 'string')) {
+    return { error: 'ask_content candidates must be plain strings — one short answer each, no objects or nulls.' };
+  }
+  return { ask: { field, question, candidates: (raw as string[]).map((c) => c.trim()).filter(Boolean) } };
 }

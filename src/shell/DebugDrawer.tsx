@@ -133,7 +133,10 @@ export function DebugDrawer(props: DrawerProps) {
           {/* Deliberately its OWN row, immediately above Errors and never added into it: asking
               the user what their heading should say is correct behaviour, not a failure. */}
           <span className="text-[var(--text-secondary)]">Asks</span>
-          <span>{tm.asks.total} ({tm.asks.answered} answered, {tm.asks.viaCandidate} from a chip)</span>
+          {/* "matched a candidate", not "from a chip": the metric is a normalised TEXT match, so
+              a typed answer identical to a candidate counts too. The key name is honest; this
+              label has to be as well. */}
+          <span>{tm.asks.total} ({tm.asks.answered} answered, {tm.asks.viaCandidate} matched a candidate)</span>
           <span className="text-[var(--text-secondary)]">Errors</span>
           <span>{tm.errors}</span>
         </div>

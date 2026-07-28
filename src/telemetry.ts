@@ -132,9 +132,11 @@ class Telemetry {
   missionAbandoned(key: string, stepIndex: number) { this.push({ type: 'mission_abandoned', key, stepIndex }); }
   registerSwitch(from: string, to: string, midSession: boolean) { this.push({ type: 'register_switch', from, to, midSession }); }
   /** An unspecified ask is CORRECT collaborative behaviour, never a failure. Counted separately
-   *  so a register arm that asks more does not look like an arm that errors more. Emitted once
-   *  per ask, when it CLOSES (that is when `answered` is known) — an ask still open when the
-   *  session ends therefore emits nothing, which is honest: its outcome is genuinely unknown. */
+   *  so a register arm that asks more does not look like an arm that errors more. Emitted when an
+   *  ask CLOSES, which is when `answered` is known — so an ask still open when the session ends
+   *  emits nothing, honestly, because its outcome is genuinely unknown. A question REFINED in
+   *  place (App's openAsk: same field, candidates added) is one ask and one event; a question
+   *  replaced by one about a different field records the displaced one as unanswered. */
   unspecifiedAsk(field: string, answered: boolean, viaChip: boolean) { this.push({ type: 'unspecified_ask', field, answered, viaChip }); }
   pin(cardType: string, artifactId?: string, error?: string) { this.push({ type: 'pin', cardType, artifactId, error }); }
   combineTray(count: number, kind: string, ok: boolean) { this.push({ type: 'combine_tray', count, kind, ok }); }
@@ -164,7 +166,11 @@ class Telemetry {
     };
     const actByMod = (mod: InputModality) => {
       const a = actions.filter(x => x.modality === mod);
-      return { total: a.length, commits: a.filter(x => x.decision === 'commit').length, witnesses: a.filter(x => x.decision === 'witness').length };
+      // `rejected` here for the same reason it is on the top-level block: without it these three
+      // numbers do not add up, and every gate refusal falls silently between them.
+      return { total: a.length, commits: a.filter(x => x.decision === 'commit').length,
+               witnesses: a.filter(x => x.decision === 'witness').length,
+               rejected: a.filter(x => x.decision === 'rejected').length };
     };
     const asks = this.events.filter(e => e.type === 'unspecified_ask') as Extract<TelemetryEvent, { type: 'unspecified_ask' }>[];
     const guid = this.events.filter(e => e.type === 'guidance') as Extract<TelemetryEvent, { type: 'guidance' }>[];

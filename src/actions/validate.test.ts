@@ -28,8 +28,34 @@ describe('unspecified asks — authorial content only', () => {
     expect((validateActionCall('edit_content', { target: 'Document body' }, word()) as any).needsContent.field).toBe('body');
     expect((validateActionCall('edit_content', { target: 'Slide canvas' }, ppt()) as any).needsContent.field).toBe('slideTitle');
   });
-  it('CONFIRM OVERRIDES the placeholder check — the user has seen the witness card', () => {
-    expect(validateActionCall('edit_content', { target: 'heading', detail: 'heading', confirm: true }, word())).toEqual({ ok: true });
+  // REPLACES "CONFIRM OVERRIDES the placeholder check". That test asserted the defect: `confirm`
+  // is a MODEL argument, not the app's confirm button, and in the `guided` register (honest:false,
+  // and the control arm carrying DEFAULT_DIALS) the prompt tells the model to "call the verb with
+  // confirm=true and do it immediately". So the origin bug reproduced verbatim in the default
+  // register by way of the one line meant to respect the user's wishes.
+  it('a model-asserted confirm does NOT license a placeholder — it is not the app\'s confirm button', () => {
+    const v = validateActionCall('edit_content', { target: 'heading', detail: 'Heading', confirm: true }, word()) as any;
+    expect(v.needsContent.field).toBe('heading');
+    expect(v.ok).toBeUndefined();
+  });
+  it('the USER\'s own answer licenses the literal word — this is what confirm was pretending to be', () => {
+    const said = { field: 'heading', text: 'Heading' };
+    expect(validateActionCall('edit_content', { target: 'heading', detail: 'Heading' }, word(), said)).toEqual({ ok: true });
+    // …and in the framing people actually use, not just as a bare echo:
+    expect(validateActionCall('edit_content', { target: 'heading', detail: 'heading' }, word(),
+      { field: 'heading', text: 'just the word Heading, literally' })).toEqual({ ok: true });
+  });
+  it('someone else\'s answer, another field\'s answer, or no answer licenses nothing', () => {
+    const ask = (a: any) => (validateActionCall('edit_content', { target: 'heading', detail: 'Heading' }, word(), a) as any).needsContent;
+    expect(ask(null)).toBeTruthy();
+    expect(ask({ field: 'body', text: 'Heading' })).toBeTruthy();          // answered a DIFFERENT question
+    expect(ask({ field: 'heading', text: 'make it bold' })).toBeTruthy();  // never said the word
+    expect(ask({ field: 'heading', text: '' })).toBeTruthy();
+  });
+  it('an answer never licenses a BLANK detail — silence is still not content', () => {
+    const v = validateActionCall('edit_content', { target: 'heading', detail: '  ' }, word(),
+      { field: 'heading', text: 'Heading' }) as any;
+    expect(v.needsContent).toBeTruthy();
   });
 });
 
@@ -48,6 +74,20 @@ describe('malformed calls — the model is addressed, never the user', () => {
     const v = validateActionCall('insert_object', { target: 'Cell A2', detail: 'sum' }, excel()) as any;
     const direct = totalColumn(cells(), 'A', 'sum') as { error: string };
     expect(v.error).toBe(direct.error);
+  });
+  it('an aggregate outside a spreadsheet REFUSES — the PowerPoint blank-slide near-miss', () => {
+    // insert_object is offered to excel AND powerpoint. The reducer's powerpoint branch ignores
+    // `detail` entirely and appends "Slide N", so "total that column" in a deck used to fall
+    // through to {ok:true} and append a blank slide, acked success/done. Same near-miss class as
+    // `detail:"total"` silently inserting a chart — refuse where the capability doesn't exist.
+    for (const detail of ['total', 'sum', 'average']) {
+      const v = validateActionCall('insert_object', { target: 'Slide canvas', detail }, ppt()) as any;
+      expect(v.ok).toBeUndefined();
+      expect(v.error).toMatch(/spreadsheet/i);
+      for (const k of INSERT_KINDS) expect(v.error).toContain(k);   // …and names what IS valid
+    }
+    // A deck's real inserts are untouched.
+    expect(validateActionCall('insert_object', { target: 'Slide canvas', detail: 'slide' }, ppt())).toEqual({ ok: true });
   });
   it('an ambiguous column asks which one', () => {
     const twoNumeric: MockDoc = { kind: 'excel', currency: [], chart: false, saved: false,
@@ -89,7 +129,7 @@ describe('exempt verbs and vocabulary', () => {
     expect(v.error).toContain('B');
     expect(v.ok).toBeUndefined();
   });
-  it('confirm never bypasses a malformed call — only the placeholder-content ask', () => {
+  it('confirm never bypasses a malformed call', () => {
     const v = validateActionCall('edit_content', { target: 'Cell B5', confirm: true }, excel()) as any;
     expect(v.error).toBeTruthy();
   });

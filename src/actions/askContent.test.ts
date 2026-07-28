@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   askCallToState, ASK_CONTENT_TOOL, MAX_CANDIDATES, ASK_FIELDS,
-  askChips, answeredFromCandidate, gateAskAck, type AskState,
+  askChips, chipRowFor, answeredFromCandidate, gateAskAck, type AskState,
 } from './askContent';
 import { validateActionCall } from './validate';
 import { seedCorpus } from '../artifacts/seeds';
@@ -36,6 +36,17 @@ describe('askCallToState', () => {
     const v = askCallToState({ field: 'heading', question: 'What?', candidates: ['a', 'b', 'c', 'd'] }) as any;
     expect(v.error).toContain(String(MAX_CANDIDATES));
   });
+  it('refuses non-string candidates rather than stringifying them into chips', () => {
+    // `map(String)` before the blank-filter turned [null, undefined, {}] into three FIREABLE chips
+    // reading "null", "undefined", "[object Object]" — and "null" is not in PLACEHOLDERS, so the
+    // gate would have passed it and the literal word null would land in the document. That is the
+    // origin bug in a different costume, manufactured by the surface meant to prevent it.
+    for (const junk of [[null], [undefined], [{}], ['Real', null], [['nested']]]) {
+      const v = askCallToState({ field: 'heading', question: 'What?', candidates: junk }) as any;
+      expect(v.ask).toBeUndefined();
+      expect(v.error).toMatch(/string/i);
+    }
+  });
   it('drops blank candidates instead of rendering empty chips', () => {
     const v = askCallToState({ field: 'heading', question: 'What?', candidates: ['Real', '  ', ''] }) as any;
     expect(v.ask.candidates).toEqual(['Real']);
@@ -54,6 +65,19 @@ describe('askChips — the ask owns the chip row', () => {
   it('no ask, or an ask with no candidates, offers nothing — silence is not a default answer', () => {
     expect(askChips(null)).toEqual([]);
     expect(askChips(ask([]))).toEqual([]);
+  });
+});
+
+describe('chipRowFor — an ask takes the row only when it has something to put in it', () => {
+  const normal = [{ key: 'k', label: 'Bold', phrase: 'make it bold', color: '1,2,3' }];
+  it('candidates own the row, replacing the normal chips', () => {
+    expect(chipRowFor(ask(['Q3 Summary']), normal).map(c => c.phrase)).toEqual(['Q3 Summary']);
+  });
+  it('an ask with NO candidates leaves the normal chips alone', () => {
+    // The gate backstop opens exactly this ask — the origin path. Blanking the row there would
+    // cost the user every chip and hand back none, on the one path this whole plan exists for.
+    expect(chipRowFor(ask([]), normal)).toEqual(normal);
+    expect(chipRowFor(null, normal)).toEqual(normal);
   });
 });
 
