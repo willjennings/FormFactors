@@ -115,7 +115,7 @@ import { initialArtifactState, reduce as artifactReduce, MAX_ARTIFACTS } from '.
 import { pinEventFor } from './artifacts/pin';
 import { COMBINE_TOOL, READ_SOURCES_TOOL, validateCombineCall, sourceDetail, validSourceIds } from './artifacts/combineTools';
 import { REFINE_TOOL, validateRefineCall, describePatch } from './artifacts/refineTools';
-import { validateActionCall } from './actions/validate';
+import { validateActionCall, reviseHeldAnswer, type HeldAnswer } from './actions/validate';
 import { shouldDedupeConfirm } from './actions/dedupe';
 import {
   ASK_CONTENT_TOOL, askCallToState, chipRowFor, isAskCandidateChip, answeredFromCandidate,
@@ -578,13 +578,23 @@ export default function App() {
   const askRef = useRef<AskState | null>(null);
   useEffect(() => { askRef.current = ask; }, [ask]);
   // The user's OWN answer to the last ask, exactly as they sent it: typed, spoken, or a candidate
-  // they chose by firing its chip (seeing those exact words and picking them is consent — but a
-  // longer model phrase narrowed to a bare placeholder afterwards is not, which is why the gate
-  // requires equality). Never text the model merely proposed and the user never touched. The gate
-  // reads this as the ONE licence for writing a placeholder-shaped word (userSuppliedLiteral);
-  // nothing else may widen the gate, and it is cleared wherever authority goes stale — a new ask,
-  // a program swap, undo, reset — the same convention pendingAction follows.
-  const lastAnswerRef = useRef<{ field: string; text: string } | null>(null);
+  // they chose by firing its chip. A model CAN put the bare placeholder in front of them as an
+  // ask_content candidate, but only the user's own send records anything here: it can offer the
+  // word, never give it.
+  //
+  // Scope, stated so this is not read as more than it is: the gate guards placeholder SHAPE, not
+  // authorship. Model-authored text that isn't placeholder-shaped ("Heading for the Q3 report")
+  // passes with no answer held at all — because of its shape, not because anyone chose it — and
+  // the model may write its own candidate while the question is still on screen. That is the
+  // gate's deliberate scope: it stops invented FILLER, and proves nothing about provenance.
+  //
+  // Read by the gate as the ONE licence for writing a placeholder-shaped word
+  // (userSuppliedLiteral), and cleared wherever that authority goes stale: a new ask, a later
+  // transcript run (reviseHeldAnswer), a program swap, undo, reset — the same convention
+  // pendingAction follows. NB the HeldAnswer annotation below is documentation, not enforcement:
+  // this repo has no React type definitions installed, so every hook and ref here is `any` to
+  // tsc (verified 2026-07-28 — a plain variable catches the same mismatch, a ref does not).
+  const lastAnswerRef = useRef<HeldAnswer | null>(null);
   /** Close the open ask, if any, and record the one telemetry event for it. Idempotent — every
    *  path that could end an ask calls this, and only the first call in a turn does anything.
    *  `text` is what the user actually sent; it is remembered ONLY on a genuine answer. */
@@ -592,7 +602,7 @@ export default function App() {
     const open = askRef.current;
     if (!open) return;
     askRef.current = null;
-    lastAnswerRef.current = answered && text?.trim() ? { field: open.field, text } : null;
+    lastAnswerRef.current = answered && text?.trim() ? { field: open.field, text, turn: transcriptRunRef.current } : null;
     // Its OWN counter, never the error rate: an ask is correct collaborative behaviour, and the
     // 'rejected' ActionDecision exists for gate ERRORS only (telemetry.ts / validate.ts).
     telemetry.unspecifiedAsk(open.field, answered, viaChip);
@@ -739,6 +749,13 @@ export default function App() {
   const audioQueueRef = useRef<Int16Array[]>([]);
   const transcriptionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastProcessedTranscriptionRef = useRef<string>("");
+  // Which transcript accumulation RUN we are in. A held answer is stamped with this (see
+  // reviseHeldAnswer) so one turn's words can never be appended to another turn's answer.
+  const transcriptRunRef = useRef(0);
+  /** End the current run: clear the accumulator and bump its id, always together. Apart, the
+   *  accumulator restarts with the same identity and a later utterance looks like a continuation
+   *  of the one that answered the question. */
+  const endTranscriptRun = () => { lastProcessedTranscriptionRef.current = ""; transcriptRunRef.current += 1; };
 
   const [sendFrequency, setSendFrequency] = useState(150); // Increased frequency for better AI responsiveness
   // PHASE G: an outward share request — witness recipient + payload before sending.
@@ -2384,7 +2401,7 @@ export default function App() {
     if (transcriptionTimeoutRef.current) clearTimeout(transcriptionTimeoutRef.current);
     transcriptionTimeoutRef.current = setTimeout(() => {
       setLiveTranscription("");
-      lastProcessedTranscriptionRef.current = "";
+      endTranscriptRun();          // 3s idle: whatever is said next is a new utterance
     }, 3000);
 
     const lowerText = currentText.toLowerCase();
@@ -2393,15 +2410,17 @@ export default function App() {
     // Update ref for next turn comparison
     lastProcessedTranscriptionRef.current = currentText;
 
-    // THE ANSWER IS THE WHOLE UTTERANCE, not the fragment that happened to close the ask. Each
-    // further delta of the same spoken turn revises the recorded answer to the sentence
-    // accumulated just above, so a licence survives only if the user's ENTIRE answer was the bare
-    // word. Voice only: a typed submit arrives complete in one call, and `currentText` would
-    // prepend any voice transcript from the last 3s to it. Skipped while a question is open
-    // (that text belongs to the new ask, not the old answer) and once the licence is spent.
-    if (lastAnswerRef.current && !askRef.current && lastInputModalityRef.current === 'voice') {
-      lastAnswerRef.current = { ...lastAnswerRef.current, text: currentText };
-    }
+    // THE ANSWER IS THE WHOLE UTTERANCE, not the fragment that happened to close the ask — and it
+    // belongs to the run it was captured in. reviseHeldAnswer (pure, tested) owns the rule: grow
+    // it across the deltas of its OWN spoken run, drop it once a later run begins, leave typed
+    // answers alone (they arrive complete, and `currentText` would prepend any voice transcript
+    // from the last 3s to them).
+    lastAnswerRef.current = reviseHeldAnswer(lastAnswerRef.current, {
+      turn: transcriptRunRef.current,
+      voice: lastInputModalityRef.current === 'voice',
+      askOpen: !!askRef.current,
+      accumulated: currentText,
+    });
 
     const detectedKeywords: string[] = [];
     let tempText = lowerText;
@@ -2936,7 +2955,7 @@ export default function App() {
             setModelBusy(true);
             setPersistentPaths([]);
             setLiveTranscription("");
-            lastProcessedTranscriptionRef.current = "";
+            endTranscriptRun();    // the model is answering: the user's turn is over
           },
           // Captions: the model's speech as text, always visible post-query (muted speakers
           // must never hide a question, hedge, or error). Non-final chunks append; a final
@@ -2961,7 +2980,7 @@ export default function App() {
             nextStartTimeRef.current = 0;
             lastAudioTimeRef.current = 0;
             setLiveTranscription("");
-            lastProcessedTranscriptionRef.current = "";
+            endTranscriptRun();    // barge-in starts a new utterance
             addLog('event', 'Model interrupted');
             setModelBusy(false);
           },

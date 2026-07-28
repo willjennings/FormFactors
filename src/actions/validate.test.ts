@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { validateActionCall, aggregateMode, INSERT_KINDS } from './validate';
+import { validateActionCall, aggregateMode, reviseHeldAnswer, INSERT_KINDS } from './validate';
 import { totalColumn } from './columnTotal';
 import { seedCorpus } from '../artifacts/seeds';
 import type { MockDoc } from '../scenarios';
@@ -73,6 +73,39 @@ describe('unspecified asks — authorial content only', () => {
     const v = validateActionCall('edit_content', { target: 'heading', detail: '  ' }, word(),
       { field: 'heading', text: 'Heading' }) as any;
     expect(v.needsContent).toBeTruthy();
+  });
+});
+
+describe('reviseHeldAnswer — an answer belongs to the utterance it came from', () => {
+  const held = { field: 'heading', text: 'Q3', turn: 7 };
+  const ev = (o: Partial<{ turn: number; voice: boolean; askOpen: boolean; accumulated: string }> = {}) =>
+    ({ turn: 7, voice: true, askOpen: false, accumulated: 'Q3 Summary', ...o });
+
+  it('grows the answer across the deltas of ITS OWN spoken turn', () => {
+    // The ask closes on the first fragment, so the whole utterance only arrives afterwards.
+    expect(reviseHeldAnswer(held, ev())).toEqual({ field: 'heading', text: 'Q3 Summary', turn: 7 });
+  });
+  it('a LATER turn drops the answer instead of rewriting it — round 3\'s exploit', () => {
+    // Executed chain: answer "Q3 Summary" → the model's retry is refused for some other reason
+    // (that branch returns above the spend), so the licence is still live → >3s later the
+    // accumulator restarts → the user's next turn opens with the bare word ("Heading… can you
+    // make that bigger?") → the old guard rewrote the licence to "Heading" and the literal word
+    // was written, a turn after they said it, about something else.
+    expect(reviseHeldAnswer(held, ev({ turn: 8, accumulated: 'Heading' }))).toBeNull();
+    // …and it is dropped, not merely left alone: a fragment captured from an utterance that has
+    // since ended can never be completed, so keeping it would preserve the same hazard.
+    expect(reviseHeldAnswer({ field: 'heading', text: 'Heading', turn: 7 },
+      ev({ turn: 9, accumulated: 'anything' }))).toBeNull();
+  });
+  it('typed text arrives complete, so it is never revised by later accumulation', () => {
+    expect(reviseHeldAnswer(held, ev({ voice: false, accumulated: 'Q3 something else' }))).toEqual(held);
+  });
+  it('an open question owns what is being said now — the old answer is left alone', () => {
+    expect(reviseHeldAnswer(held, ev({ askOpen: true }))).toEqual(held);
+  });
+  it('nothing held, or nothing to revise with, changes nothing', () => {
+    expect(reviseHeldAnswer(null, ev())).toBeNull();
+    expect(reviseHeldAnswer(held, ev({ accumulated: '   ' }))).toEqual(held);
   });
 });
 

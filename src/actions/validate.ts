@@ -51,9 +51,38 @@ function isPlaceholder(detail: string | undefined, field: string): boolean {
   return PLACEHOLDERS.includes(d) || d === normText(field);
 }
 
-/** What the USER themselves last said in answer to an ask — their words, captured app-side when
- *  the ask closed, never anything the model reported. */
+/** What the USER themselves last said in answer to an ask — captured app-side when the ask closed,
+ *  from what they actually sent. */
 export interface AskAnswer { field: string; text: string }
+
+/** An AskAnswer plus the identity of the transcript run it was captured from. */
+export interface HeldAnswer extends AskAnswer { turn: number }
+
+/** What becomes of a held answer when more transcript arrives.
+ *
+ *  A spoken answer closes the ask on its FIRST fragment, so the rest of the utterance only lands
+ *  afterwards and the recorded answer has to grow to match it. But growth has to be scoped to the
+ *  utterance it started in, and the guard that did this had no turn identity (fix round 3): with a
+ *  licence still live — the model's retry can be refused above the spend, or never come — the
+ *  accumulator restarts after 3s, and the user's NEXT turn simply opening with the bare word
+ *  ("Heading… can you make that bigger?") rewrote the licence to "Heading". That wrote the literal
+ *  word a turn after they said it, about something else entirely.
+ *
+ *  A later run therefore DROPS the answer rather than leaving it: it was captured from a fragment
+ *  of an utterance that has since ended, so it can never be completed, and keeping it would
+ *  preserve exactly the hazard. A prefix test is no substitute — once the accumulator holds an
+ *  earlier utterance, the closing fragment is not a prefix of what accumulates next. */
+export function reviseHeldAnswer(
+  held: HeldAnswer | null,
+  ev: { turn: number; voice: boolean; askOpen: boolean; accumulated: string },
+): HeldAnswer | null {
+  if (!held) return null;
+  if (held.turn !== ev.turn) return null;        // a later utterance: this answer's turn is over
+  if (ev.askOpen) return held;                   // that text belongs to the new question
+  if (!ev.voice) return held;                    // typed and chip answers arrive complete
+  if (!ev.accumulated.trim()) return held;       // nothing to revise with
+  return { ...held, text: ev.accumulated };
+}
 
 /** May a placeholder-SHAPED word be written after all? Only when the user's whole answer WAS that
  *  word. Nothing else — not `confirm` (a model-set argument, which is how the origin bug walked
