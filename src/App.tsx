@@ -1736,15 +1736,17 @@ export default function App() {
       // it above the double-apply guard below is free — the guard no longer depends on its result.
       const gate = validateActionCall(fc.name, args, mockDocRef.current);
 
-      // Double-apply guard (fix round 1, I3; tightened round 2; rebuilt round 3, I3/#1 — see
-      // dedupe.ts for the full history). A confirm:true call matching a confirmed pending action's
-      // verb+target dedupes ONLY when its detail carries nothing new: absent/blank (the button
-      // already supplied the value), or the SAME value as what was actually applied
-      // (pending.detail — round 3's discriminator; it's threaded through unchanged from
-      // describeAction's verbatim pass-through, see dedupe.ts). A genuinely DIFFERENT value is a
-      // new edit, not a replay — it falls through to the gate and the reducer like any other call,
-      // so it can never be silently dropped as a fabricated "already applied" success.
-      if (shouldDedupeConfirm(pendingActionRef.current, fc.name, args.target, args.detail, confirmed)) {
+      // Double-apply guard (fix round 1, I3; tightened round 2; rebuilt round 3; tightened again
+      // round 4 — see dedupe.ts for the full history and the exact comparison). A confirm:true call
+      // matching a confirmed pending action's verb+target dedupes ONLY when its detail carries
+      // nothing new: absent/blank (the button already supplied it), or the trimmed-identical
+      // INSTRUCTION to the one that pending record already applied. That is instruction-to-
+      // instruction, not a comparison against the document's contents — pending.detail is
+      // args.detail passed through verbatim, and several verbs write something else entirely
+      // (see dedupe.ts). Any other detail is a new request and falls through to the gate and the
+      // reducer like any other call, so it can never be dropped as a fabricated "already applied".
+      if (shouldDedupeConfirm(pendingActionRef.current,
+            { verb: fc.name, target: args.target, detail: args.detail, confirmed })) {
         ack({ success: true, deduped: true, note: 'already applied via button confirm' });
         return;
       }
@@ -2028,6 +2030,23 @@ export default function App() {
     const prevDoc = mockDocRef.current;
     const nextDoc = applyAction(prevDoc, verb, args);
     if (nextDoc === prevDoc) return;
+    // A CONFIRMED pending record is a standing claim that a past action landed and still stands;
+    // a hand edit can invalidate it (fix round 4). Without this, a direct edit to what a confirmed
+    // record describes left that record in place, and a later voice replay was acked "already
+    // applied" over state the user had since changed. Cleared on ANY direct commit, not just one
+    // naming the same target: targets here are free text (the model's phrasing vs the surface's)
+    // and would not compare reliably, and the two failure directions are not symmetric — dropping
+    // the claim costs at most one honest re-run through the gate, keeping it risks a false
+    // "already applied". An UNCONFIRMED record is left alone deliberately: it is a witness card
+    // still awaiting this user, and the dedupe guard never looks at it. Every other reader either
+    // tests `!confirmed` or bails on a confirmed record, so null reads the same to them — except
+    // the confirm-button focus ref (`!pendingAction ? confirmBtnRef : undefined`), which a
+    // confirmed card currently blackholes (its own Confirm button renders only while unconfirmed);
+    // clearing hands that ref back to whatever IS awaiting confirmation. The one visible effect is
+    // that the green "Done" card retires when the user edits by hand, which is the honest reading.
+    // The ref is cleared alongside the state (same idiom as `mockDocRef` below) because the dedupe
+    // guard reads the REF, and the effect that mirrors state into it only runs after this render.
+    if (pendingActionRef.current?.confirmed) { pendingActionRef.current = null; setPendingAction(null); }
     mockDocRef.current = nextDoc;
     setMockDoc(nextDoc);
     journalAppend('workspace', { type: 'doc.set', program: activeProgramRef.current ?? activeProgram, doc: nextDoc });
