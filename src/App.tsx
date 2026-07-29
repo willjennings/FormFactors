@@ -12,8 +12,10 @@ import {
   Shield,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { MenuBar } from './shell/MenuBar';
-import { Dock } from './shell/Dock';
+// The Dock is retired: its launcher and reopen roles moved onto the skins' own bars
+// (taskbar / shelf / source rail / column list), which are the surfaces that can also answer
+// "what exists right now" — the thing a four-icon launcher never could.
+import { ShellFrame, surfaceBox, planeBox } from './shell/skins/ShellFrame';
 import { CursorTrail, CursorResources } from './components/CursorEffects';
 import { createGeminiProvider } from './voice/gemini';
 import { createOpenAIRealtimeProvider } from './voice/openai';
@@ -81,8 +83,8 @@ import { clampWindow, type WindowRect } from './shell/windowState';
 // The desk: the window inventory this app now runs on (spec §1). The store owns geometry,
 // z-order and visibility; the selectors hold every decision that would otherwise sit in JSX.
 import { deskReduce, initialDeskState, programWindowId, artifactWindowId } from './shell/desk/deskStore';
-import type { DeskEvent, DeskState } from './shell/desk/types';
-import { reconcileArtifacts, visibleWindows, fitWindows } from './shell/desk/selectors';
+import type { DeskEvent, DeskState, DeskWindow } from './shell/desk/types';
+import { barItems, deskSummary, reconcileArtifacts, visibleWindows, fitWindows } from './shell/desk/selectors';
 import { resolveSkin } from './shell/skins/registry';
 import type { SkinKey } from './shell/skins/types';
 import { docStatusLabel } from './widgets/surfaceModels';
@@ -1142,8 +1144,10 @@ export default function App() {
 
   // Paint order from the desk's z, RANKED rather than raw: `nextZ` grows without bound (every
   // focus raises), so a raw z on the stacking context would eventually climb over the shell
-  // furniture (MenuBar and Dock are z-30). Ranking `visibleWindows` — already sorted ascending
-  // by z — keeps every window in 10…(10+n−1), under the furniture, in the desk's own order.
+  // furniture (every skin's top bar and bottom bar are z-30). Ranking `visibleWindows` — already
+  // sorted ascending by z — keeps every window in 10…(10+n−1), under the furniture, in the desk's
+  // own order. The Conversation skin's dimming veil sits at z-20, i.e. above every window and
+  // below every bar, which only works while this rank stays bounded.
   const windowZ = React.useMemo(() => {
     const m: Record<string, number> = {};
     visibleWindows(desk).forEach((w, i) => { m[w.id] = 10 + i; });
@@ -1157,6 +1161,46 @@ export default function App() {
   // Narrower: which windows are MOUNTED. The observer effect re-attaches on this rather than on
   // the geometry signature, so a drag doesn't tear down and rebuild a ResizeObserver per frame.
   const deskMountSignature = desk.windows.filter((w) => !w.minimized).map((w) => w.id).join('|');
+
+  // ── What the skins' bars are fed (Task 7) ────────────────────────────────────────────────
+  // Titles resolve HERE, never in the store: a window carries refId only, so a retitled artifact
+  // can never leave a stale label in the bar. Deliberately not `getProgram`, whose unknown-id
+  // fallback is Microsoft Word — a bar is an inventory, and an inventory that renames an unknown
+  // thing into a known one is worse than one that shows the raw id.
+  const resolveWindowTitle = (w: DeskWindow): string => (w.kind === 'program'
+    ? PROGRAMS.find((p) => p.id === w.refId)?.label ?? w.refId
+    : artifactState.artifacts.find((a) => a.id === w.refId)?.title ?? w.refId);
+  // `origin` is STRIPPED on the way out, not merely left unread. The desk stamps every artifact
+  // window 'agent' (selectors.ts's reconcileArtifacts) and has no way not to: artifactStore's
+  // `artifact.create` stamps `owner: 'agent'` for a user's pin as well, so the data cannot tell a
+  // pin from a combine. Handing the shell a field it would have to guess about invites exactly the
+  // false claim this project exists to not make; not handing it over makes that structural.
+  // Program windows keep their honest 'you' where it is actually rendered — the provenance
+  // title-bar tag on ProgramWindow, which reads the desk window directly.
+  const shellItems = barItems(desk, resolveWindowTitle)
+    .map(({ id, title, kind, minimized, focused }) => ({ id, title, kind, minimized, focused }));
+  // Launchers are programs with NO window at all — a minimized program window is inventory, not a
+  // launcher, and listing it in both places would make one program two different things.
+  const shellLaunchers = PROGRAMS
+    .filter((p) => !desk.windows.some((w) => w.id === programWindowId(p.id)))
+    .map((p) => ({ id: p.id, label: p.label }));
+  const shellSummary = deskSummary(desk);
+  // A bar click. `window.open` on a known id is focus + restore (spec §1), so one handler serves
+  // "raise it" and "bring it back" alike — the convergence the Dock's reopen used to provide.
+  //
+  // The program branch is not decoration: the desk can hold several program windows (the swap
+  // effect minimizes the outgoing one rather than closing it), but App renders only
+  // `programWindowId(activeProgram)`. Un-minimizing some OTHER program's window in the store would
+  // mark it visible in an app that never mounts it — a bar button that reports success and shows
+  // nothing. Routing through handleProgramChange makes the swap effect do the restore, at that
+  // window's own stored rect.
+  const openFromBar = (id: string) => {
+    const w = deskRef.current.windows.find((x) => x.id === id);
+    if (!w) return;
+    if (w.kind === 'program' && w.refId !== activeProgram) { handleProgramChange(w.refId as ProgramId); return; }
+    deskDispatchJ({ type: 'window.open', id: w.id, kind: w.kind, refId: w.refId,
+      rect: w.rect, origin: w.origin, at: w.openedAt });
+  };
   // ========================== END THE DESK ==========================
   const surfaceRef = useRef<HTMLDivElement>(null);
   const surfaceSnapshotRef = useRef<HTMLCanvasElement | null>(null);
@@ -4462,11 +4506,30 @@ export default function App() {
           className="h-full w-full relative bg-[var(--bg-color)]"
         >
           <div aria-hidden className="absolute inset-0 pointer-events-none opacity-[0.04] bg-[radial-gradient(circle_at_1px_1px,currentColor_1px,transparent_0)] [background-size:24px_24px]" />
-          <MenuBar isLive={isLive} isConnecting={isConnecting} isDarkMode={isDarkMode} traffic={traffic}
-            registerLabel={REGISTERS.find(r => r.key === registerKey)?.label ?? 'Custom'}
-            registerGlyph={REGISTERS.find(r => r.key === registerKey)?.glyph ?? '✎'}
-            onToggleTheme={() => setIsDarkMode(!isDarkMode)} onToggleDrawer={() => setDrawerOpen(o => !o)} onRambleMode={() => { window.location.search = 'ramble=live'; }} onSketchBoard={() => setBoardOpen((o) => !o)} onMissions={() => setMissionOpen((v) => !v)}
-            onRegisterPill={() => setBandOpen(o => !o)} />
+          {/* The furniture (spec §2/§3): background, top bar, bottom bar, side rail, and the
+              restore surface every skin is required to name. It replaces the bare MenuBar+Dock
+              pair — the MenuBar's control cluster is now the invariant half of whichever top bar
+              the skin asks for, and the Dock's launcher/reopen role is the bars' click handler. */}
+          <ShellFrame
+            skin={activeSkin}
+            items={shellItems}
+            launchers={shellLaunchers}
+            summary={shellSummary}
+            activity={activity.entries}
+            onOpen={openFromBar}
+            onLaunch={handleProgramChange}
+            menu={{
+              isLive, isConnecting, isDarkMode, traffic,
+              registerLabel: REGISTERS.find(r => r.key === registerKey)?.label ?? 'Custom',
+              registerGlyph: REGISTERS.find(r => r.key === registerKey)?.glyph ?? '✎',
+              onToggleTheme: () => setIsDarkMode(!isDarkMode),
+              onToggleDrawer: () => setDrawerOpen(o => !o),
+              onRambleMode: () => { window.location.search = 'ramble=live'; },
+              onSketchBoard: () => setBoardOpen((o) => !o),
+              onMissions: () => setMissionOpen((v) => !v),
+              onRegisterPill: () => setBandOpen(o => !o),
+            }}
+          />
           {bandOpen && (
             <RegisterBand
               current={registerKey}
@@ -4476,9 +4539,6 @@ export default function App() {
               onClose={() => setBandOpen(false)}
             />
           )}
-          {/* Dock is retired in Task 7 by the skins' own bars. Until then its reopen path is the
-              same window.open the taskbar will use — focus+restore for a known id. */}
-          <Dock active={activeProgram} onSelect={handleProgramChange} onReopen={() => openProgramWindow(activeProgram)} />
           <CursorResources mode={isPainting ? 'painting' : 'off'} color="#3b82f6" />
           <CursorTrail isActive={isPainting} mousePos={trailMousePos} color="#3b82f6" />
           <PaintLayer paths={persistentPaths} activePath={pointerPath} containerSize={mainSize} />
@@ -4547,8 +4607,8 @@ export default function App() {
               rect={win.rect}
               zIndex={windowZ[win.id] ?? 10}
               chrome={windowChrome}
-              origin={win.origin}
               onFocus={() => focusWindow(win.id)}
+              onMinimize={() => deskDispatchJ({ type: 'window.minimize', id: win.id })}
               onClose={() => artifactDispatchJ({ type: 'artifact.close', id: a.id })}
               onRevert={(toRev) => {
                 const beforeRev = a.rev;
@@ -4605,9 +4665,6 @@ export default function App() {
               <span className="text-[10px] font-mono text-[var(--text-secondary)]">· {goalState.steps.filter((s) => s.done).length}/{goalState.steps.length}</span>
               <button aria-label="Clear goal" className="hit-24 text-[var(--text-secondary)] hover:text-[var(--text-primary)]" onClick={() => (missionRun && missionRun.completedAt === null ? abandonMission() : goalDispatchJ({ type: 'goal.clear' }))}><X size={12} /></button>
             </div>
-          )}
-          {dials.traceView !== 'hidden' && (
-            <ActivityTrace state={activity} variant={dials.traceView} onOpenStream={() => setDrawerOpen(true)} />
           )}
           <MissionPicker missions={MISSIONS} runs={missionRuns} active={missionRun} activeDef={missionDef} open={missionOpen} onStart={startMissionRun} onAbandon={abandonMission} onClose={() => setMissionOpen(false)} />
           {/* Highlight category legend — explains the colour ↔ category mapping while debug markings are on */}
@@ -4676,6 +4733,32 @@ export default function App() {
             </ProgramWindow>
           )}
 
+          {/* THE SURFACES REGION (spec §3, slot `surfaces`). The omnibox, the response rail and
+              the activity ticker are the SAME components in every skin — spec §5 makes the
+              omnibox's behaviour an invariant and only its POSITION a variable — so a skin moves
+              them by giving them a different containing block, not by forking them and not by
+              handing them layout props. Each div below is absolutely positioned, so the children's
+              existing `bottom-3` / `right: 16` offsets resolve against it. `pointer-events-none` on
+              each box with `auto` restored on its children is what keeps the plane underneath
+              pointable — deixis must still work over the whole desk.
+
+              Two boxes, not one. `planeBox` is the whole plane minus the bottom bar and holds the
+              activity ticker; `surfaceBox` is the skin's own region — the same thing in A/B/C, but
+              the centre column in D — and holds the omnibox and the rail. The ticker's corner is
+              `bottom-3 right-3`, which inside a 680px column lands squarely on the omnibox and its
+              candidate chips; the first drive of skin D showed exactly that. */}
+          <div
+            style={planeBox(activeSkin)}
+            className="absolute z-30 pointer-events-none [&>*]:pointer-events-auto"
+          >
+            {dials.traceView !== 'hidden' && (
+              <ActivityTrace state={activity} variant={dials.traceView} onOpenStream={() => setDrawerOpen(true)} />
+            )}
+          </div>
+          <div
+            style={surfaceBox(activeSkin)}
+            className="absolute z-30 pointer-events-none [&>*]:pointer-events-auto"
+          >
           <Omnibox
             above={<>
           {/* Witness cards — stacked ABOVE the caption/chips in one column so they never overlap (human smoke 2026-07-16). */}
@@ -4935,7 +5018,8 @@ export default function App() {
               telemetry.pin(card.t, created.id);
             }}
           />
-
+          </div>
+          {/* END THE SURFACES REGION */}
 
         </main>
 

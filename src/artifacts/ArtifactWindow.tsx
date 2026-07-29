@@ -1,10 +1,9 @@
 import React from 'react';
-import { X } from 'lucide-react';
+import { Minus, X } from 'lucide-react';
 import type { Artifact, ArtifactPatch } from './types';
 import { FEEDS } from './feeds';
 import { artifactParts, splitParagraphs } from './parts';
 import type { WindowRect } from '../shell/windowState';
-import type { WindowOrigin } from '../shell/desk/types';
 import type { ShellSkin } from '../shell/skins/types';
 
 type Chrome = ShellSkin['slots']['windowChrome'];
@@ -29,14 +28,14 @@ function fmtStamp(ts: number): string {
 // itself off its array index, which is why two artifacts could previously sit at the same place
 // after a third was closed. `rect.h` is the window's MAX height: the content is short and
 // self-sizing, and nothing drags or resizes an artifact window in this phase.
-export function ArtifactWindow({ artifact, rect, zIndex, chrome, origin, onFocus, onClose, onRevert, onEditPart }: {
+export function ArtifactWindow({ artifact, rect, zIndex, chrome, onFocus, onClose, onMinimize, onRevert, onEditPart }: {
   artifact: Artifact;
   rect: WindowRect;
   zIndex: number;
   chrome: Chrome;
-  origin: WindowOrigin;
   onFocus: () => void;
   onClose: () => void;
+  onMinimize: () => void;
   onRevert: (toRev: number) => void;
   onEditPart: (patch: ArtifactPatch, baseRev: number) => void;
 }) {
@@ -179,11 +178,19 @@ export function ArtifactWindow({ artifact, rect, zIndex, chrome, origin, onFocus
     >
       <div className={`flex items-center justify-between gap-2 px-3 h-8 ${chrome === 'minimal' ? '' : 'border-b border-[var(--card-border)]'}`}>
         <div className="flex items-center gap-2 min-w-0">
-          {chrome === 'provenance' && (
-            <span className="text-[9px] font-mono uppercase tracking-widest px-1.5 py-0.5 rounded bg-[var(--accent-color)]/15 text-[var(--accent-color)] shrink-0">
-              {origin === 'you' ? 'yours' : 'agent'}
-            </span>
-          )}
+          {/* No yours/agent tag here, in ANY chrome — including the provenance skin, whose whole
+              premise is that tag. The desk stamps every artifact window `origin: 'agent'`
+              (selectors.ts's reconcileArtifacts) because the data underneath cannot say otherwise:
+              artifactStore.ts's `artifact.create` writes `owner: 'agent'` for a user's PIN as well
+              as for a combine, so "agent" on a pinned card would be a false claim about who made
+              it — in the one skin that exists to make authorship legible. Fixing the data model is
+              a separate change; until then the honest move is to tag only what can actually be
+              attributed. The program window still carries its tag (ProgramWindow.tsx), because a
+              program window's `origin: 'you'` is stamped at the moment the user opens it and is
+              true. What this window CAN support is the `from:` line below, which is always visible
+              and names the real sources. The history behind the rev chip is honest from rev 2 on
+              (`artifact.revise`/`revertTo` carry a real `owner`); its rev-1 row inherits the same
+              create-time stamp and so carries the same defect — recorded here, not fixed here. */}
           <span className="text-[9px] font-mono uppercase tracking-widest px-1.5 py-0.5 rounded bg-[var(--accent-color)]/15 text-[var(--accent-color)]">{artifact.kind}</span>
           <span className="text-xs font-semibold text-[var(--text-primary)] truncate">{artifact.title}</span>
         </div>
@@ -196,11 +203,12 @@ export function ArtifactWindow({ artifact, rect, zIndex, chrome, origin, onFocus
             className="hit-24 text-[9px] font-mono px-1.5 py-0.5 rounded bg-[var(--card-border)]/40 text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
             onClick={() => setHistoryOpen((o) => !o)}
           >rev {artifact.rev}</button>
-          {/* There is deliberately NO minimize control here yet. Spec §2: every skin must name a
-              restore surface, and a window that minimizes into nowhere is a trap. The Dock
-              restores the PROGRAM window only, so an artifact minimized today would be journaled
-              away with no route back. The control lands in Task 7, in the same commit as the bar
-              that restores it. */}
+          {/* Minimize lands in the SAME commit as the bar that restores it (spec §2: a skin that
+              can minimize a window into nowhere is a trap, and `restoreVia` is the field that
+              forbids it). Every skin now names a restore surface and renders one — the taskbar in
+              A, the shelf in B, the timeline's own window strip in C, the column list in D — and
+              the registry's invariant test keeps a fifth skin from arriving without one. */}
+          <button aria-label="Put this piece away — it stays on the desk" title="Put it away — it stays in the bar" className="hit-24 text-[var(--text-secondary)] hover:text-[var(--text-primary)]" onClick={onMinimize}><Minus size={13} /></button>
           <button aria-label="Close artifact" className="hit-24 text-[var(--text-secondary)] hover:text-[var(--text-primary)]" onClick={onClose}><X size={13} /></button>
         </div>
       </div>
