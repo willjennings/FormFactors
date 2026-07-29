@@ -12,6 +12,7 @@
 type DistributiveOmit<T, K extends keyof any> = T extends any ? Omit<T, K> : never;
 
 import type { DialValues } from './register/types';
+import type { SkinKey } from './shell/skins/types';
 
 export type FormFactor = 'mobile' | 'tablet' | 'desktop';
 export type InputModality = 'voice' | 'typed' | 'direct';
@@ -33,6 +34,7 @@ export interface Arm {
   register: string;        // named register key, or 'custom'
   base?: string;           // when custom: the named register the twiddle started from
   dials: DialValues;       // fully resolved — the cohort definition
+  shell?: SkinKey;         // the shell skin in effect — a second, independent measured axis
 }
 
 export interface SessionConfig {
@@ -64,6 +66,7 @@ export type TelemetryEvent =
   | { t: number; type: 'mission_complete'; key: string; run: number; durationMs: number; steps: number }
   | { t: number; type: 'mission_abandoned'; key: string; stepIndex: number }
   | { t: number; type: 'register_switch'; from: string; to: string; midSession: boolean }
+  | { t: number; type: 'shell_switch'; from: SkinKey; to: SkinKey; midSession: boolean }
   | { t: number; type: 'unspecified_ask'; field: string; answered: boolean; viaChip: boolean }
   | { t: number; type: 'pin'; cardType: string; artifactId?: string; error?: string }
   | { t: number; type: 'combine_tray'; count: number; kind: string; ok: boolean };
@@ -131,6 +134,7 @@ class Telemetry {
   missionComplete(key: string, run: number, durationMs: number, steps: number) { this.push({ type: 'mission_complete', key, run, durationMs, steps }); }
   missionAbandoned(key: string, stepIndex: number) { this.push({ type: 'mission_abandoned', key, stepIndex }); }
   registerSwitch(from: string, to: string, midSession: boolean) { this.push({ type: 'register_switch', from, to, midSession }); }
+  shellSwitch(from: SkinKey, to: SkinKey, midSession: boolean) { this.push({ type: 'shell_switch', from, to, midSession }); }
   /** An unspecified ask is CORRECT collaborative behaviour, never a failure. Counted separately
    *  so a register arm that asks more does not look like an arm that errors more. Emitted when an
    *  ask CLOSES, which is when `answered` is known — so an ask still open when the session ends
@@ -250,7 +254,8 @@ class Telemetry {
       const a = document.createElement('a');
       const ff = this.config?.device.formFactor ?? 'unknown';
       const arm = this.config?.arm?.register ?? 'unset';
-      const cfg = this.config ? `${arm}-${this.config.backend}-${this.config.autonomy}-${this.config.feedback}` : 'session';
+      const shell = this.config?.arm?.shell ?? 'unset';
+      const cfg = this.config ? `${arm}-${shell}-${this.config.backend}-${this.config.autonomy}-${this.config.feedback}` : 'session';
       a.href = url;
       a.download = `testbed-${ff}-${cfg}-${this.startedAt}.json`;
       a.click();

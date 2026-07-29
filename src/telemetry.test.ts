@@ -128,3 +128,45 @@ describe('arm in telemetry', () => {
       .toMatchObject({ from: 'guided', to: 'terminal', midSession: true });
   });
 });
+
+describe('shell in telemetry (shell skin is a second, independent measured axis)', () => {
+  beforeEach(() => telemetry.start(cfg));
+
+  it('shellSwitch pushes a shell_switch event with the right shape and a timestamp', () => {
+    telemetry.shellSwitch('familiar', 'material', true);
+    const events = JSON.parse(telemetry.exportJSON()).events as any[];
+    const ev = events.find(e => e.type === 'shell_switch');
+    expect(ev).toMatchObject({ from: 'familiar', to: 'material', midSession: true });
+    expect(typeof ev.t).toBe('number');
+  });
+
+  it('snapshot() carries shell_switch events through', () => {
+    telemetry.shellSwitch('conversation', 'provenance', false);
+    const snap = telemetry.snapshot();
+    expect(snap.events.find((e: any) => e.type === 'shell_switch'))
+      .toMatchObject({ from: 'conversation', to: 'provenance', midSession: false });
+  });
+
+  it('the Arm round-trips shell: set a config with a shell, read it back out of the export', () => {
+    const DEFAULT_DIALS = { honest: false, autonomy: 'confirm' as const, feedback: 'earcon' as const, confirmGoals: false, markings: false, chipDensity: 'full' as const, traceView: 'hidden' as const, teaching: 'off' as const, proactivity: 'never' as const };
+    telemetry.start({ backend: 'gemini', autonomy: 'auto-safe', feedback: 'earcon', program: 'word',
+      honest: false, device: { width: 1280, height: 800, touch: false, pointer: 'fine', formFactor: 'desktop' as const, ua: 'test' },
+      arm: { register: 'guided', dials: DEFAULT_DIALS, shell: 'material' } });
+    const json = JSON.parse(telemetry.exportJSON());
+    expect(json.config.arm.shell).toBe('material');
+  });
+
+  it('a shell switch never moves any number in metrics() — deep-equal before/after (the register-arm error-rate doctrine applied to the new axis)', () => {
+    telemetry.action('edit_content', 'mutate', 'commit');
+    telemetry.action('edit_content', 'mutate', 'rejected');
+    telemetry.correction();
+    telemetry.error('boom');
+    telemetry.unspecifiedAsk('heading', true, true);
+    const before = telemetry.metrics();
+    telemetry.shellSwitch('familiar', 'material', true);
+    telemetry.shellSwitch('material', 'conversation', false);
+    telemetry.shellSwitch('conversation', 'provenance', true);
+    const after = telemetry.metrics();
+    expect(after).toEqual(before);
+  });
+});
