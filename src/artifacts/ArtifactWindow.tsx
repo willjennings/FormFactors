@@ -1,8 +1,13 @@
 import React from 'react';
-import { X } from 'lucide-react';
+import { Minus, X } from 'lucide-react';
 import type { Artifact, ArtifactPatch } from './types';
 import { FEEDS } from './feeds';
 import { artifactParts, splitParagraphs } from './parts';
+import type { WindowRect } from '../shell/windowState';
+import type { WindowOrigin } from '../shell/desk/types';
+import type { ShellSkin } from '../shell/skins/types';
+
+type Chrome = ShellSkin['slots']['windowChrome'];
 
 // Status of one widget field bound to a feed: `failed` never clears a previously-fetched
 // value/stamp — the renderer shows "feed unavailable" plus the stale value labeled as stale
@@ -18,10 +23,21 @@ function fmtStamp(ts: number): string {
 // A synthesized artifact rendered as a floating window (whiteboard-panel styling family).
 // Revisable in place by both the agent (refine_artifact) and the user (double-click to edit),
 // with a revert-capable history — but closing stays USER-ONLY: the agent has no tool that maps
-// to closing one, the × below is the ONLY close path (spec §7). Cascades by index so several
-// artifacts don't stack exactly on top of each other or cover the program window.
-export function ArtifactWindow({ artifact, index, onClose, onRevert, onEditPart }: {
-  artifact: Artifact; index: number; onClose: () => void;
+// to closing one, the × below is the ONLY close path (spec §7).
+//
+// Geometry, stacking and visibility come from the desk (spec §1) — the window no longer cascades
+// itself off its array index, which is why two artifacts could previously sit at the same place
+// after a third was closed. `rect.h` is the window's MAX height: the content is short and
+// self-sizing, and nothing drags or resizes an artifact window in this phase.
+export function ArtifactWindow({ artifact, rect, zIndex, chrome, origin, onFocus, onMinimize, onClose, onRevert, onEditPart }: {
+  artifact: Artifact;
+  rect: WindowRect;
+  zIndex: number;
+  chrome: Chrome;
+  origin: WindowOrigin;
+  onFocus: () => void;
+  onMinimize: () => void;
+  onClose: () => void;
   onRevert: (toRev: number) => void;
   onEditPart: (patch: ArtifactPatch, baseRev: number) => void;
 }) {
@@ -144,14 +160,31 @@ export function ArtifactWindow({ artifact, index, onClose, onRevert, onEditPart 
   // No root stopPropagation (unlike WhiteboardPanel): pointer events must reach <main> so the
   // plane's data-entity-id carve-out can make the CONTENT region pointable. data-shell still
   // marks the chrome (title bar, provenance line, ×) as not-the-plane via that same carve-out.
+  // Chrome variants are furniture only. The honesty floor renders in EVERY variant: the "from:"
+  // provenance line, the rev chip, and the × (the sole close path) are outside this switch.
+  const frameClass = chrome === 'minimal'
+    ? 'rounded-lg border border-[var(--card-border)]/50 bg-[var(--card-bg)]/95 shadow-md'
+    : chrome === 'provenance'
+      ? 'rounded-lg border border-[var(--accent-color)]/40 bg-[var(--card-bg)]/95 shadow-lg'
+      : 'rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)]/95 shadow-lg';
+
   return (
     <div
-      className="artifact-window absolute z-30 flex flex-col w-[min(360px,42vw)] max-h-[min(420px,60vh)] rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)]/95 backdrop-blur shadow-lg overflow-hidden"
-      style={{ top: `calc(5rem + ${index * 24}px)`, left: `calc(55% + ${index * 16}px)` }}
+      className={`artifact-window absolute flex flex-col backdrop-blur overflow-hidden ${frameClass}`}
+      style={{ left: rect.x, top: rect.y, width: rect.w, maxHeight: rect.h, zIndex }}
+      // Capture phase so a click anywhere in the window raises it even where a child stops
+      // propagation. It does NOT stop propagation itself — the root deliberately lets pointer
+      // events reach <main> (see the note above) so the content region stays pointable.
+      onPointerDownCapture={onFocus}
       data-shell
     >
-      <div className="flex items-center justify-between gap-2 px-3 h-8 border-b border-[var(--card-border)]">
+      <div className={`flex items-center justify-between gap-2 px-3 h-8 ${chrome === 'minimal' ? '' : 'border-b border-[var(--card-border)]'}`}>
         <div className="flex items-center gap-2 min-w-0">
+          {chrome === 'provenance' && (
+            <span className="text-[9px] font-mono uppercase tracking-widest px-1.5 py-0.5 rounded bg-[var(--accent-color)]/15 text-[var(--accent-color)] shrink-0">
+              {origin === 'you' ? 'yours' : 'agent'}
+            </span>
+          )}
           <span className="text-[9px] font-mono uppercase tracking-widest px-1.5 py-0.5 rounded bg-[var(--accent-color)]/15 text-[var(--accent-color)]">{artifact.kind}</span>
           <span className="text-xs font-semibold text-[var(--text-primary)] truncate">{artifact.title}</span>
         </div>
@@ -164,6 +197,9 @@ export function ArtifactWindow({ artifact, index, onClose, onRevert, onEditPart 
             className="hit-24 text-[9px] font-mono px-1.5 py-0.5 rounded bg-[var(--card-border)]/40 text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
             onClick={() => setHistoryOpen((o) => !o)}
           >rev {artifact.rev}</button>
+          {/* Minimize is NOT close: the artifact keeps existing, its window goes to the restore
+              surface. Without it `minimized` would be unreachable for artifact windows. */}
+          <button aria-label="Minimize artifact window" className="hit-24 text-[var(--text-secondary)] hover:text-[var(--text-primary)]" onClick={onMinimize}><Minus size={13} /></button>
           <button aria-label="Close artifact" className="hit-24 text-[var(--text-secondary)] hover:text-[var(--text-primary)]" onClick={onClose}><X size={13} /></button>
         </div>
       </div>

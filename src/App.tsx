@@ -77,7 +77,14 @@ import { ActivityTrace } from './shell/ActivityTrace';
 import { DebugDrawer } from './shell/DebugDrawer';
 import { Sheet } from './ui/Sheet';
 import { Button } from './ui/Button';
-import { clampWindow, loadWindowRect, saveWindowRect, type WindowRect } from './shell/windowState';
+import { clampWindow, loadWindowRect, type WindowRect } from './shell/windowState';
+// The desk: the window inventory this app now runs on (spec §1). The store owns geometry,
+// z-order and visibility; the selectors hold every decision that would otherwise sit in JSX.
+import { deskReduce, initialDeskState, programWindowId, artifactWindowId } from './shell/desk/deskStore';
+import type { DeskEvent, DeskState } from './shell/desk/types';
+import { reconcileArtifacts, visibleWindows } from './shell/desk/selectors';
+import { resolveSkin } from './shell/skins/registry';
+import type { SkinKey } from './shell/skins/types';
 import { docStatusLabel } from './widgets/surfaceModels';
 import type { TeachingEvent, TeachingState } from './teaching/types';
 import { serializeTeachingState, makeChangeGate } from './teaching/teachingState';
@@ -136,7 +143,7 @@ import { loadRuns, saveRuns } from './missions/persistence';
 import type { MissionRun, MissionObservables } from './missions/types';
 import { bootJournal, resetBootMemo } from './journal/boot';
 import { appendEntry, compact, type JournalEntry } from './journal/journal';
-import { JOURNAL_REGISTRY, type WorkspaceState, type DialsState } from './journal/registry';
+import { JOURNAL_REGISTRY, DEFAULT_DESK_RECT, type WorkspaceState, type DialsState } from './journal/registry';
 import { saveJournal, clearJournal, JOURNAL_CAP } from './journal/persistence';
 
 // --- Types ---
@@ -358,6 +365,7 @@ const bootStates = journalBoot.states as {
   workspace?: WorkspaceState;
   goal?: GoalState;
   dials?: DialsState;
+  desk?: DeskState;
 } | null;
 // Fix round 1 (I1): StrictMode double-invokes every mount-time effect in dev (mount → cleanup →
 // mount) — TWO calls with byte-identical props/state, not one. A "skip exactly the first call"
@@ -943,16 +951,157 @@ export default function App() {
     photoItems: { id: string; bbox: BBox }[];
     surface?: BBox;
   } | null>(null);
-  const defaultWindowRect = (): WindowRect => clampWindow({ x: 48, y: 48, w: 680, h: 620 },
-    { width: mainContainerRef.current?.clientWidth ?? 1200, height: mainContainerRef.current?.clientHeight ?? 800 });
-  const [windowRect, setWindowRect] = useState<WindowRect>(() => clampWindow(loadWindowRect(bootStates?.workspace?.activeProgram ?? DEFAULT_PROGRAM) ?? { x: 48, y: 48, w: 680, h: 620 }, { width: window.innerWidth, height: window.innerHeight }));
-  const [windowOpen, setWindowOpen] = useState(true);
+
+  // ============================ THE DESK (spec §1) ============================
+  // The window inventory replaces the old `windowRect`/`windowOpen` pair: what exists, where it
+  // sits, what is on top and what is put away are ALL in one journaled store, so the screen can
+  // answer "what exists right now" and a reload can restore it.
+  const bootProgram: ProgramId = bootStates?.workspace?.activeProgram ?? DEFAULT_PROGRAM;
+  const [desk, deskDispatch] = useReducer(deskReduce, undefined, () => bootStates?.desk
+    // Sparse start: ONE window, the active program. DEFAULT_DESK_RECT is the PRE-clamp literal
+    // (the journal's own initial() uses it raw), so it is clamped HERE, at consumption — on a
+    // 900×600 viewport the window is 600 tall whatever the constant says. clampWindow always
+    // returns a FRESH object, so no window ever holds that exported constant by reference.
+    ?? initialDeskState(bootProgram, clampWindow(loadWindowRect(bootProgram) ?? DEFAULT_DESK_RECT,
+      { width: window.innerWidth, height: window.innerHeight })));
+  // The desk mirrored into a ref, written SYNCHRONOUSLY by every dispatch below. This file's
+  // signature failure is clearing state and forgetting the ref (the pendingAction round), so the
+  // rule here is absolute: every desk read from a stale-closure context — the reconcile effect,
+  // the program-swap effect, the focus guard, the skin handler — reads `deskRef.current`, and
+  // every write goes through one of the two wrappers below, never through `deskDispatch`.
+  const deskRef = useRef<DeskState>(desk);
+  // No journal entry: the intermediate frames of a drag. One drag emits hundreds of moves and
+  // JOURNAL_CAP is 500 — only the SETTLED rect is worth recording, and it is the same rect.
+  const deskDispatchLive = (event: DeskEvent) => {
+    deskRef.current = deskReduce(deskRef.current, event);
+    deskDispatch(event);
+  };
+  // Journaled dispatch — the same wrapper pattern as artifactDispatchJ/goalDispatchJ. Every
+  // settled desk change goes through here, which is what makes replay reproduce the live desk.
+  const deskDispatchJ = (event: DeskEvent, label?: string) => {
+    journalAppend('desk', event, label);
+    deskDispatchLive(event);
+  };
+  // There is DELIBERATELY no `useEffect(() => { deskRef.current = desk })` mirror here, unlike
+  // every other ref on this page. Written and then removed after the browser drive caught it:
+  // a mirror effect re-runs on StrictMode's SECOND mount pass with the same (pre-dispatch)
+  // `desk` from that commit, which ROLLS THE REF BACK OVER a synchronous write made during the
+  // first pass — every mount-time guard that reads the ref then fires twice, and the drive
+  // showed exactly that (two `desk.skin` entries journaled for one `?shell=` boot). The two
+  // wrappers above are the whole contract: `desk` and `deskRef.current` are the same pure
+  // reducer folded over the same event sequence from the same initial value, so they cannot
+  // disagree, and the ref is never one render behind.
+
+  // ?shell= boot param (spec §4). resolveSkin returns null for an unknown key BY DESIGN and null
+  // is IGNORED — a typo must never silently redecorate the desk (the getProgram anti-pattern in
+  // scenarios.ts, where an unknown program id becomes Microsoft Word).
+  const bootSkin = typeof window !== 'undefined'
+    ? resolveSkin(new URLSearchParams(window.location.search).get('shell') ?? '')
+    : null;
   useEffect(() => {
-    const plane = { width: mainContainerRef.current?.clientWidth ?? 1200, height: mainContainerRef.current?.clientHeight ?? 800 };
-    setWindowRect(clampWindow(loadWindowRect(activeProgram) ?? defaultWindowRect(), plane));
-    setWindowOpen(true);
+    // Guarded by VALUE, not by a call count: StrictMode's second mount pass sees the skin already
+    // applied (deskRef was written synchronously) and journals nothing — same discipline as the
+    // dials effect's boot-baseline comparison.
+    if (!bootSkin || deskRef.current.skin === bootSkin.key) return;
+    deskDispatchJ({ type: 'desk.skin', skin: bootSkin.key });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // The live skin. A null here is NOT the boot-param case: it can only mean a journal from a
+  // newer build named a skin this one lacks, and the windows still have to render — so chrome
+  // falls back to 'full' at render time while the stored key is left untouched.
+  const activeSkin = resolveSkin(desk.skin);
+  const windowChrome = activeSkin?.slots.windowChrome ?? 'full';
+  // The skin switch handler (spec §4). Mounted by Task 7's ShellFrame / Task 8's band; defined
+  // here because the desk and the telemetry arm both live in this scope.
+  const handleSkinSelect = (next: SkinKey) => {
+    const prev = deskRef.current.skin;
+    if (prev === next) return;
+    deskDispatchJ({ type: 'desk.skin', skin: next });
+    telemetry.shellSwitch(prev, next, isLiveRef.current);
+  };
+
+  // Raise a window. Guarded on the ref's focusedId, not on a prop: without it every pointerdown
+  // inside the focused window would dispatch (and journal) a redundant focus event.
+  const focusWindow = (id: string) => {
+    if (deskRef.current.focusedId === id) return;
+    deskDispatchJ({ type: 'window.focus', id });
+  };
+  const programRect = (id: ProgramId): WindowRect => clampWindow(
+    loadWindowRect(id) ?? DEFAULT_DESK_RECT,
+    { width: mainContainerRef.current?.clientWidth ?? window.innerWidth,
+      height: mainContainerRef.current?.clientHeight ?? window.innerHeight });
+  // One path for "show me this program": window.open on a KNOWN id is focus+restore (the reducer
+  // ignores the rect then, so the window keeps exactly where the user put it), and a fresh open
+  // otherwise. The Dock's reopen and the program-swap effect both go through here, so the two
+  // cannot diverge — the convergence spec §1 asks for.
+  const openProgramWindow = (id: ProgramId) => {
+    deskDispatchJ({ type: 'window.open', id: programWindowId(id), kind: 'program', refId: id,
+      rect: programRect(id), origin: 'you', at: Date.now() });
+  };
+  // Program swap: the desk holds one program window at a time (spec §10 exclusion) — the
+  // outgoing one MINIMIZES, keeping its rect and its place in the inventory, and the incoming
+  // one opens or restores. Keyed off a ref holding the last program window id rather than off
+  // `activeProgram` itself, so StrictMode's double mount is a no-op (the id has not changed).
+  const lastProgramWindowRef = useRef(programWindowId(bootProgram));
+  useEffect(() => {
+    const id = programWindowId(activeProgram);
+    const prev = lastProgramWindowRef.current;
+    if (prev === id) return;
+    lastProgramWindowRef.current = id;
+    if (deskRef.current.windows.some((w) => w.id === prev)) deskDispatchJ({ type: 'window.minimize', id: prev });
+    openProgramWindow(activeProgram);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeProgram]);
-  useEffect(() => { saveWindowRect(activeProgram, windowRect); }, [activeProgram, windowRect]);
+
+  // Artifact windows reconcile against the LIVE artifact list: every artifact has a window, a
+  // closed artifact's window goes away. `reconcileArtifacts` is pure and tested, and returns the
+  // desk BY IDENTITY when nothing needs to change — that identity is exactly what stops this
+  // effect looping (identity ⇒ no dispatch ⇒ no re-render ⇒ no re-run).
+  //
+  // The events are DERIVED from its result rather than re-deriving cascade rects here: closes
+  // first, then opens in `next.windows` order, which is the order reconcileArtifacts composes
+  // them in — so folding them back through deskReduce reproduces `next` exactly (z, nextZ and
+  // focusedId included), while the journal keeps real window events. desk.restore stays
+  // journal-only, for compaction, as the spec says.
+  //
+  // It also makes StrictMode's double mount safe: pass 1 dispatches and writes deskRef
+  // synchronously, so pass 2 reconciles against a desk that is already in sync and returns
+  // identity.
+  useEffect(() => {
+    const before = deskRef.current;
+    const next = reconcileArtifacts(before, artifactState.artifacts.map((a) => a.id), Date.now());
+    if (next === before) return;
+    const beforeIds = new Set(before.windows.map((w) => w.id));
+    const nextIds = new Set(next.windows.map((w) => w.id));
+    for (const w of before.windows) {
+      if (!nextIds.has(w.id)) deskDispatchJ({ type: 'window.close', id: w.id });
+    }
+    for (const w of next.windows) {
+      if (!beforeIds.has(w.id)) {
+        deskDispatchJ({ type: 'window.open', id: w.id, kind: w.kind, refId: w.refId, rect: w.rect, origin: w.origin, at: w.openedAt });
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [artifactState.artifacts]);
+
+  // Paint order from the desk's z, RANKED rather than raw: `nextZ` grows without bound (every
+  // focus raises), so a raw z on the stacking context would eventually climb over the shell
+  // furniture (MenuBar and Dock are z-30). Ranking `visibleWindows` — already sorted ascending
+  // by z — keeps every window in 10…(10+n−1), under the furniture, in the desk's own order.
+  const windowZ = React.useMemo(() => {
+    const m: Record<string, number> = {};
+    visibleWindows(desk).forEach((w, i) => { m[w.id] = 10 + i; });
+    return m;
+  }, [desk]);
+  const programWin = desk.windows.find((w) => w.id === programWindowId(activeProgram)) ?? null;
+  // Re-measurement keys (spec §7): a drag, a resize, a minimize, a restore and a skin change all
+  // move bounding boxes on the plane, and the layout scan below must re-run for every one.
+  const deskGeometrySignature = desk.windows
+    .map((w) => `${w.id}:${w.rect.x},${w.rect.y},${w.rect.w},${w.rect.h},${w.minimized}`).join('|');
+  // Narrower: which windows are MOUNTED. The observer effect re-attaches on this rather than on
+  // the geometry signature, so a drag doesn't tear down and rebuild a ResizeObserver per frame.
+  const deskMountSignature = desk.windows.filter((w) => !w.minimized).map((w) => w.id).join('|');
+  // ========================== END THE DESK ==========================
   const surfaceRef = useRef<HTMLDivElement>(null);
   const surfaceSnapshotRef = useRef<HTMLCanvasElement | null>(null);
   // C2a: the instructional-overlay layer (teaching marks today, annotations later) + its
@@ -1253,11 +1402,17 @@ export default function App() {
     }
   }, [program, isLive]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Re-measure on window move/resize/open/close — ResizeObserver only fires on size changes,
-  // so drags and reopen would otherwise leave stale bboxes (a false screen for the AI).
-  // Also re-measure on doc change so dynamically-added sub-entities (e.g. new slides) get
+  // Re-measure on window move/resize/minimize/restore — ResizeObserver only fires on size
+  // changes, so drags and restores would otherwise leave stale bboxes (a false screen for the
+  // AI). Also re-measure on doc change so dynamically-added sub-entities (e.g. new slides) get
   // their DOM bboxes picked up immediately without requiring a window resize.
-  useEffect(() => { updateLayout(); }, [updateLayout, windowRect, windowOpen, mockDoc]);
+  //
+  // `desk.skin` is a dependency because CHANGING THE SKIN CHANGES EVERY BOUNDING BOX ON THE
+  // PLANE: window chrome, bars and rails are all different furniture, so a revision that
+  // re-skins without re-measuring leaves the model pointing at where things used to be. The
+  // desk's geometry signature replaces the old `windowRect, windowOpen` pair one-for-one and
+  // covers strictly more (every window, not just the program one).
+  useEffect(() => { updateLayout(); }, [updateLayout, deskGeometrySignature, desk.skin, mockDoc]);
 
   // Re-measure when an artifact window mounts/unmounts OR any artifact's content changes —
   // effects run post-commit, so the new/revised DOM is already painted and measurable. Keying
@@ -1310,8 +1465,10 @@ export default function App() {
     : '';
   useEffect(() => { updateLayout(); }, [artifactRevSignature, railSignature, updateLayout]);
 
-  // Mount/reattach observers — re-runs when windowOpen flips so the new .program-window
-  // element (which the old observer never saw) gets observed immediately on reopen.
+  // Mount/reattach observers — re-runs when the SET of mounted windows changes (a restore, a
+  // minimize, an artifact window arriving or leaving) so the new .program-window element, which
+  // the old observer never saw, gets observed immediately. Keyed on the mount signature and not
+  // the geometry one deliberately: a drag must not rebuild the observer every frame.
   useEffect(() => {
     const observer = new ResizeObserver(updateLayout);
     if (mainContainerRef.current) observer.observe(mainContainerRef.current);
@@ -1329,7 +1486,7 @@ export default function App() {
       window.removeEventListener('resize', updateLayout);
       window.removeEventListener('scroll', updateLayout, true);
     };
-  }, [updateLayout, windowOpen]); // re-attach when window open/close so new DOM element is observed
+  }, [updateLayout, deskMountSignature]); // re-attach when the mounted window set changes
 
   useEffect(() => {
     const checkDevice = () => {
@@ -4031,7 +4188,10 @@ export default function App() {
       ta?.removeEventListener('input', measure);
       ta?.removeEventListener('scroll', measure);
     };
-  }, [activeProgram, mockDoc, windowRect, windowOpen]);
+    // The desk geometry signature replaces the old windowRect/windowOpen pair: the word boxes are
+    // measured against the textarea's live position, so any move, resize, minimize or restore of
+    // the program window invalidates them.
+  }, [activeProgram, mockDoc, deskGeometrySignature]);
 
   // Cleanup timeouts on unmount
   useEffect(() => {
@@ -4256,7 +4416,9 @@ export default function App() {
               onClose={() => setBandOpen(false)}
             />
           )}
-          <Dock active={activeProgram} onSelect={handleProgramChange} onReopen={() => setWindowOpen(true)} />
+          {/* Dock is retired in Task 7 by the skins' own bars. Until then its reopen path is the
+              same window.open the taskbar will use — focus+restore for a known id. */}
+          <Dock active={activeProgram} onSelect={handleProgramChange} onReopen={() => openProgramWindow(activeProgram)} />
           <CursorResources mode={isPainting ? 'painting' : 'off'} color="#3b82f6" />
           <CursorTrail isActive={isPainting} mousePos={trailMousePos} color="#3b82f6" />
           <PaintLayer paths={persistentPaths} activePath={pointerPath} containerSize={mainSize} />
@@ -4312,9 +4474,22 @@ export default function App() {
           {/* Combinatory artifacts (spec §3/§7/§9): synthesized windows on the desktop plane, one
               per artifact — creatable by the agent (combine), revisable by both the agent
               (refine_artifact) and the user (double-click to edit), revertible via the history
-              list, and closable only by the × below (no tool maps to close). */}
-          {artifactState.artifacts.map((a, i) => (
-            <ArtifactWindow key={a.id} artifact={a} index={i}
+              list, and closable only by the × below (no tool maps to close).
+              Geometry now comes from the desk: the artifact list is still the source of truth for
+              WHAT exists, the desk for WHERE it is and whether it is put away. A brand-new
+              artifact has no window for one frame (the reconcile effect runs post-commit) — it
+              renders nothing rather than guessing a rect. */}
+          {artifactState.artifacts.map((a) => {
+            const win = desk.windows.find((w) => w.id === artifactWindowId(a.id));
+            if (!win || win.minimized) return null;
+            return (
+            <ArtifactWindow key={a.id} artifact={a}
+              rect={win.rect}
+              zIndex={windowZ[win.id] ?? 10}
+              chrome={windowChrome}
+              origin={win.origin}
+              onFocus={() => focusWindow(win.id)}
+              onMinimize={() => deskDispatchJ({ type: 'window.minimize', id: win.id })}
               onClose={() => artifactDispatchJ({ type: 'artifact.close', id: a.id })}
               onRevert={(toRev) => {
                 const beforeRev = a.rev;
@@ -4344,7 +4519,8 @@ export default function App() {
                 // identical string, and its change-gate has no way to know THIS send happened, so
                 // it fires again with the same content the model already received.
               }} />
-          ))}
+            );
+          })}
           {whiteboardMode === 'board' && pendingBeautify && (
             <BeautifyCard
               summary={pendingBeautify.summary}
@@ -4415,13 +4591,24 @@ export default function App() {
             </div>
           )}
 
-          {windowOpen && (
+          {/* The program window renders from the desk: present in the inventory and not put away.
+              Both of its title-bar controls minimize — a program window is never destroyed, so it
+              always keeps its rect and its place in the bar. */}
+          {programWin && !programWin.minimized && (
             <ProgramWindow
               title={program.label}
               statusLabel={docStatusLabel(mockDoc)}
-              rect={windowRect}
-              onRectChange={setWindowRect}
-              onClose={() => setWindowOpen(false)}
+              rect={programWin.rect}
+              zIndex={windowZ[programWin.id] ?? 10}
+              chrome={windowChrome}
+              origin={programWin.origin}
+              onRectChange={(r, settled) => {
+                const ev: DeskEvent = { type: 'window.move', id: programWin.id, rect: r };
+                // Only the settled rect is journaled; the frames in between are state-only.
+                if (settled) deskDispatchJ(ev); else deskDispatchLive(ev);
+              }}
+              onMinimize={() => deskDispatchJ({ type: 'window.minimize', id: programWin.id })}
+              onFocus={() => focusWindow(programWin.id)}
               planeRef={mainContainerRef}
             >
               <ProgramSurface ref={surfaceRef} program={program} doc={mockDoc} live={isLive} focusTitle={focusTitle}

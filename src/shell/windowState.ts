@@ -1,4 +1,13 @@
 // Pure window geometry + fail-soft persistence for the single program window.
+//
+// Since the desk landed (spec §1) the JOURNAL owns window geometry: every settled move is a
+// journaled `window.move`, and a minimized window keeps its rect in the inventory, so there is
+// nothing left for a second store to remember. App still calls `clampWindow` (drag, boot, and
+// every rect it hands the desk) and still calls `loadWindowRect` as the boot fallback for a
+// program window with no journal entry — but NOTHING WRITES THE KEY ANY MORE: `saveWindowRect`
+// has no caller in src/ (its effect was deleted with `windowRect`), so that fallback can only
+// see a value left by a pre-desk build in the same tab. Retiring both storage halves, and the
+// test that covers them, is a deliberate follow-up rather than part of the wiring task.
 export type WindowRect = { x: number; y: number; w: number; h: number };
 
 export const MIN_W = 320;
