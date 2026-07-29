@@ -230,7 +230,11 @@ conversation reduce pointing?* Its window list lives at the top of the column (`
 ## §4 The switch
 
 - **Register band gains a second row.** The backtick chord, band and digit-swallowing already
-  exist (R1); the shell row reuses them. Digits select a shell while the band is open.
+  exist (R1); the shell row reuses the band and the chord. **Digits stay register-only** — skins are
+  selected by click or keyboard focus. (Amended 2026-07-29, user ruling, after the implementation
+  raised the contradiction: this section originally said digits select a shell, which would have put
+  ten targets on a band whose digit contract already binds 1–5 to registers. Register-only is now a
+  durable contract, pinned by a test in `bandKeys.test.ts`, not a deferral.)
 - **`?shell=<key>` URL param** for demos and the keyless drive, matching `?artifacts=1` and friends.
 - **Telemetry:** a `shell_switch` event mirroring `register_switch`, and `shell` added to the
   session `Arm` so every exported session says which desk it ran on.
