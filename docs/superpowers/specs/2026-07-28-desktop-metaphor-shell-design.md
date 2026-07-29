@@ -214,7 +214,15 @@ narrow **source rail** you draw from. The only skin where the agent's output out
 *Probe: does foregrounding made material change what people make?* Known risk, accepted: "where did
 my spreadsheet go?" is a real first reaction.
 
-**C · Provenance.** Dark, session-oriented. Every window title bar carries a `yours` / `agent` tag;
+**C · Provenance.** Dark, session-oriented. A window title bar carries a `yours` / `agent` tag **only
+where authorship is actually known** — in this build that means the program window (`yours`, stamped
+at open) and not artifact windows. (Amended 2026-07-29 after the browser drive: the desk stamps every
+artifact `agent`, including one the *user* pinned, so tagging artifacts would print a false authorship
+claim. The implementation removed `origin` from the artifact window's props and App strips it before
+it reaches the shell layer, so the skin structurally cannot make a claim it can't support. The code is
+the more honest side; this section originally required the tag unconditionally. Restoring it needs a
+provenance-data fix upstream in `artifactStore`, not a change here — the artifact history's rev-1 row
+inherits the same defect and is honest only from rev 2 on.)
 an agent-written cell shows who wrote it and offers undo; the bottom is a four-lane timeline whose
 final lane is the honest present tense — *"waiting — nothing written until you answer."* Moves the
 honesty work out of the debug drawer and into the furniture. *Probe: does visible provenance change
