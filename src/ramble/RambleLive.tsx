@@ -154,8 +154,9 @@ export function RambleLive() {
           vad: { silenceDurationMs: RAMBLE_SILENCE_MS },
         },
         {
-          // Stale-callback guards: gemini's WS fires onclose unconditionally, so a delayed
-          // event from a REPLACED session must not touch the current one's state.
+          // Stale-callback guards: gemini's and azure's sockets both fire onclose
+          // unconditionally (gemini.ts:137, azure.ts's ws.onclose), so a delayed event from a
+          // REPLACED session must not touch the current one's state.
           onOpen: () => {
             if (providerRef.current !== provider) { try { provider.close(); } catch {} return; }
             setIsLive(true); setIsConnecting(false);
@@ -188,8 +189,14 @@ export function RambleLive() {
     }
   };
 
-  // Explicit teardown: azure/openai suppress cb.onClose on app-initiated close (their
-  // `closed` flag), so stop() cannot rely on onClose firing. Idempotent with gemini's onClose.
+  // Explicit teardown: stop() sets its own state rather than waiting for onClose. It cannot rely
+  // on that callback, and for two different reasons now. openai.ts still suppresses cb.onClose on
+  // an app-initiated close (its `closed` flag, at openai.ts:111 and :121). azure.ts no longer does
+  // — as of 2026-07-29 its ws.onclose reports EVERY close, gemini-style — but the close event
+  // arrives asynchronously, after stop() has already nulled providerRef, so the stale-session
+  // guard at onClose above returns and the callback still changes nothing here. Either way the
+  // teardown below is what actually ends the session; it is idempotent with any onClose that does
+  // land.
   const stop = () => {
     clearSubmitTimer();
     providerRef.current?.close();

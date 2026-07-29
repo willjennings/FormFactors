@@ -1389,6 +1389,27 @@ export default function App() {
 
   const [pointerPath, setPointerPath] = useState<{ x: number, y: number, timestamp: number }[]>([]);
   const [persistentPaths, setPersistentPaths] = useState<{ x: number, y: number }[][]>([]);
+  // The paint state mirrored for CALL-TIME readers. processInputTranscript picks the marker's
+  // focus point from these three, and it is bound into the provider's onInputTranscript at
+  // CONNECT time — nothing about painting reconnects, so the render-scope values it used to read
+  // were frozen at whatever they were when the session opened: empty if nothing had been painted
+  // yet (the usual case), or a stale snapshot of an old gesture if it had. Either way the
+  // "circle it and say 'this'" preference never fired on a voice turn — it fell through to
+  // cursorRef silently. Measured 2026-07-29: circle the Word Ribbon, park the pointer on empty
+  // plane, speak "make this bold" → `POINTING AT: Nothing (Empty Space)` before, `POINTING AT:
+  // Word Ribbon` after.
+  //
+  // Assigned DURING RENDER, the same pattern as voiceToolsRef and sendTypedInputRef — deliberately
+  // NOT a `useEffect` mirror. That pattern was deleted from the desk store in an earlier task
+  // because StrictMode's second pass re-runs it with the pre-update value and rolls a correct
+  // write back (see the deskRef note above). A render-time assignment writes the value of the
+  // render it belongs to, so the double pass writes the same thing twice.
+  const isPaintingRef = useRef(isPainting);
+  const pointerPathRef = useRef(pointerPath);
+  const persistentPathsRef = useRef(persistentPaths);
+  isPaintingRef.current = isPainting;
+  pointerPathRef.current = pointerPath;
+  persistentPathsRef.current = persistentPaths;
 
   // 2. Effect to "fade" the paint by pruning old points
   useEffect(() => {
@@ -2025,7 +2046,11 @@ export default function App() {
       // combine (spec §4): always CREATES a new artifact — never revises an existing one, that's
       // refine_artifact's job (spec §7) — validation is all-or-error, capacity is checked by
       // SIMULATING the real reducer (never partial, never a silent eviction).
-      const v = validateCombineCall(fc.args, { ...corpusRef.current, [activeProgram]: mockDocRef.current }, artifactStateRef.current, Date.now());
+      // The live doc is filed under the program that is active AT CALL TIME. This handler is a
+      // connect-time closure, so a render-scope `activeProgram` files the current document under
+      // the program the session was opened for — which, inside the 800ms reconnect window, is the
+      // program the user just left (the same stale-closure class as startLiveSession's own reads).
+      const v = validateCombineCall(fc.args, { ...corpusRef.current, [activeProgramRef.current ?? activeProgram]: mockDocRef.current }, artifactStateRef.current, Date.now());
       if ('error' in v) {
         // Cap rejections still dispatch the refused event: the reducer refuses it (nothing is
         // evicted, state otherwise unchanged) and increments rejectedAtCap, so the [ARTIFACTS]
@@ -2060,7 +2085,7 @@ export default function App() {
       // The model must ask for full content before combining — the standing [CORPUS] hint is
       // gists only (spec §5). Unknown ids fail the WHOLE call (honest — no partial detail dump).
       const ids: string[] = Array.isArray(fc.args?.sources) ? fc.args.sources.map(String) : [];
-      const fullCorpus = { ...corpusRef.current, [activeProgram]: mockDocRef.current };
+      const fullCorpus = { ...corpusRef.current, [activeProgramRef.current ?? activeProgram]: mockDocRef.current }; // call-time program, as above
       const details = ids.map((id) => sourceDetail(id, fullCorpus, artifactStateRef.current));
       if (details.some((d) => d === null)) {
         addLog('tool', `Tool Call: read_sources REJECTED — unknown source(s)`);
@@ -2706,7 +2731,9 @@ export default function App() {
     }
 
     // G8: pointer-free deixis by spoken number ("number two", "the second one").
-    const sel = parseTargetSelection(cleanedText, program.images.length);
+    // getProgram(ref), not the render-scope `program` memo: reached from onInputTranscript, a
+    // connect-time closure, and the count of numbered targets is per-program.
+    const sel = parseTargetSelection(cleanedText, getProgram(activeProgramRef.current).images.length);
     if (sel !== null) selectTargetByNumber(sel);
 
     // Smart accumulation: show the whole sentence instead of flashing words
@@ -2828,13 +2855,19 @@ export default function App() {
 
       let focusPoint = cursorRef.current;
 
-      // PREFER ACTIVE PAINTING (Maximum accuracy for "drawn over/circled")
-      if (isPainting && pointerPath.length > 0) {
-        focusPoint = pointerPath[pointerPath.length - 1];
+      // PREFER ACTIVE PAINTING (Maximum accuracy for "drawn over/circled").
+      // Refs, not the render-scope state: this function is bound into onInputTranscript at connect
+      // time (see the paint-state mirrors where they are declared), so on a spoken turn the
+      // render-scope values are whatever they were when the session opened.
+      const painting = isPaintingRef.current;
+      const activePath = pointerPathRef.current;
+      const paths = persistentPathsRef.current;
+      if (painting && activePath.length > 0) {
+        focusPoint = activePath[activePath.length - 1];
         addLog('info', 'Using active painting point for marker');
-      } else if (persistentPaths.length > 0) {
+      } else if (paths.length > 0) {
         // Use center of most recent persistent path if it's very recent
-        const lastPath = persistentPaths[persistentPaths.length - 1];
+        const lastPath = paths[paths.length - 1];
         const centerX = lastPath.reduce((sum, p) => sum + p.x, 0) / lastPath.length;
         const centerY = lastPath.reduce((sum, p) => sum + p.y, 0) / lastPath.length;
         focusPoint = { x: centerX, y: centerY };
@@ -3094,8 +3127,9 @@ export default function App() {
     // `setTimeout(() => startLiveSession(), 800)` inside an effect, so the closure carries the
     // PRE-close value (true) 800ms after onClose already set it false — every reconnect returned
     // on this line and the session never came back. A ref reads the value at call time, which is
-    // the only value this guard was ever about. (Same class as the pendingAction state/ref split
-    // and the deskRef mirror effect: state read across an await/timeout is a stale read.)
+    // the only value this guard was ever about. (Same class as the pendingAction state/ref split,
+    // and as the deskRef mirror effect that USED to exist and was deleted for it — see the note at
+    // the desk store: state read across an await, a timeout or a connect is a stale read.)
     if (isLiveRef.current || connectInFlightRef.current) return; // Prevent multiple/concurrent sessions
     connectInFlightRef.current = true;
     lastTranscriptionTimeRef.current = 0;
@@ -4268,7 +4302,9 @@ export default function App() {
       artifactsDemoPlayed.current = true;
       // The corpus boots with the full seed set (spec §3.1), so the demo replays against the
       // same corpus a real first turn would see — no hand-injected sources.
-      const demoCorpus = { ...corpusRef.current, [activeProgram]: mockDocRef.current };
+      // Call-time program (the ref), for the same reason the tool handler uses it: this runs from
+      // a scheduled timeout, not from the render that queued it.
+      const demoCorpus = { ...corpusRef.current, [activeProgramRef.current ?? activeProgram]: mockDocRef.current };
       const v = validateCombineCall(ARTIFACT_DEMO_ARGS, demoCorpus, artifactStateRef.current, Date.now());
       if ('error' in v) {
         addLog('tool', `Tool Call: combine (demo) REJECTED — ${v.error}`);
@@ -4287,7 +4323,7 @@ export default function App() {
       // (closure under composition) — clock/stock always tick offline; weather may fail in CI
       // and renders "feed unavailable" without breaking anything else about the demo.
       setTimeout(() => {
-        const widgetCorpus = { ...corpusRef.current, [activeProgram]: mockDocRef.current };
+        const widgetCorpus = { ...corpusRef.current, [activeProgramRef.current ?? activeProgram]: mockDocRef.current };
         const vw = validateCombineCall(ARTIFACT_DEMO_WIDGET_ARGS, widgetCorpus, artifactStateRef.current, Date.now());
         if ('error' in vw) {
           addLog('tool', `Tool Call: combine (demo widget) REJECTED — ${vw.error}`);
