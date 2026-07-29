@@ -6,7 +6,10 @@ import type { JournalEntry } from './journal';
 
 export const JOURNAL_KEY = 'ff-journal';
 export const QUARANTINE_KEY = 'ff-journal-quarantine';
-export const JOURNAL_VERSION = 1;
+// v2: desk store added (Task 4). A v1 journal has no desk store, and replaying it against the
+// v2 registry would half-restore a desk (windows/skin at initial() while everything else is
+// restored) — so v1 payloads must be REJECTED as unsupported, not partially applied.
+export const JOURNAL_VERSION = 2;
 export const JOURNAL_CAP = 500;                    // compaction threshold (spec §7)
 
 export interface StorageLike {

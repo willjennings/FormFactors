@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { loadJournal, saveJournal, clearJournal, JOURNAL_KEY, QUARANTINE_KEY } from './persistence';
+import { loadJournal, saveJournal, clearJournal, JOURNAL_KEY, QUARANTINE_KEY, JOURNAL_VERSION } from './persistence';
 import { appendEntry } from './journal';
 
 const fake = () => {
@@ -49,15 +49,25 @@ describe('journal persistence', () => {
     expect(s.getItem(QUARANTINE_KEY)).toBe('{not json');
     expect(s.getItem(JOURNAL_KEY)).toBeNull(); // cleared so the next boot is a clean first run
   });
-  it('a wrong version is a failed load (v1 has no migrations)', () => {
+  it('a wrong version is a failed load (no migrations)', () => {
     const s = fake();
     s.setItem(JOURNAL_KEY, JSON.stringify({ v: 99, entries: [] }));
     const r = loadJournal(s);
     expect('failed' in r && r.failed).toMatch(/version/i);
   });
+  it('a v1 payload is REJECTED, not half-restored — v2 added the desk store (Task 4)', () => {
+    // The version gate must discriminate on the actual number, not just "is it wrong": a v1
+    // payload was once valid, and a bug that only checked truthiness of `parsed.v` would let it
+    // through and leave the desk at initial() while everything else restored.
+    const s = fake();
+    s.setItem(JOURNAL_KEY, JSON.stringify({ v: 1, entries: [] }));
+    const r = loadJournal(s);
+    expect('failed' in r && r.failed).toBe('unsupported version 1');
+    expect(JOURNAL_VERSION).toBe(2);
+  });
   it('a shape violation is a failed load, not a crash', () => {
     const s = fake();
-    s.setItem(JOURNAL_KEY, JSON.stringify({ v: 1, entries: [{ nope: true }] }));
+    s.setItem(JOURNAL_KEY, JSON.stringify({ v: JOURNAL_VERSION, entries: [{ nope: true }] }));
     expect('failed' in loadJournal(s)).toBe(true);
   });
   it('a throwing storage fails soft on save', () => {
@@ -81,7 +91,7 @@ describe('journal persistence', () => {
 
   it('quarantine PRECEDES journal removal (order matters for evidence survival)', () => {
     const s = fakeWithOps();
-    s.setItem(JOURNAL_KEY, JSON.stringify({ v: 1, entries: [{ nope: true }] }));
+    s.setItem(JOURNAL_KEY, JSON.stringify({ v: JOURNAL_VERSION, entries: [{ nope: true }] }));
     loadJournal(s);
     // Find the indices of quarantine setItem and journal removeItem
     const quarantineSetIdx = s._ops.findIndex(op => op.op === 'setItem' && op.key === QUARANTINE_KEY);
@@ -100,7 +110,7 @@ describe('journal persistence', () => {
         base.setItem(k, v);
       },
     };
-    s.setItem(JOURNAL_KEY, JSON.stringify({ v: 1, entries: [{ nope: true }] }));
+    s.setItem(JOURNAL_KEY, JSON.stringify({ v: JOURNAL_VERSION, entries: [{ nope: true }] }));
     const r = loadJournal(s as any);
     expect('failed' in r).toBe(true); // load fails as expected
     expect(s.getItem(JOURNAL_KEY)).toBeNull(); // journal is removed despite quarantine throw

@@ -9,6 +9,9 @@ import { seedCorpus } from '../artifacts/seeds';
 import { DEFAULT_PROGRAM, type MockDoc, type ProgramId } from '../scenarios';
 import { DEFAULT_DIALS } from '../register/registry';
 import type { DialValues } from '../register/types';
+import { deskReduce, initialDeskState } from '../shell/desk/deskStore';
+import type { DeskState, DeskEvent } from '../shell/desk/types';
+import type { WindowRect } from '../shell/windowState';
 
 // ---- workspace: corpus + active program as ONE store (spec §4) ----
 // Unified deliberately: as separate stores, the active doc's latest edits (doc.set per commit)
@@ -42,6 +45,11 @@ export function dialsReduce(s: DialsState, e: DialsEvent): DialsState {
   return e.type === 'dials.set' ? { dials: e.dials, registerKey: e.registerKey } : s;
 }
 
+// ---- desk: window inventory + skin as ONE store (same reasoning as workspace, above) ----
+// Unified deliberately: as separate stores, a skin could restore without its windows, or windows
+// without their skin, and disagree with each other. One state, no disagreement.
+export const DEFAULT_DESK_RECT: WindowRect = { x: 48, y: 48, w: 680, h: 620 }; // App.tsx boot rect
+
 // ---- the registry ----
 export const JOURNAL_REGISTRY: JournalRegistry = {
   artifacts: {
@@ -66,4 +74,9 @@ export const JOURNAL_REGISTRY: JournalRegistry = {
     reduce: dialsReduce,
     snapshotEvent: (s: DialsState): DialsEvent => ({ type: 'dials.set', dials: s.dials, registerKey: s.registerKey }),
   } satisfies StoreSpec<DialsState, DialsEvent>,
+  desk: {
+    initial: () => initialDeskState(DEFAULT_PROGRAM, DEFAULT_DESK_RECT),
+    reduce: deskReduce,
+    snapshotEvent: (s: DeskState): DeskEvent => ({ type: 'desk.restore', state: s }),
+  } satisfies StoreSpec<DeskState, DeskEvent>,
 };

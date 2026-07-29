@@ -63,7 +63,7 @@ describe('compact', () => {
   it('compacts to one snapshot entry per store, seq restarting, labelled', () => {
     const c = compact(seed(), JOURNAL_REGISTRY, 2);
     expect(c).toHaveLength(Object.keys(JOURNAL_REGISTRY).length);
-    expect(c.map((e) => e.seq)).toEqual([1, 2, 3, 4]);
+    expect(c.map((e) => e.seq)).toEqual([1, 2, 3, 4, 5]); // one seq per registry store (now five, Task 4)
     expect(c.every((e) => e.label?.includes('compacted'))).toBe(true);
   });
 
