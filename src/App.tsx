@@ -1622,6 +1622,18 @@ export default function App() {
   // minimize, an artifact window arriving or leaving) so the new .program-window element, which
   // the old observer never saw, gets observed immediately. Keyed on the mount signature and not
   // the geometry one deliberately: a drag must not rebuild the observer every frame.
+  //
+  // Artifact windows are observed individually (one ResizeObserver.observe per `.artifact-window`,
+  // not just the shared mainContainerRef) because they're `position: absolute` — a field's value
+  // growing taller inside one (e.g. the weather feed resolving from "…" to "23°C" plus an
+  // "updated at" line, ArtifactWindow.tsx) changes THAT element's own box, not mainContainerRef's,
+  // which is the full plane and doesn't reflow around absolutely-positioned children. Nothing else
+  // caught this: `artifactRevSignature` only bumps on a revise/revert (a new artifact.rev), and a
+  // feed resolving is neither — it's `statuses` state internal to ArtifactWindow, so the desk
+  // never learns the window's measured bbox went stale. This cannot loop: updateLayout only reads
+  // the DOM (getBoundingClientRect) and writes entities/layoutBounds/mainSize/the layout hint —
+  // none of which resize an artifact window, whose rect comes from the desk's `win.rect`, so the
+  // observed box can't change as a result of the callback it triggers.
   useEffect(() => {
     const observer = new ResizeObserver(updateLayout);
     if (mainContainerRef.current) observer.observe(mainContainerRef.current);
@@ -1629,6 +1641,11 @@ export default function App() {
     // Also observe the program window specifically in case it moves independently
     const winBox = document.querySelector('.program-window');
     if (winBox) observer.observe(winBox);
+
+    // And every currently-mounted artifact window (see comment above) — there can be several,
+    // unlike the single program window, so all are observed.
+    const artifactBoxes = document.querySelectorAll<HTMLElement>('.artifact-window');
+    artifactBoxes.forEach((el) => observer.observe(el));
 
     updateLayout();
     window.addEventListener('resize', updateLayout);
