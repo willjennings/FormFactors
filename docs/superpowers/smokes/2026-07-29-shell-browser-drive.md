@@ -49,6 +49,12 @@ Every wiring seam this plan added was, until now, verified by reading.
 
 ## The minimize-staleness question — what the model is actually told
 
+> **FIXED after this drive.** The `!winEl` early return was lifted in `caa141a` (the hint now goes
+> out from both branches), and on 2026-07-29 the preamble itself was corrected: it states that a
+> `[0, 0, 0, 0]` box means the element is not on screen and must never be resolved to, and a
+> `PROGRAM WINDOW: minimized …` / `closed …` line distinguishes the two states that used to emit a
+> byte-identical payload. This section is the record of what the drive found.
+
 **Answer: nothing. While the program window is minimized the app sends the model no layout update
 at all, and the model's last-known layout keeps describing the window as if it were on screen.**
 
@@ -84,6 +90,11 @@ larger. Characterised here, not fixed, per the task.
 ## Defects and findings, worst first
 
 ### 1. A mid-session reconnect leaves a ZOMBIE session that still reads `live` (pre-existing, sharpened)
+
+> **FIXED later the same day.** Both causes below were fixed and the repro re-driven — sockets
+> 1 → 2, `readyState` 3 → 1, 0 → 60 messages after the swap. Measured before/after in
+> `docs/superpowers/smokes/2026-07-24-human-smoke-sitting.md` Part 9. This section is kept as the
+> record of what the drive found.
 
 Known and already logged in the sitting doc as "reconnect never comes back". Driving it here shows
 it is worse than logged on the Azure backend:

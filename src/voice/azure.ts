@@ -197,7 +197,19 @@ export function createAzureRealtimeProvider(
           try { inputCtx?.close(); } catch { /* noop */ }
           try { micStream?.getTracks().forEach(t => t.stop()); } catch { /* noop */ }
           captureNode = null; inputCtx = null; micStream = null;
-          if (!closed) cb.onClose();
+          // UNCONDITIONAL — as in gemini.ts:137. This used to be `if (!closed) cb.onClose()`, so
+          // an APP-initiated close (program swap, dial change, backend switch, idle watchdog, the
+          // mic button) tore the socket down without ever telling the App layer: the header kept
+          // reading `live` with a green dot over a dead socket, the frame pump kept counting into
+          // nothing, and the reconnect never fired. Unrecoverable from the UI — a second mic click
+          // calls close() on an already-CLOSED socket, which emits no further close event, so the
+          // only way out was a page reload. Measured on the pre-fix build 2026-07-29 (program swap
+          // while live): sockets 1, opens 1, closes 1, readyState 3, 0 messages delivered after the
+          // swap, header `live · 29f` → `live · 103f`, unchanged by two mic clicks. The App's own
+          // stale-session guard (`providerRef.current !== thisProvider`) is what makes a late close
+          // from a REPLACED session harmless, so this callback does not need a second one — and a
+          // close that is never reported is the app telling the user something false.
+          cb.onClose();
         };
       } catch (err: any) {
         cb.onError(err?.message ?? 'failed to connect to Azure Realtime');

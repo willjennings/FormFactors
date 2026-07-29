@@ -52,6 +52,8 @@ import type { PerceivedCache } from './perception/perceiveTile';
 import { measureWords, type WordBox } from './perception/measureWords';
 import { buildEntities, entityById, entityByTitle, displayName, resolveEchoedTarget } from './entities/registry';
 import type { SceneEntity, EntityId } from './entities/registry';
+import { buildLayoutHint } from './entities/layoutHint';
+import type { ProgramWindowState } from './entities/layoutHint';
 import { resolveAt, entityArea } from './entities/resolveAt';
 import { TeachingLayer } from './teaching/TeachingLayer';
 import { TEACH_TOOLS, teachCallToEvent } from './teaching/teachTools';
@@ -429,6 +431,11 @@ export default function App() {
       ...(activeProgram === 'word' || activeProgram === 'powerpoint' ? [ASK_CONTENT_TOOL] : [])],
     [activeProgram],
   );
+  // Read by startLiveSession, which can run 800ms after the render that scheduled it (the
+  // reconnect timeout) — by then a render-scope `voiceTools` may describe the PREVIOUS program.
+  // Assigned during render, the same pattern as sendTypedInputRef below.
+  const voiceToolsRef = useRef(voiceTools);
+  voiceToolsRef.current = voiceTools;
   const CONFUSABLE_PAIRS = React.useMemo(() => {
     const map: Record<string, string[]> = {};
     for (const img of program.images) {
@@ -1469,10 +1476,21 @@ export default function App() {
     // and because every updateLayout took the early return, an artifact closed during that
     // period went unreported too. `es` is honest in both branches (zeroed bboxes when the
     // window is gone), so honest is what gets sent.
+    //
+    // The MESSAGE is built by buildLayoutHint (pure, tested — entities/layoutHint.ts): the
+    // preamble now says what a [0, 0, 0, 0] box means instead of asserting that everything
+    // listed is on screen, and the program window's state rides along, because 'minimized'
+    // and 'closed' reach here as the same zeroed payload and only the desk store can tell them
+    // apart. Read from deskRef (the synchronous source — this file's convention), and the
+    // states line up exactly with what renders: ProgramWindow mounts iff there is a window for
+    // the active program and it is not minimized.
+    const programWindowState = (): ProgramWindowState => {
+      const w = deskRef.current.windows.find((x) => x.id === programWindowId(program.id));
+      return !w ? 'closed' : w.minimized ? 'minimized' : 'open';
+    };
     const sendLayoutHint = (es: SceneEntity[]) => {
       if (!providerRef.current) return;
-      const layoutInfo = es.map(e => `${displayName(e)}: [${e.bbox.map(Math.round).join(', ')}]`).join('\n');
-      providerRef.current.sendTextHint(`[SYSTEM UPDATE: The on-screen program elements are at these coordinates (ymin, xmin, ymax, xmax):\n${layoutInfo}\nUse these to identify what the user is pointing at when they say "this" or "here". DO NOT RESPOND TO THIS UPDATE. STAY SILENT UNTIL THE USER SPEAKS.]`);
+      providerRef.current.sendTextHint(buildLayoutHint(es, programWindowState()));
     };
 
     if (!winEl) {
@@ -3072,7 +3090,13 @@ export default function App() {
   };
 
   const startLiveSession = async () => {
-    if (isLive || connectInFlightRef.current) return; // Prevent multiple/concurrent sessions
+    // isLiveRef, NOT the render-scope `isLive`. The reconnect paths call this from
+    // `setTimeout(() => startLiveSession(), 800)` inside an effect, so the closure carries the
+    // PRE-close value (true) 800ms after onClose already set it false — every reconnect returned
+    // on this line and the session never came back. A ref reads the value at call time, which is
+    // the only value this guard was ever about. (Same class as the pendingAction state/ref split
+    // and the deskRef mirror effect: state read across an await/timeout is a stale read.)
+    if (isLiveRef.current || connectInFlightRef.current) return; // Prevent multiple/concurrent sessions
     connectInFlightRef.current = true;
     lastTranscriptionTimeRef.current = 0;
 
@@ -3153,20 +3177,27 @@ export default function App() {
       );
       const voice = backend === 'gemini' ? 'Zephyr' : backend === 'azure' ? 'alloy' : 'marin';
       setTraffic({ frames: 0, hints: 0 });
-      // Stale-callback guard: gemini's WS fires onclose unconditionally, so a delayed close
-      // event from a REPLACED session must not touch the current one's state.
+      // Stale-callback guard: both backends' sockets fire onclose unconditionally (gemini.ts:137,
+      // azure.ts's ws.onclose), so a delayed close event from a REPLACED session must not touch
+      // the current one's state.
       const thisProvider = providerRef.current;
       const contextToken = newContextToken();
+      // Which program this session is FOR, read at call time. `program`/`voiceTools` are
+      // render-scope memos of activeProgram, and this function can be running 800ms behind the
+      // render that scheduled it (the reconnect timeout) — a second program swap inside that
+      // window would otherwise connect a session whose prompt and tool list belong to the program
+      // the user just left. Same stale-closure class as the isLive guard at the top.
+      const sessionProgram = getProgram(activeProgramRef.current);
       await providerRef.current.connect(
         {
           instructions: buildInstructions(
             honest,
-            program,
+            sessionProgram,
             entitiesRef.current,
             contextToken,
             registerSection(registerKeyRef.current, dialsRef.current),
           ),
-          tools: voiceTools,
+          tools: voiceToolsRef.current,
           voice,
           contextToken,
         },
@@ -3191,7 +3222,7 @@ export default function App() {
               backend: voiceBackendRef.current,
               autonomy: dialsRef.current.autonomy,
               feedback: dialsRef.current.feedback,
-              program: activeProgram,
+              program: sessionProgram.id, // the program this session was CONNECTED for, not the render's
               honest: dialsRef.current.honest,
               device: detectDevice(),
               arm: {
