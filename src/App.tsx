@@ -93,7 +93,7 @@ import type { SkinKey } from './shell/skins/types';
 import { docStatusLabel } from './widgets/surfaceModels';
 import type { TeachingEvent, TeachingState } from './teaching/types';
 import { serializeTeachingState, makeChangeGate } from './teaching/teachingState';
-import { GOAL_TOOLS, goalCallToEvent, validateSuggestion, type GoalProposal } from './goal/goalTools';
+import { GOAL_TOOLS, goalCallToEvent, validateSuggestion, type GoalSuggestion } from './goal/goalTools';
 import { initialGoalState, reduce as goalReduce, isStepDone, type GoalState, type GoalEvent } from './goal/goalStore';
 import { serializeGoalState } from './goal/serialize';
 import { WB_TOOLS, wbCallToEvent } from './whiteboard/tools';
@@ -1311,7 +1311,7 @@ export default function App() {
   useEffect(() => { whiteboardSnapshotRef.current = whiteboard; }, [whiteboard]);
   // UI-pending states rendered by the goal surfaces (Task 5):
   const [pendingGoal, setPendingGoal] = useState<{ objective: string; steps: { label: string; verb?: string; target?: string }[] } | null>(null);
-  const [pendingSuggestion, setPendingSuggestion] = useState<GoalProposal | null>(null);
+  const [pendingSuggestion, setPendingSuggestion] = useState<GoalSuggestion | null>(null);
   const pendingGoalRef = useRef(pendingGoal);
   useEffect(() => { pendingGoalRef.current = pendingGoal; }, [pendingGoal]);
   const pendingSuggestionRef = useRef(pendingSuggestion);
@@ -2373,7 +2373,7 @@ export default function App() {
         }
         ack({ success: true });
       } else {
-        const proposal = mapped.proposal as Extract<GoalProposal, { kind: 'suggest' }>;
+        const proposal = mapped.proposal;
         const reason = validateSuggestion(goalStateRef.current, proposal);
         if (reason) {
           addLog('tool', `Tool Call: suggest_next REJECTED — ${reason}`);

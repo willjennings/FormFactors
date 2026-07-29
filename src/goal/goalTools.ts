@@ -21,12 +21,17 @@ export type GoalProposal =
   | { kind: 'set'; objective: string; steps: { label: string; verb?: string; target?: string }[] }
   | { kind: 'suggest'; label: string; why?: string; verb?: string; target?: string };
 
+/** The 'suggest' arm alone. Only suggestions are ever offered to the user, so the offer state and
+ *  goalCallToEvent's suggest branch carry this rather than the whole union — label/why/verb/target
+ *  are then readable without narrowing at each site. */
+export type GoalSuggestion = Extract<GoalProposal, { kind: 'suggest' }>;
+
 const str = (v: unknown) => (typeof v === 'string' ? v : '');
 const opt = (v: unknown) => (v ? String(v) : undefined);
 
 export function goalCallToEvent(
   call: { name: string; args: any },
-): { kind: 'set'; event: GoalEvent } | { kind: 'suggest'; proposal: GoalProposal } | { error: string } {
+): { kind: 'set'; event: GoalEvent } | { kind: 'suggest'; proposal: GoalSuggestion } | { error: string } {
   const a = call.args ?? {};
   if (call.name === 'set_goal') {
     const objective = str(a.objective).trim();
