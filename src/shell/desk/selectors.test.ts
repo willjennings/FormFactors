@@ -82,10 +82,19 @@ describe('reconcileArtifacts', () => {
     expect(next).toBe(s);
   });
 
-  it('never touches program windows', () => {
-    const s = initialDeskState('word', R);
+  it('never touches program windows — the program DeskWindow survives a removal by identity', () => {
+    // The old version of this test reconciled a desk holding ONLY a program window and asserted
+    // `next === s`, which is the in-sync case above under a different name: it never ran the
+    // removal path at all. To test "never touches", the removal has to actually happen — and the
+    // assertion has to be about the program window's own z/rect/minimized/openedAt, not merely
+    // that its id is still in the list.
+    let s = initialDeskState('word', R);
+    s = open(s, artifactWindowId('a1'), 'artifact', 'agent', 10);
+    const before = s.windows.find(w => w.id === programWindowId('word'))!;
     const next = reconcileArtifacts(s, [], 100);
-    expect(next).toBe(s);
+    expect(next).not.toBe(s);                                             // the removal really ran
+    expect(next.windows.map(w => w.id)).toEqual([programWindowId('word')]);
+    expect(next.windows.find(w => w.id === programWindowId('word'))).toBe(before);
   });
 
   it('cascades two new artifacts in one call to distinct rects', () => {

@@ -63,11 +63,14 @@ export function planeBox(skin: ShellSkin | null): React.CSSProperties {
  *  a registry entry plus whichever parts are genuinely new.
  *
  *  Two rules bind every part and are checked by reading, since this repo has no component test
- *  harness: each one is `data-shell` with a `pointerdown` that stops propagation (furniture must
- *  never become a deixis target), and the background is `pointer-events-none` (pointing at the
- *  empty desk must keep working). The decisions — what is in the bar, in what order, and what the
- *  timeline says — live in `desk/selectors.ts` and `parts/timelineItems.ts`, both tested; what is
- *  left here is a map. */
+ *  harness: whatever takes the pointer is `data-shell` with a `pointerdown` that stops propagation
+ *  (furniture must never become a deixis target), and the background is `pointer-events-none`
+ *  (pointing at the empty desk must keep working). Where a part is a bare container rather than a
+ *  visible surface — the `restoreVia: 'column'` strip below — the two are split: the container is
+ *  `pointer-events-none` and only its chips are `data-shell`, because an INVISIBLE swallower of
+ *  pointers is not the honest version of this rule. The decisions — what is in the bar, in what
+ *  order, and what the timeline says — live in `desk/selectors.ts` and `parts/timelineItems.ts`,
+ *  both tested; what is left here is a map. */
 export function ShellFrame({ skin, items, launchers, summary, activity, menu, onOpen, onLaunch }: {
   skin: ShellSkin | null;
   /** `barItems(desk, resolveTitle)` — rendered in the order it arrives, never re-sorted. */
@@ -135,16 +138,31 @@ export function ShellFrame({ skin, items, launchers, summary, activity, menu, on
             centre column. This is the surface the registry's invariant test names; without it a
             minimize in this skin would be a journaled trap with no route back. */}
         {slots.restoreVia === 'column' && (
+          // I2: the strip is a bare CONTAINER, not a surface — it has no background, spans 680px
+          // across the top-centre of the plane, and sits over the default program window's title
+          // bar. Every other skin's bar is a visibly opaque full-width thing, so "furniture
+          // swallows pointers" reads honestly there; here it would be an invisible pointer sink
+          // (elementFromPoint past the last chip returned this div, whose stopPropagation killed
+          // the point, and a drag started on the title bar underneath did nothing). So the
+          // container is transparent to the pointer and only the chips take it — the same
+          // pointer-events-none / -auto pattern App uses on its planeBox/surfaceBox wrappers.
           <div
-            data-shell
-            onPointerDown={(e) => e.stopPropagation()}
             aria-label="Open windows"
             style={{ left: box.left, width: box.width }}
-            className="absolute top-14 z-30 flex items-center gap-1.5 overflow-x-auto custom-scrollbar"
+            className="absolute top-14 z-30 flex items-center gap-1.5 overflow-x-auto custom-scrollbar pointer-events-none"
           >
             {items.length === 0
               ? <span className="text-[11px] font-mono text-[var(--text-secondary)]">Nothing open.</span>
-              : items.map((it) => <WindowChip key={it.id} item={it} onOpen={() => onOpen(it.id)} />)}
+              : items.map((it) => (
+                  <div
+                    key={it.id}
+                    data-shell
+                    onPointerDown={(e) => e.stopPropagation()}
+                    className="pointer-events-auto shrink-0"
+                  >
+                    <WindowChip item={it} onOpen={() => onOpen(it.id)} />
+                  </div>
+                ))}
           </div>
         )}
       </div>

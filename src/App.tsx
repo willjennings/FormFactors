@@ -52,6 +52,7 @@ import type { PerceivedCache } from './perception/perceiveTile';
 import { measureWords, type WordBox } from './perception/measureWords';
 import { buildEntities, entityById, entityByTitle, displayName, resolveEchoedTarget } from './entities/registry';
 import type { SceneEntity, EntityId } from './entities/registry';
+import { resolveAt, entityArea } from './entities/resolveAt';
 import { TeachingLayer } from './teaching/TeachingLayer';
 import { TEACH_TOOLS, teachCallToEvent } from './teaching/teachTools';
 import { advanceOnClick } from './teaching/advanceOnClick';
@@ -195,7 +196,8 @@ const KEYWORD_MAP: Record<string, string> = {
 // the App component. Swap programs (Word/Excel/PowerPoint) via the dropdown — or repoint
 // the whole demo by editing scenarios.ts.
 
-const entityArea = (e: SceneEntity) => (e.bbox[2] - e.bbox[0]) * (e.bbox[3] - e.bbox[1]);
+// entityArea now lives beside resolveAt (src/entities/resolveAt.ts) — the smallest-area rule
+// and the area function it runs on belong in the same tested module.
 
 // --- DIFF 1: pointing confidence (demo-grade proxy) ---
 // This is NOT a perception-confidence model. It's a composite signal — a geometric
@@ -1460,14 +1462,29 @@ export default function App() {
     }
     railLayoutRef.current = railLayout;
 
+    // I1: the layout hint. Declared here so BOTH branches below send it. The `!winEl` branch
+    // used to return before the send, which latched the channel shut: while the program window
+    // was minimized the model's last-known layout kept describing four elements that were no
+    // longer on screen, under a preamble telling it to use those coordinates for "this"/"here" —
+    // and because every updateLayout took the early return, an artifact closed during that
+    // period went unreported too. `es` is honest in both branches (zeroed bboxes when the
+    // window is gone), so honest is what gets sent.
+    const sendLayoutHint = (es: SceneEntity[]) => {
+      if (!providerRef.current) return;
+      const layoutInfo = es.map(e => `${displayName(e)}: [${e.bbox.map(Math.round).join(', ')}]`).join('\n');
+      providerRef.current.sendTextHint(`[SYSTEM UPDATE: The on-screen program elements are at these coordinates (ymin, xmin, ymax, xmax):\n${layoutInfo}\nUse these to identify what the user is pointing at when they say "this" or "here". DO NOT RESPOND TO THIS UPDATE. STAY SILENT UNTIL THE USER SPEAKS.]`);
+    };
+
     if (!winEl) {
-      // Window is closed — zero-bbox degradation so entities/overlays render nothing honestly.
+      // Window is closed or minimized — zero-bbox degradation so entities/overlays render
+      // nothing honestly, and the model is told the same zeroes rather than left with stale ones.
       setMainSize({ width: mainRect.width, height: mainRect.height });
       const zeroWindow = { ymin: 0, xmin: 0, ymax: 0, xmax: 0 };
       setLayoutBounds({ window: zeroWindow, photoItems: [], surface: undefined });
       const es = composeEntities(buildEntities(program, mockDocRef.current, perceivedLabelsRef.current, { items: [] }));
       setEntities(es);
       entitiesRef.current = es;
+      sendLayoutHint(es);
       return;
     }
 
@@ -1496,10 +1513,7 @@ export default function App() {
     entitiesRef.current = es;
 
     // Notify AI of the new layout if session is active (core context — both backends).
-    if (providerRef.current) {
-      const layoutInfo = es.map(e => `${displayName(e)}: [${e.bbox.map(Math.round).join(', ')}]`).join('\n');
-      providerRef.current.sendTextHint(`[SYSTEM UPDATE: The on-screen program elements are at these coordinates (ymin, xmin, ymax, xmax):\n${layoutInfo}\nUse these to identify what the user is pointing at when they say "this" or "here". DO NOT RESPOND TO THIS UPDATE. STAY SILENT UNTIL THE USER SPEAKS.]`);
-    }
+    sendLayoutHint(es);
   }, [program, isLive]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Re-measure on window move/resize/minimize/restore — ResizeObserver only fires on size
@@ -3576,10 +3590,16 @@ export default function App() {
           ctx.font = 'bold 10px sans-serif';
           ctx.textAlign = "left";
           ctx.textBaseline = "top";
-          const labelWidth = ctx.measureText(obj.name).width;
+          // B1: `obj.name` does not exist on SceneEntity — every marked entity was labelled with
+          // the literal string "undefined", on screen, in the Cockpit register's shipped
+          // default (dials.markings). displayName() is what the pill, the logs and the layout
+          // hint already use for a SceneEntity: perceived label when we have one, else the
+          // registered title.
+          const label = displayName(obj);
+          const labelWidth = ctx.measureText(label).width;
           ctx.fillRect(x, y - 18, labelWidth + 8, 18);
           ctx.fillStyle = 'white';
-          ctx.fillText(obj.name, x + 4, y - 14);
+          ctx.fillText(label, x + 4, y - 14);
         });
       }
 
@@ -3635,11 +3655,7 @@ export default function App() {
     // Update hovered object for visual feedback
     const hX = Math.round(x);
     const hY = Math.round(y);
-    const containing = entitiesRef.current.filter(e => {
-      const [ymin, xmin, ymax, xmax] = e.bbox;
-      return (ymax - ymin) > 0 && x >= xmin && x <= xmax && y >= ymin && y <= ymax;
-    });
-    const found = containing.length ? containing.reduce((a, b) => (entityArea(b) < entityArea(a) ? b : a)) : undefined;
+    const found = resolveAt(entitiesRef.current, x, y);
     const hovered = found ? found.id : null;
     setHoveredId(hovered);
     hoveredIdRef.current = hovered;
@@ -3726,25 +3742,25 @@ export default function App() {
     if (rect) {
       const x = ((e.clientX - rect.left) / rect.width) * 1000;
       const y = ((e.clientY - rect.top) / rect.height) * 1000;
-      const found = entitiesRef.current.find(e => {
-        const [ymin, xmin, ymax, xmax] = e.bbox;
-        return x >= xmin && x <= xmax && y >= ymin && y <= ymax;
-      });
+      // C1: the SAME resolver handlePointerMove uses. This used to be a bare array-order
+      // `.find(...)`, which returned "first registered" rather than "what you clicked" — and
+      // because composeEntities lists program elements first, a click on an artifact window
+      // resolved to the program element beneath it. That result is written straight into
+      // hoveredIdRef and cursorHistoryRef below, i.e. into what "this"/"here" resolve against,
+      // while the "Pointing at" pill (fed by the hover path) showed the correct entity. The UI
+      // said one thing and the model was told another. One function now, in src/entities.
+      const found = resolveAt(entitiesRef.current, x, y);
 
       // SHIFT-CLICK = tray toggle (spec §5.3). This is the right seam, not
       // handleSurfaceElementClick: that one takes a bare elementId with no event, and artifact
       // windows never route through it. Only consumes the click when the entity actually
       // resolves to a source — everything else falls through to normal pointing.
       if (e.shiftKey && found) {
-        // I2 (final review, OBSERVED in the Task 10 drive): `found` is a plain array-order
-        // bbox match, and artifacts always precede rail cards in composeEntities — on a
-        // cluttered desk with overlapping bboxes, array order has nothing to do with topmost
-        // paint, so `found` can silently resolve to an entity the user did not visually click
+        // I2 (final review, OBSERVED in the Task 10 drive): geometry alone can still miss when
+        // bboxes are stale between measurements, and this branch MUTATES STATE on the result
         // (shift-clicking a rail card over the desk added an overlapping artifact to the tray).
-        // Every other consumer of `found` keeps the array-order resolution — that's a global
-        // resolution question deferred by explicit ruling — but this branch MUTATES STATE on
-        // the result, so it alone resolves DOM-first: the stamped `data-entity-id` ancestor of
-        // the actual click target wins, and `found` is only a fallback when nothing is stamped.
+        // So it resolves DOM-first: the stamped `data-entity-id` ancestor of the actual click
+        // target wins, and the geometric `found` is the fallback when nothing is stamped.
         const stampedId = (e.target as HTMLElement).closest?.<HTMLElement>('[data-entity-id]')?.dataset?.entityId;
         const shiftTarget = (stampedId && entityById(entitiesRef.current, stampedId as EntityId)) || found;
         const sourceId = entityToSourceId(shiftTarget);
