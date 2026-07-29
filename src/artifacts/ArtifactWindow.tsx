@@ -1,5 +1,5 @@
 import React from 'react';
-import { Minus, X } from 'lucide-react';
+import { X } from 'lucide-react';
 import type { Artifact, ArtifactPatch } from './types';
 import { FEEDS } from './feeds';
 import { artifactParts, splitParagraphs } from './parts';
@@ -29,14 +29,13 @@ function fmtStamp(ts: number): string {
 // itself off its array index, which is why two artifacts could previously sit at the same place
 // after a third was closed. `rect.h` is the window's MAX height: the content is short and
 // self-sizing, and nothing drags or resizes an artifact window in this phase.
-export function ArtifactWindow({ artifact, rect, zIndex, chrome, origin, onFocus, onMinimize, onClose, onRevert, onEditPart }: {
+export function ArtifactWindow({ artifact, rect, zIndex, chrome, origin, onFocus, onClose, onRevert, onEditPart }: {
   artifact: Artifact;
   rect: WindowRect;
   zIndex: number;
   chrome: Chrome;
   origin: WindowOrigin;
   onFocus: () => void;
-  onMinimize: () => void;
   onClose: () => void;
   onRevert: (toRev: number) => void;
   onEditPart: (patch: ArtifactPatch, baseRev: number) => void;
@@ -197,9 +196,11 @@ export function ArtifactWindow({ artifact, rect, zIndex, chrome, origin, onFocus
             className="hit-24 text-[9px] font-mono px-1.5 py-0.5 rounded bg-[var(--card-border)]/40 text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
             onClick={() => setHistoryOpen((o) => !o)}
           >rev {artifact.rev}</button>
-          {/* Minimize is NOT close: the artifact keeps existing, its window goes to the restore
-              surface. Without it `minimized` would be unreachable for artifact windows. */}
-          <button aria-label="Minimize artifact window" className="hit-24 text-[var(--text-secondary)] hover:text-[var(--text-primary)]" onClick={onMinimize}><Minus size={13} /></button>
+          {/* There is deliberately NO minimize control here yet. Spec §2: every skin must name a
+              restore surface, and a window that minimizes into nowhere is a trap. The Dock
+              restores the PROGRAM window only, so an artifact minimized today would be journaled
+              away with no route back. The control lands in Task 7, in the same commit as the bar
+              that restores it. */}
           <button aria-label="Close artifact" className="hit-24 text-[var(--text-secondary)] hover:text-[var(--text-primary)]" onClick={onClose}><X size={13} /></button>
         </div>
       </div>

@@ -1,13 +1,14 @@
-// Pure window geometry + fail-soft persistence for the single program window.
+// Pure window geometry. Persistence used to live here too — a per-program rect in
+// sessionStorage — and is GONE (fix round 1, I1): the journal owns window geometry now. Every
+// settled move is a journaled `window.move`, a minimized window keeps its rect in the inventory,
+// and the boot-fit effect re-fits the whole desk to the current screen through the same event.
+// A second store could only disagree with that one, and disagree invisibly, since replay cannot
+// see sessionStorage.
 //
-// Since the desk landed (spec §1) the JOURNAL owns window geometry: every settled move is a
-// journaled `window.move`, and a minimized window keeps its rect in the inventory, so there is
-// nothing left for a second store to remember. App still calls `clampWindow` (drag, boot, and
-// every rect it hands the desk) and still calls `loadWindowRect` as the boot fallback for a
-// program window with no journal entry — but NOTHING WRITES THE KEY ANY MORE: `saveWindowRect`
-// has no caller in src/ (its effect was deleted with `windowRect`), so that fallback can only
-// see a value left by a pre-desk build in the same tab. Retiring both storage halves, and the
-// test that covers them, is a deliberate follow-up rather than part of the wiring task.
+// `clampWindow` is the one geometry rule: callers are ProgramWindow's drag (src/shell/
+// ProgramWindow.tsx), `fitWindows` (src/shell/desk/selectors.ts), and App's program-open and
+// artifact-reconcile paths — in every case the clamped rect ends up inside a journaled event, so
+// what is on screen and what replays are the same rect.
 export type WindowRect = { x: number; y: number; w: number; h: number };
 
 export const MIN_W = 320;
@@ -19,20 +20,4 @@ export function clampWindow(rect: WindowRect, plane: { width: number; height: nu
   const x = Math.min(Math.max(rect.x, 0), Math.max(0, plane.width - w));
   const y = Math.min(Math.max(rect.y, 0), Math.max(0, plane.height - h));
   return { x, y, w, h };
-}
-
-const key = (programId: string) => `shell.window.${programId}`;
-
-export function loadWindowRect(programId: string): WindowRect | null {
-  try {
-    const raw = sessionStorage.getItem(key(programId));
-    if (!raw) return null;
-    const p = JSON.parse(raw);
-    if (typeof p?.x === 'number' && typeof p?.y === 'number' && typeof p?.w === 'number' && typeof p?.h === 'number') return p;
-    return null;
-  } catch { return null; }
-}
-
-export function saveWindowRect(programId: string, rect: WindowRect): void {
-  try { sessionStorage.setItem(key(programId), JSON.stringify(rect)); } catch { /* fail-soft */ }
 }

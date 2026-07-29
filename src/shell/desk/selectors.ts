@@ -4,7 +4,7 @@
 // shapes each skin needs, and never mutate it except via deskReduce.
 import { artifactWindowId, deskReduce } from './deskStore';
 import type { DeskState, DeskWindow, WindowKind, WindowOrigin } from './types';
-import type { WindowRect } from '../windowState';
+import { clampWindow, type WindowRect } from '../windowState';
 
 export interface BarItem {
   id: string;
@@ -90,4 +90,28 @@ export function reconcileArtifacts(desk: DeskState, liveArtifactIds: string[], n
     artifactCount++;
   }
   return next;
+}
+
+// fitWindows: which windows do not fit THIS plane, and where each one belongs. The desk is
+// restored from a journal written on some other screen — and the registry's own initial() hands
+// out the PRE-clamp default rect — so a window can boot taller than the viewport or entirely
+// below the fold. That is not cosmetic: an artifact window has no drag handle at all, and a
+// program window whose title bar is off-plane cannot be grabbed either, so the only recovery
+// would be erasing the desk. Callers dispatch one journaled `window.move` per entry, which is
+// what keeps the fitted desk and its replay identical (a clamp applied silently at render or in
+// a state initializer would diverge from the journal by exactly this correction).
+//
+// Minimized windows are included deliberately: they are restored at their stored rect, so
+// skipping them only defers the trap to the moment the user asks for one back. Returns an EMPTY
+// array when everything already fits — the by-value guard that makes the calling effect a no-op
+// on StrictMode's second pass and on every resize that changes nothing.
+export function fitWindows(desk: DeskState, plane: { width: number; height: number }): { id: string; rect: WindowRect }[] {
+  const out: { id: string; rect: WindowRect }[] = [];
+  for (const w of desk.windows) {
+    const rect = clampWindow(w.rect, plane);
+    if (rect.x !== w.rect.x || rect.y !== w.rect.y || rect.w !== w.rect.w || rect.h !== w.rect.h) {
+      out.push({ id: w.id, rect });
+    }
+  }
+  return out;
 }

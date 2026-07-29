@@ -77,12 +77,12 @@ import { ActivityTrace } from './shell/ActivityTrace';
 import { DebugDrawer } from './shell/DebugDrawer';
 import { Sheet } from './ui/Sheet';
 import { Button } from './ui/Button';
-import { clampWindow, loadWindowRect, type WindowRect } from './shell/windowState';
+import { clampWindow, type WindowRect } from './shell/windowState';
 // The desk: the window inventory this app now runs on (spec §1). The store owns geometry,
 // z-order and visibility; the selectors hold every decision that would otherwise sit in JSX.
 import { deskReduce, initialDeskState, programWindowId, artifactWindowId } from './shell/desk/deskStore';
 import type { DeskEvent, DeskState } from './shell/desk/types';
-import { reconcileArtifacts, visibleWindows } from './shell/desk/selectors';
+import { reconcileArtifacts, visibleWindows, fitWindows } from './shell/desk/selectors';
 import { resolveSkin } from './shell/skins/registry';
 import type { SkinKey } from './shell/skins/types';
 import { docStatusLabel } from './widgets/surfaceModels';
@@ -958,12 +958,14 @@ export default function App() {
   // answer "what exists right now" and a reload can restore it.
   const bootProgram: ProgramId = bootStates?.workspace?.activeProgram ?? DEFAULT_PROGRAM;
   const [desk, deskDispatch] = useReducer(deskReduce, undefined, () => bootStates?.desk
-    // Sparse start: ONE window, the active program. DEFAULT_DESK_RECT is the PRE-clamp literal
-    // (the journal's own initial() uses it raw), so it is clamped HERE, at consumption — on a
-    // 900×600 viewport the window is 600 tall whatever the constant says. clampWindow always
-    // returns a FRESH object, so no window ever holds that exported constant by reference.
-    ?? initialDeskState(bootProgram, clampWindow(loadWindowRect(bootProgram) ?? DEFAULT_DESK_RECT,
-      { width: window.innerWidth, height: window.innerHeight })));
+    // Sparse start: ONE window, the active program, at the same PRE-clamp default the journal's
+    // own initial() uses — deliberately NOT clamped here. Fitting the desk to this screen is one
+    // job done in one place, by the journaled boot-fit effect below, for the restored desk and
+    // the fresh one alike; clamping only this branch would leave the restore branch (the far
+    // more dangerous one — a window can be saved entirely below the fold) unprotected, and a
+    // clamp applied here would be invisible to replay. `{ ...DEFAULT_DESK_RECT }` is a defensive
+    // copy: the constant is a shared module export, and nothing may ever hold it live.
+    ?? initialDeskState(bootProgram, { ...DEFAULT_DESK_RECT }));
   // The desk mirrored into a ref, written SYNCHRONOUSLY by every dispatch below. This file's
   // signature failure is clearing state and forgetting the ref (the pendingAction round), so the
   // rule here is absolute: every desk read from a stale-closure context — the reconcile effect,
@@ -1026,18 +1028,50 @@ export default function App() {
     if (deskRef.current.focusedId === id) return;
     deskDispatchJ({ type: 'window.focus', id });
   };
-  const programRect = (id: ProgramId): WindowRect => clampWindow(
-    loadWindowRect(id) ?? DEFAULT_DESK_RECT,
-    { width: mainContainerRef.current?.clientWidth ?? window.innerWidth,
-      height: mainContainerRef.current?.clientHeight ?? window.innerHeight });
+  // The plane every rect is fitted against — the measured desktop container, not the viewport
+  // (the two differ by the chrome around it), falling back to the viewport before first layout.
+  const planeSize = () => ({
+    width: mainContainerRef.current?.clientWidth ?? window.innerWidth,
+    height: mainContainerRef.current?.clientHeight ?? window.innerHeight,
+  });
+  // Where a program window opens when the desk has never held one. Clamped, and that clamped
+  // rect travels INSIDE the journaled window.open event, so replay lands on the same geometry.
+  const programRect = (): WindowRect => clampWindow(DEFAULT_DESK_RECT, planeSize());
   // One path for "show me this program": window.open on a KNOWN id is focus+restore (the reducer
   // ignores the rect then, so the window keeps exactly where the user put it), and a fresh open
   // otherwise. The Dock's reopen and the program-swap effect both go through here, so the two
   // cannot diverge — the convergence spec §1 asks for.
   const openProgramWindow = (id: ProgramId) => {
     deskDispatchJ({ type: 'window.open', id: programWindowId(id), kind: 'program', refId: id,
-      rect: programRect(id), origin: 'you', at: Date.now() });
+      rect: programRect(), origin: 'you', at: Date.now() });
   };
+  // Fit the desk to THIS screen (fix round 1, I1). A desk restored from a journal was laid out
+  // on some other viewport, and a fresh one starts at the pre-clamp default — either can put a
+  // window past the edge or entirely below the fold, where there is no title bar to grab, no
+  // drag handle on an artifact window at all, and no recovery short of erasing the desk. The
+  // correction is dispatched as ordinary journaled `window.move`s, labelled so the trace reads
+  // it as a boot-fit rather than a user drag: a real change to the desk, recorded, so replay
+  // reproduces the fitted desk instead of the one that did not fit.
+  //
+  // Runs at mount (after first layout, so the plane is measured rather than guessed) and again
+  // when the viewport settles after a resize — shrinking the window is the same problem arriving
+  // live. Debounced, because a drag-resize fires continuously and only the settled size deserves
+  // an entry. `fitWindows` returns [] when everything fits, which is the by-value guard that
+  // makes StrictMode's second mount pass, and every resize that changes nothing, dispatch
+  // nothing. It reads deskRef.current on each call, never a captured `desk`.
+  useEffect(() => {
+    const fit = () => {
+      for (const f of fitWindows(deskRef.current, planeSize())) {
+        deskDispatchJ({ type: 'window.move', id: f.id, rect: f.rect }, 'fit to this screen');
+      }
+    };
+    fit();
+    let t: ReturnType<typeof setTimeout> | null = null;
+    const onResize = () => { if (t) clearTimeout(t); t = setTimeout(fit, 250); };
+    window.addEventListener('resize', onResize);
+    return () => { if (t) clearTimeout(t); window.removeEventListener('resize', onResize); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   // Program swap: the desk holds one program window at a time (spec §10 exclusion) — the
   // outgoing one MINIMIZES, keeping its rect and its place in the inventory, and the incoming
   // one opens or restores. Keyed off a ref holding the last program window id rather than off
@@ -1060,9 +1094,15 @@ export default function App() {
   //
   // The events are DERIVED from its result rather than re-deriving cascade rects here: closes
   // first, then opens in `next.windows` order, which is the order reconcileArtifacts composes
-  // them in — so folding them back through deskReduce reproduces `next` exactly (z, nextZ and
-  // focusedId included), while the journal keeps real window events. desk.restore stays
-  // journal-only, for compaction, as the spec says.
+  // them in — so folding them back through deskReduce reproduces `next`'s z, nextZ and focusedId
+  // exactly, while the journal keeps real window events. desk.restore stays journal-only, for
+  // compaction, as the spec says.
+  //
+  // The one thing NOT taken verbatim is the rect (fix round 1, I2): ARTIFACT_BASE_RECT is fixed
+  // pixels, x 560 + w 380, so on a 900-wide plane — which passes the device gate, it only blocks
+  // minDimension < 600 — the whole control cluster lands off-plane, and an artifact window has
+  // no drag handle to recover with. It is clamped BEFORE dispatch so the fitted rect travels
+  // inside the journaled event and replay stays exact.
   //
   // It also makes StrictMode's double mount safe: pass 1 dispatches and writes deskRef
   // synchronously, so pass 2 reconciles against a desk that is already in sync and returns
@@ -1078,7 +1118,8 @@ export default function App() {
     }
     for (const w of next.windows) {
       if (!beforeIds.has(w.id)) {
-        deskDispatchJ({ type: 'window.open', id: w.id, kind: w.kind, refId: w.refId, rect: w.rect, origin: w.origin, at: w.openedAt });
+        deskDispatchJ({ type: 'window.open', id: w.id, kind: w.kind, refId: w.refId,
+          rect: clampWindow(w.rect, planeSize()), origin: w.origin, at: w.openedAt });
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -3082,6 +3123,10 @@ export default function App() {
                 register: registerKeyRef.current ?? 'custom',
                 base: registerKeyRef.current ? undefined : 'guided', // Custom always drifted off Guided (today's defaults)
                 dials: { ...dialsRef.current },
+                // The shell is the second measured axis (spec §4): without it every exported
+                // session filename reads '…-unset-…' and no run can be attributed to the desk it
+                // ran on. Read from the REF — this callback is a connect-time closure.
+                shell: deskRef.current.skin,
               },
             });
             setIsConnecting(false);
@@ -4489,7 +4534,6 @@ export default function App() {
               chrome={windowChrome}
               origin={win.origin}
               onFocus={() => focusWindow(win.id)}
-              onMinimize={() => deskDispatchJ({ type: 'window.minimize', id: win.id })}
               onClose={() => artifactDispatchJ({ type: 'artifact.close', id: a.id })}
               onRevert={(toRev) => {
                 const beforeRev = a.rev;

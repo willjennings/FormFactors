@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { appendEntry, replay, type JournalEntry } from './journal';
-import { JOURNAL_REGISTRY, workspaceReduce, initialWorkspaceState, dialsReduce, initialDialsState } from './registry';
+import { JOURNAL_REGISTRY, workspaceReduce, initialWorkspaceState, dialsReduce, initialDialsState, DEFAULT_DESK_RECT } from './registry';
+import { deskReduce, initialDeskState, programWindowId, artifactWindowId } from '../shell/desk/deskStore';
+import { fitWindows } from '../shell/desk/selectors';
+import { DEFAULT_PROGRAM } from '../scenarios';
 import { reduce as artifactReduce, initialArtifactState } from '../artifacts/artifactStore';
 import { reduce as goalReduce, initialGoalState } from '../goal/goalStore';
 import { validateCombineCall } from '../artifacts/combineTools';
@@ -78,6 +81,44 @@ describe('replay equals live', () => {
     drive({ type: 'goal.clear' });
     vi.setSystemTime(EPOCH + SEPARATION_MS);
     expect((replay(j, JOURNAL_REGISTRY) as any).goal).toEqual(live);
+  });
+
+  it('desk — open, move, minimize, skin, focus, close', () => {
+    vi.setSystemTime(EPOCH);
+    // Starts from the registry's own initial state, which is what `replay` folds onto — a desk
+    // seeded any other way would compare two different origins and prove nothing.
+    let live = initialDeskState(DEFAULT_PROGRAM, DEFAULT_DESK_RECT);
+    let j: JournalEntry[] = [];
+    const drive = (event: any) => { live = deskReduce(live, event); j = appendEntry(j, 'desk', event, j.length + 1); };
+    drive({ type: 'window.open', id: artifactWindowId('a1'), kind: 'artifact', refId: 'a1',
+      rect: { x: 560, y: 80, w: 380, h: 300 }, origin: 'agent', at: 1000 });
+    drive({ type: 'window.move', id: programWindowId(DEFAULT_PROGRAM), rect: { x: 120, y: 90, w: 680, h: 620 } });
+    drive({ type: 'window.minimize', id: programWindowId(DEFAULT_PROGRAM) });
+    drive({ type: 'desk.skin', skin: 'provenance' });
+    drive({ type: 'window.focus', id: programWindowId(DEFAULT_PROGRAM) });   // raises z AND un-minimizes
+    drive({ type: 'window.close', id: artifactWindowId('a1') });
+    // An event naming an unknown id no-ops identically on both sides (spec §1).
+    drive({ type: 'window.minimize', id: artifactWindowId('ghost') });
+    vi.setSystemTime(EPOCH + SEPARATION_MS);
+    expect((replay(j, JOURNAL_REGISTRY) as any).desk).toEqual(live);
+  });
+
+  it('desk — a boot-fit onto a smaller screen replays exactly', () => {
+    vi.setSystemTime(EPOCH);
+    // The registry's initial() hands out the PRE-clamp default rect, so a desk booting onto a
+    // short viewport has to be fitted. The fit is a REAL change to the desk, so App journals one
+    // window.move per fitted window rather than clamping silently: an unjournaled clamp would
+    // leave live and replay disagreeing by exactly that correction, which is the I1 defect.
+    let live = initialDeskState(DEFAULT_PROGRAM, DEFAULT_DESK_RECT);
+    let j: JournalEntry[] = [];
+    const drive = (event: any) => { live = deskReduce(live, event); j = appendEntry(j, 'desk', event, j.length + 1); };
+    const fits = fitWindows(live, { width: 1280, height: 640 });
+    expect(fits.length).toBe(1);                       // the fit must actually be needed here
+    for (const f of fits) drive({ type: 'window.move', id: f.id, rect: f.rect });
+    expect(j.map(e => (e.event as any).type)).toEqual(['window.move']);   // journaled, not silent
+    expect(fitWindows(live, { width: 1280, height: 640 })).toEqual([]);   // and now it settles
+    vi.setSystemTime(EPOCH + SEPARATION_MS);
+    expect((replay(j, JOURNAL_REGISTRY) as any).desk).toEqual(live);
   });
 
   it('dials — twiddle and land on custom', () => {
