@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { SHELL_SKINS, SKIN_KEYS, resolveSkin } from './registry';
+import { SHELL_SKINS, SKIN_KEYS, resolveSkin, describeRung } from './registry';
 
 describe('skins registry', () => {
   it('ships exactly familiar/material/provenance/conversation, each with a label/glyph/ethos/probe', () => {
@@ -38,5 +38,29 @@ describe('skins registry', () => {
 
   it('resolveSkin returns null for an unknown key — no silent fallback to the first skin', () => {
     expect(resolveSkin('windows95')).toBeNull();
+  });
+});
+
+describe('describeRung', () => {
+  it('never prints the bare token', () => {
+    expect(describeRung('none')).not.toBe('none');
+    expect(describeRung('R2')).not.toBe('R2');
+    expect(describeRung('R4')).not.toBe('R4');
+  });
+
+  it('"none" reads as no prior learning presumed', () => {
+    expect(describeRung('none').toLowerCase()).toContain('no prior learning');
+  });
+
+  it('R2 and R4 each name the belief the ladder rung stands for (spec §0b)', () => {
+    // §0b: R2 = "It acts visibly, and I can undo"; R4 = "What it makes is material I keep".
+    expect(describeRung('R2').toLowerCase()).toContain('undo');
+    expect(describeRung('R4').toLowerCase()).toContain('material');
+  });
+
+  it('every registered skin\'s assumesRung renders distinct, non-empty prose', () => {
+    const rendered = new Set(SHELL_SKINS.map(s => describeRung(s.assumesRung)));
+    expect(rendered.size).toBeGreaterThan(0);
+    for (const text of rendered) expect(text.length).toBeGreaterThan(0);
   });
 });

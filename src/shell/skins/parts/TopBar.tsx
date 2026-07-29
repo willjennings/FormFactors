@@ -39,7 +39,7 @@ export function TopBar({ variant, skinKey, skinLabel, skinGlyph, summary, record
 }) {
   if (variant === 'desk') {
     return (
-      <MenuBar {...menu} skinKey={skinKey}
+      <MenuBar {...menu} skinKey={skinKey} skinLabel={skinLabel} skinGlyph={skinGlyph}
         frameClass="border-b border-[#d9cdb8] dark:border-[#3a3229] bg-[#faf6ef]/85 dark:bg-[#211c17]/85 backdrop-blur"
         lead={
           <span className="flex items-baseline gap-2 min-w-0">
@@ -53,7 +53,7 @@ export function TopBar({ variant, skinKey, skinLabel, skinGlyph, summary, record
   }
   if (variant === 'session') {
     return (
-      <MenuBar {...menu} skinKey={skinKey}
+      <MenuBar {...menu} skinKey={skinKey} skinLabel={skinLabel} skinGlyph={skinGlyph}
         frameClass="border-b border-white/10 bg-[#0f151c]/90 backdrop-blur"
         lead={
           <span className="flex items-baseline gap-2 min-w-0">
@@ -67,7 +67,7 @@ export function TopBar({ variant, skinKey, skinLabel, skinGlyph, summary, record
   }
   if (variant === 'minimal') {
     return (
-      <MenuBar {...menu} skinKey={skinKey}
+      <MenuBar {...menu} skinKey={skinKey} skinLabel={skinLabel} skinGlyph={skinGlyph}
         frameClass="bg-transparent"
         lead={
           <span className="flex items-center gap-1.5 text-[11px] font-mono text-[var(--text-secondary)]">
@@ -77,5 +77,5 @@ export function TopBar({ variant, skinKey, skinLabel, skinGlyph, summary, record
     );
   }
   // 'menu' — A · Familiar. The brand where a system menu would be, and a clock on the right.
-  return <MenuBar {...menu} skinKey={skinKey} trail={<Clock />} />;
+  return <MenuBar {...menu} skinKey={skinKey} skinLabel={skinLabel} skinGlyph={skinGlyph} trail={<Clock />} />;
 }

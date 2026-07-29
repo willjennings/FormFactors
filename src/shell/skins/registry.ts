@@ -30,3 +30,13 @@ export const SKIN_KEYS = SHELL_SKINS.map(s => s.key);
 export function resolveSkin(key: string): ShellSkin | null {
   return SHELL_SKINS.find(s => s.key === key) ?? null;
 }
+
+/** Prose for `assumesRung` (spec §0b's ladder), for the band's hover caption — never the bare
+ *  token, which means nothing without having read the spec. R2/R4 name the belief the rung
+ *  stands for ("it acts visibly, and I can undo" / "what it makes is material I keep"); 'none'
+ *  says plainly that the skin presumes no prior learning. */
+export function describeRung(rung: ShellSkin['assumesRung']): string {
+  if (rung === 'none') return 'assumes no prior learning';
+  if (rung === 'R2') return 'assumes you already believe it acts visibly, and you can undo';
+  return 'assumes you already believe what it makes is material you keep'; // R4
+}

@@ -4537,6 +4537,8 @@ export default function App() {
               onSelect={(key) => { setBandOpen(false); applyRegister(key); }}
               onCustom={() => { setBandOpen(false); setDrawerOpen(true); }}
               onClose={() => setBandOpen(false)}
+              skin={desk.skin}
+              onSelectSkin={(key) => { setBandOpen(false); handleSkinSelect(key); }}
             />
           )}
           <CursorResources mode={isPainting ? 'painting' : 'off'} color="#3b82f6" />
