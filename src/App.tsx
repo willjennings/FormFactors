@@ -964,7 +964,10 @@ export default function App() {
     // the fresh one alike; clamping only this branch would leave the restore branch (the far
     // more dangerous one — a window can be saved entirely below the fold) unprotected, and a
     // clamp applied here would be invisible to replay. `{ ...DEFAULT_DESK_RECT }` is a defensive
-    // copy: the constant is a shared module export, and nothing may ever hold it live.
+    // copy so THIS desk never aliases the shared constant. The replay path still does —
+    // journal/registry.ts:78 hands the same object to initialDeskState raw — which is safe only
+    // because no rect is ever mutated in place: deskStore.ts:53 replaces the rect object
+    // wholesale and ProgramWindow.tsx:59 builds a fresh one per drag frame.
     ?? initialDeskState(bootProgram, { ...DEFAULT_DESK_RECT }));
   // The desk mirrored into a ref, written SYNCHRONOUSLY by every dispatch below. This file's
   // signature failure is clearing state and forgetting the ref (the pendingAction round), so the
@@ -1099,10 +1102,22 @@ export default function App() {
   // compaction, as the spec says.
   //
   // The one thing NOT taken verbatim is the rect (fix round 1, I2): ARTIFACT_BASE_RECT is fixed
-  // pixels, x 560 + w 380, so on a 900-wide plane — which passes the device gate, it only blocks
-  // minDimension < 600 — the whole control cluster lands off-plane, and an artifact window has
-  // no drag handle to recover with. It is clamped BEFORE dispatch so the fitted rect travels
-  // inside the journaled event and replay stays exact.
+  // pixels — x 560, w 380 — where the index cascade it replaced was viewport-relative, so the
+  // first window needs a 940-wide plane and each cascade step another 16. Past that the control
+  // cluster is off-plane, and an artifact window has no drag handle to recover with. It is
+  // clamped BEFORE dispatch, so the fitted rect travels inside the journaled event and replay
+  // stays exact.
+  //
+  // Where that actually bites, measured rather than assumed. On the ORDINARY path it does not:
+  // `isWideEnough` (search that name, App.tsx:1853 today) turns the whole desk away below
+  // `innerWidth >= 1024`, and MAX_ARTIFACTS = 6 cascades reach a right edge of only 1020. It
+  // bites on the path this project exists for — the "Continue anyway — testbed mode" button
+  // (App.tsx:4435) sets `bypassDeviceGate`, which is that same effect's dependency, so the desk
+  // renders at any width. Driven at 900 with the clamp reverted, both demo artifacts had their
+  // close buttons past the edge (right edges 927 and 943 against a 900 plane); with it they sit
+  // at 887. Note this is NOT the `minDimension < 600` rule (App.tsx:1555) — that one is the
+  // mobile overlay, a different control. And if a later skin ever gives windows a region
+  // narrower than the full plane, the same case arrives through the front door.
   //
   // It also makes StrictMode's double mount safe: pass 1 dispatches and writes deskRef
   // synchronously, so pass 2 reconciles against a desk that is already in sync and returns

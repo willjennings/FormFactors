@@ -5,10 +5,12 @@
 // A second store could only disagree with that one, and disagree invisibly, since replay cannot
 // see sessionStorage.
 //
-// `clampWindow` is the one geometry rule: callers are ProgramWindow's drag (src/shell/
-// ProgramWindow.tsx), `fitWindows` (src/shell/desk/selectors.ts), and App's program-open and
-// artifact-reconcile paths — in every case the clamped rect ends up inside a journaled event, so
-// what is on screen and what replays are the same rect.
+// `clampWindow` is the one geometry rule, and it has exactly four callers: App's program-open
+// (App.tsx:1042) and artifact-reconcile (App.tsx:1137) paths, `fitWindows`
+// (shell/desk/selectors.ts:111), and ProgramWindow's drag (shell/ProgramWindow.tsx:59). The
+// first three put the clamped rect straight inside a journaled event. The drag is the one
+// exception worth naming: its intermediate frames are state-only (deskDispatchLive), and only
+// the settled rect — the same clamped rect, at rest — is journaled.
 export type WindowRect = { x: number; y: number; w: number; h: number };
 
 export const MIN_W = 320;
