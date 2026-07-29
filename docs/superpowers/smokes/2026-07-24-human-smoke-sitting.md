@@ -113,6 +113,48 @@ back**: `App.tsx`'s three reconnect effects call `providerRef.current.close()` t
 for any live sitting: after a swap, type into the omnibox (or tap the mic) to start a fresh session
 before continuing.
 
+## Part 9 — Desktop-metaphor shell (owed from the 2026-07-28 plan, Task 9)
+
+Task 9's browser drive covered SH-1…SH-11 **keylessly** at 1600×1000 against a stub-env dev server
+and a stubbed realtime socket — 10 PASS, 1 PARTIAL, 0 FAIL; full write-up in
+`docs/superpowers/smokes/2026-07-29-shell-browser-drive.md` and
+`.superpowers/sdd/2026-07-28-desktop-metaphor-shell/task-9-report.md`. Geometry preservation across
+all four skins, `restoreVia` in every skin, re-measurement after a switch, the journal round-trip,
+`New desk`, the ask card + candidate chips in all four skins (via the real gate and via a real
+`ask_content` tool call), and `arm.shell` + `shell_switch` in the export were all confirmed against
+the real DOM. The rows below are the part a stub cannot stand in for.
+
+| # | Test | Verifies | Result |
+| --- | --- | --- | --- |
+| SK-1 | Mid-session skin switch with a live model (Guided, any backend): switch Familiar → Provenance mid-turn, then ask "what am I pointing at?" while hovering an element | The re-measure actually reaches the MODEL, not just the DOM: the layout hint sent after `desk.skin` changes carries the new bboxes and the model names the hovered element correctly under the new chrome | pending — **gated by the reconnect blocker below** |
+| SK-2 | Minimize the program window during a live session, then say "make this bold" while pointing at empty desk | The honest floor: with no window on screen the model must not act on a stale layout. Task 9 proved the app sends NO layout update on a program-window minimize and the model's last-known layout still names Word Ribbon / Save button / Document body at live coordinates — this row is whether a real model then claims to act on them | pending |
+| SK-3 | Same as SK-2 but restore the window mid-turn | Restore does push 3 fresh layout hints (observed keylessly); this is whether the model recovers within the turn or keeps answering from the frozen picture | pending |
+| SK-4 | Run one live session per skin (four short sessions), export each | Four session files whose `arm.shell` differs and whose filenames differ by the shell segment — the second measured axis is attributable end to end. Keyless drive confirmed a single file carries `arm.shell:'familiar'` + four `shell_switch` events; this is the four-arm version | pending |
+| SK-5 | Provenance skin, live: let the model call a tool and let an ask go unanswered for ~30 s | The timeline's `waiting` lane is the honest present tense against a real model's pacing, and the `agent` row's raw tool name (`ask_content`) is judged by a participant, not by us | pending |
+| SK-6 | Conversation skin, live, by voice | Its probe ("does centring conversation reduce pointing?") is only measurable with a model to talk to; also whether the veil + un-moved windows read as "orbiting" to anyone who is not us | pending |
+
+**Known blocker — SK-1 (and R1e, and any owed row needing a program swap, register switch, dial
+change or backend switch) cannot run until this is fixed.** Re-driven on 2026-07-29 against the
+Azure provider, and it is worse than previously logged:
+
+- The socket closes and **never reopens** (`ws opens 1, closes 1, readyState 3`, `messages
+  delivered since the swap: 0`), as already known.
+- **The UI still reads `live`** with the green dot, and the burn meter's **frame counter keeps
+  climbing** (`29f → 103f` over 8 s) while nothing is sent — `withTrafficCount` increments before
+  the provider's `readyState === OPEN` check drops the frame.
+- **It is unrecoverable from the UI.** Two mic clicks (end, then start) leave it at `live · 69f ·
+  9h`, `ws opens 1`. Only a page reload recovers. The old workaround in Part 8 ("tap the mic to
+  start a fresh session") **does not work on the Azure backend**.
+- Two independent causes, both live: (a) `src/voice/azure.ts:191-201` — an app-initiated `close()`
+  sets `closed = true` first, so `ws.onclose`'s `if (!closed) cb.onClose()` suppresses the callback
+  and `setIsLive(false)` never runs; (b) `src/App.tsx:3061` — `startLiveSession`'s
+  `if (isLive || connectInFlightRef.current) return;` reads the render-scope `isLive`, and the
+  `setTimeout(startLiveSession, 800)` in each reconnect effect holds the closure from the render
+  where it was `true`. `isLiveRef` already exists at `App.tsx:512-513` and is used two lines away at
+  525 and 1027. Fixing (b) alone restores Gemini (whose `gemini.ts:137` calls `cb.onClose()`
+  unconditionally, so that backend at least shows `off` and can be restarted by hand); Azure needs
+  (a) as well.
+
 ## Log
 
 ### Part 1 — Register system (keyless), 2026-07-24, HEAD ac5238e
