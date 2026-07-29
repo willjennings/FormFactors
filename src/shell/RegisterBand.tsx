@@ -14,11 +14,13 @@ import { Button } from '../ui/Button';
 // path).
 //
 // The two rows are deliberately independent axes (spec framing): register is INTERACTION STYLE,
-// skin is FURNITURE. Digits 1-5 still select a register only — bandKeys.ts's notchCount is called
-// with REGISTERS.length + 1 and knows nothing about the skin row. Extending digit chords to cover
-// all 9 notches is a real contract change (which digit means which skin?) and is deliberately
-// deferred; skin notches are reachable by click or by tabbing to them and pressing Enter/Space,
-// same as any other button.
+// skin is FURNITURE. Digits 1-5 select a register ONLY — bandKeys.ts's notchCount is called with
+// BAND_NOTCH_COUNT (register/registry.ts) and knows nothing about the skin row. This is now a
+// PERMANENT contract, not a deferral: a human ruling (2026-07-29) settled it and spec §4 was
+// amended to match, precisely because folding the skin row into digit chords is a real contract
+// change (which digit means which skin?) that a silent "later" would have made someone re-decide
+// under pressure. Skin notches are reachable by click or by tabbing to them and pressing
+// Enter/Space, same as any other button — never by number.
 type Hover =
   | { kind: 'register'; index: number }
   | { kind: 'custom' }

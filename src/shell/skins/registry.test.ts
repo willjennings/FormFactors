@@ -58,9 +58,11 @@ describe('describeRung', () => {
     expect(describeRung('R4').toLowerCase()).toContain('material');
   });
 
-  it('every registered skin\'s assumesRung renders distinct, non-empty prose', () => {
+  it('every registered skin\'s assumesRung renders distinct, non-empty prose — one string per ' +
+     'distinct rung, not a coincidental collision between two different rungs\' sentences', () => {
+    const distinctRungs = new Set(SHELL_SKINS.map(s => s.assumesRung)).size;
     const rendered = new Set(SHELL_SKINS.map(s => describeRung(s.assumesRung)));
-    expect(rendered.size).toBeGreaterThan(0);
+    expect(rendered.size).toBe(distinctRungs);
     for (const text of rendered) expect(text.length).toBeGreaterThan(0);
   });
 });

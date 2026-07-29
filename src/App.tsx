@@ -43,7 +43,7 @@ import {
   ACT_TOOL,
 } from './scenarios';
 import type { ProgramId, ElementCategory, MockDoc, Program } from './scenarios';
-import { DEFAULT_DIALS, REGISTERS, resolveDials, matchRegister, diffDials, registerSection } from './register/registry';
+import { DEFAULT_DIALS, REGISTERS, BAND_NOTCH_COUNT, resolveDials, matchRegister, diffDials, registerSection } from './register/registry';
 import type { DialValues } from './register/types';
 import { visibleSuggestions } from './register/gates';
 import { bandKeyAction } from './register/bandKeys';
@@ -2976,8 +2976,10 @@ export default function App() {
       // Register band chord — MUST run before quick-fire: an open band swallows digits
       // (they pick a notch), a closed band lets them fall through to quick-fire below.
       // The two grammars never contend because bandKeyAction only claims digits while
-      // bandOpenRef.current is true (see bandKeys.ts's pure contract).
-      const act = bandKeyAction(e.key, isEditableTarget(e.target), bandOpenRef.current, REGISTERS.length + 1);
+      // bandOpenRef.current is true (see bandKeys.ts's pure contract). BAND_NOTCH_COUNT is the
+      // register row + Custom ONLY — the band's shell-skin row never receives digits, permanently
+      // (spec §4; see registry.ts's BAND_NOTCH_COUNT doc comment).
+      const act = bandKeyAction(e.key, isEditableTarget(e.target), bandOpenRef.current, BAND_NOTCH_COUNT);
       if (act === 'open') { setBandOpen(true); e.preventDefault(); return; }
       if (act === 'close') { setBandOpen(false); return; }
       if (typeof act === 'number') {

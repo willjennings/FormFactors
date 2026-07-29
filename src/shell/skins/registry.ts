@@ -34,9 +34,21 @@ export function resolveSkin(key: string): ShellSkin | null {
 /** Prose for `assumesRung` (spec §0b's ladder), for the band's hover caption — never the bare
  *  token, which means nothing without having read the spec. R2/R4 name the belief the rung
  *  stands for ("it acts visibly, and I can undo" / "what it makes is material I keep"); 'none'
- *  says plainly that the skin presumes no prior learning. */
+ *  says plainly that the skin presumes no prior learning.
+ *
+ *  A `switch` with a `never`-typed default, not an `if/if/else` fallback: §0b's ladder has six
+ *  rungs (R0-R5) and only three are modelled here, so the day `ShellSkin['assumesRung']` widens
+ *  — a fifth skin declaring `assumesRung: 'R3'`, say — an `else` branch would silently render the
+ *  R4 sentence: not blank, not a crash, a confident wrong claim about what the user is assumed to
+ *  already believe. On a project whose thesis is never presenting something false, that is worse
+ *  than an empty caption. The `never` assignment below makes an unhandled rung a `tsc --noEmit`
+ *  failure instead — one of the few real compile-time signals available here, since this repo's
+ *  `tsc` does not type-check JSX props or hook values at all. */
 export function describeRung(rung: ShellSkin['assumesRung']): string {
-  if (rung === 'none') return 'assumes no prior learning';
-  if (rung === 'R2') return 'assumes you already believe it acts visibly, and you can undo';
-  return 'assumes you already believe what it makes is material you keep'; // R4
+  switch (rung) {
+    case 'none': return 'assumes no prior learning';
+    case 'R2': return 'assumes you already believe it acts visibly, and you can undo';
+    case 'R4': return 'assumes you already believe what it makes is material you keep';
+    default: { const _exhaustive: never = rung; return _exhaustive; }
+  }
 }

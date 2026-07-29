@@ -46,6 +46,16 @@ export const REGISTERS: RegisterDef[] = [
   },
 ];
 
+/** The number of notches `bandKeyAction` (bandKeys.ts) resolves digits against: the register row
+ *  plus Custom, and NOTHING else — the register band's shell-skin row (RegisterBand.tsx, spec §4)
+ *  deliberately does not receive digit chords, and that is now a permanent contract (human ruling
+ *  2026-07-29, spec §4 amended to match), not a deferral. App.tsx's `bandKeyAction(...)` call
+ *  imports and passes this constant rather than recomputing `REGISTERS.length + 1` inline, so a
+ *  widened `REGISTERS` array — or an attempt to fold the skin row's notches in — changes this one
+ *  place; bandKeys.test.ts pins its literal value so that widening shows up as an explicit test
+ *  edit instead of silent drift. */
+export const BAND_NOTCH_COUNT = REGISTERS.length + 1;
+
 export function resolveDials(key: string): DialValues {
   const r = REGISTERS.find(x => x.key === key);
   if (!r) throw new Error(`unknown register: ${key}`);
