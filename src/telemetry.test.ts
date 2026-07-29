@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { telemetry } from './telemetry';
+import { telemetry, exportConfigString } from './telemetry';
 
 const cfg = {
   backend: 'gemini', autonomy: 'confirm', feedback: 'earcon', program: 'excel', honest: true,
@@ -168,5 +168,32 @@ describe('shell in telemetry (shell skin is a second, independent measured axis)
     telemetry.shellSwitch('conversation', 'provenance', true);
     const after = telemetry.metrics();
     expect(after).toEqual(before);
+  });
+});
+
+describe('exportConfigString (the arm/shell/cfg segment of the download filename)', () => {
+  // Pulled out of exportJSON's `if (typeof window !== 'undefined')` guard, which vitest never
+  // executes here (node, no jsdom) — this is the only way the 'unset' fallbacks are exercised.
+  const base = { backend: 'gemini', autonomy: 'auto-safe', feedback: 'earcon', program: 'word', honest: false,
+    device: { width: 1280, height: 800, touch: false, pointer: 'fine', formFactor: 'desktop' as const, ua: 'test' } };
+  const DEFAULT_DIALS = { honest: false, autonomy: 'confirm' as const, feedback: 'earcon' as const, confirmGoals: false, markings: false, chipDensity: 'full' as const, traceView: 'hidden' as const, teaching: 'off' as const, proactivity: 'never' as const };
+
+  it('renders both register and shell when both are set', () => {
+    const config = { ...base, arm: { register: 'guided', dials: DEFAULT_DIALS, shell: 'material' as const } };
+    expect(exportConfigString(config)).toBe('guided-material-gemini-auto-safe-earcon');
+  });
+
+  it('renders unset for shell when a register is set but no shell', () => {
+    const config = { ...base, arm: { register: 'guided', dials: DEFAULT_DIALS } };
+    expect(exportConfigString(config)).toBe('guided-unset-gemini-auto-safe-earcon');
+  });
+
+  it('renders unset for both when there is no arm at all', () => {
+    const config = { ...base };
+    expect(exportConfigString(config)).toBe('unset-unset-gemini-auto-safe-earcon');
+  });
+
+  it('renders "session" for a null config, matching current behaviour', () => {
+    expect(exportConfigString(null)).toBe('session');
   });
 });

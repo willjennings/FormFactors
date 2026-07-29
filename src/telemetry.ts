@@ -89,6 +89,18 @@ export function detectDevice(): DeviceInfo {
   return { width, height, touch, pointer, formFactor, ua: typeof navigator !== 'undefined' ? navigator.userAgent : '' };
 }
 
+/** The `arm`/`shell`/`cfg` segment of exportJSON's download filename, pulled out as a pure
+ *  function so it is unit-testable without a DOM: exportJSON's construction of it lives inside
+ *  an `if (typeof window !== 'undefined')` guard that vitest (node, no jsdom) never executes, so
+ *  logic left inline there is invisible to the suite. Both fallbacks are 'unset', never a
+ *  guessed default — an absent register or shell must read as genuinely unset. */
+export function exportConfigString(config: SessionConfig | null): string {
+  if (!config) return 'session';
+  const arm = config.arm?.register ?? 'unset';
+  const shell = config.arm?.shell ?? 'unset';
+  return `${arm}-${shell}-${config.backend}-${config.autonomy}-${config.feedback}`;
+}
+
 class Telemetry {
   private events: TelemetryEvent[] = [];
   private config: SessionConfig | null = null;
@@ -253,9 +265,7 @@ class Telemetry {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       const ff = this.config?.device.formFactor ?? 'unknown';
-      const arm = this.config?.arm?.register ?? 'unset';
-      const shell = this.config?.arm?.shell ?? 'unset';
-      const cfg = this.config ? `${arm}-${shell}-${this.config.backend}-${this.config.autonomy}-${this.config.feedback}` : 'session';
+      const cfg = exportConfigString(this.config);
       a.href = url;
       a.download = `testbed-${ff}-${cfg}-${this.startedAt}.json`;
       a.click();
