@@ -1,5 +1,29 @@
 import { describe, it, expect } from 'vitest';
 import { SHELL_SKINS, SKIN_KEYS, resolveSkin, describeRung } from './registry';
+import type { ArmAggregate } from '../../eval/armAggregate';
+import { UNDERPOWERED_N } from '../../eval/armAggregate';
+
+/** Same fixture-building approach as register/registry.test.ts: `winsWhen` consumes an
+ *  `ArmAggregate` directly, so tests build one by hand rather than routing through
+ *  `deriveAttempts` + `armAggregate`. */
+function mkAgg(n: number, opts: Partial<{
+  completion: number; corrected: number; wrong: number; refusal: number; ask: number;
+  abandoned: number; ungradeable: number; medianTurns: number | null; medianDurationMs: number | null;
+}> = {}): ArmAggregate {
+  const rate = (v = 0) => ({ value: v, n });
+  return {
+    n,
+    completion: rate(opts.completion),
+    corrected: rate(opts.corrected),
+    wrong: rate(opts.wrong),
+    refusal: rate(opts.refusal),
+    ask: rate(opts.ask),
+    abandoned: rate(opts.abandoned),
+    ungradeable: rate(opts.ungradeable),
+    medianTurns: { value: opts.medianTurns ?? null, n },
+    medianDurationMs: { value: opts.medianDurationMs ?? null, n },
+  };
+}
 
 describe('skins registry', () => {
   it('ships exactly familiar/material/provenance/conversation, each with a label/glyph/ethos/probe', () => {
@@ -64,5 +88,77 @@ describe('describeRung', () => {
     const rendered = new Set(SHELL_SKINS.map(s => describeRung(s.assumesRung)));
     expect(rendered.size).toBe(distinctRungs);
     for (const text of rendered) expect(text.length).toBeGreaterThan(0);
+  });
+});
+
+describe('winsWhen', () => {
+  const withWinsWhen = SHELL_SKINS.filter(s => s.winsWhen);
+
+  it('every skin declares winsWhen (all four probes have SOME machine-checkable translation)', () => {
+    expect(withWinsWhen.map(s => s.key)).toEqual(['familiar', 'material', 'provenance', 'conversation']);
+  });
+
+  it('every skin with winsWhen returns underpowered — BY NAME — when either side is below ' +
+     'threshold, iterated so a fifth entry is covered on arrival', () => {
+    const strong = mkAgg(UNDERPOWERED_N, { medianDurationMs: 100, corrected: 0.2, completion: 0.5 });
+    const weak = mkAgg(UNDERPOWERED_N - 1, { medianDurationMs: 100, corrected: 0.2, completion: 0.5 });
+    for (const s of withWinsWhen) {
+      const armWeak = s.winsWhen!(weak, strong);
+      expect(armWeak.verdict).toBe('underpowered');
+      expect(armWeak.because).toContain(`arm n=${UNDERPOWERED_N - 1}`);
+
+      const controlWeak = s.winsWhen!(strong, weak);
+      expect(controlWeak.verdict).toBe('underpowered');
+      expect(controlWeak.because).toContain(`control n=${UNDERPOWERED_N - 1}`);
+    }
+  });
+
+  it('no predicate throws on a zero-n aggregate, and reports it underpowered', () => {
+    const zero = mkAgg(0);
+    for (const s of withWinsWhen) {
+      expect(() => s.winsWhen!(zero, zero)).not.toThrow();
+      expect(s.winsWhen!(zero, zero).verdict).toBe('underpowered');
+    }
+  });
+
+  it('familiar never returns met — "legible" is unmeasured, only "fastest" is checked', () => {
+    const familiar = SHELL_SKINS.find(s => s.key === 'familiar')!;
+    const control = mkAgg(20, { medianDurationMs: 1000 });
+    const arm = mkAgg(20, { medianDurationMs: 100 }); // decisively faster; still not-met
+    const v = familiar.winsWhen!(arm, control);
+    expect(v.verdict).toBe('not-met');
+    expect(v.because).toContain('100');
+    expect(v.because).toContain('1000');
+    expect(v.because.toLowerCase()).toContain('legible');
+  });
+
+  it('material never returns met — nothing in ArmAggregate maps to "what people make"', () => {
+    const material = SHELL_SKINS.find(s => s.key === 'material')!;
+    const control = mkAgg(20, { completion: 0.2 });
+    const arm = mkAgg(20, { completion: 0.9 });
+    const v = material.winsWhen!(arm, control);
+    expect(v.verdict).toBe('not-met');
+    expect(v.because).toContain('n=20');
+    expect(v.because.toLowerCase()).toContain('what people make');
+  });
+
+  it('provenance never returns met — "correction rate" is checked, "trust" is named as unmeasured', () => {
+    const provenance = SHELL_SKINS.find(s => s.key === 'provenance')!;
+    const control = mkAgg(20, { corrected: 0.30 });
+    const arm = mkAgg(20, { corrected: 0.10 });
+    const v = provenance.winsWhen!(arm, control);
+    expect(v.verdict).toBe('not-met');
+    expect(v.because).toContain('0.10');
+    expect(v.because).toContain('0.30');
+    expect(v.because.toLowerCase()).toContain('trust');
+  });
+
+  it('conversation never returns met — nothing in ArmAggregate maps to "pointing"', () => {
+    const conversation = SHELL_SKINS.find(s => s.key === 'conversation')!;
+    const control = mkAgg(20, { completion: 0.5 });
+    const arm = mkAgg(20, { completion: 0.5 });
+    const v = conversation.winsWhen!(arm, control);
+    expect(v.verdict).toBe('not-met');
+    expect(v.because.toLowerCase()).toContain('pointing');
   });
 });

@@ -51,3 +51,8 @@ export interface Attempt {
   // prevent). Present only when `outcome === 'ungradeable'`; null otherwise.
   ungradeableReason: string | null;
 }
+
+// The verdict a `winsWhen` predicate (Task 5, spec §4) returns when checking a register or shell
+// skin's pre-registered `probe` against an `ArmAggregate`. `because` is not optional prose — every
+// verdict must name the actual numbers compared, or it is exactly the unearned flattery §5 forbids.
+export type ProbeVerdict = { verdict: 'met' | 'not-met' | 'underpowered'; because: string };
