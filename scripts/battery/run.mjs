@@ -22,10 +22,12 @@
 //           `abandoned` — a real, honest measurement of the harness itself, not a fabricated pass.
 //           This is what THE GATE (task-9 brief) runs.
 //   --live  Real spend. Starts `npm run dev` (which reads `.env` itself — this script never does)
-//           and drives real utterances against the real model. NOT run by this task — Task 10's
-//           job, under its own protocol. See the KNOWN LIMITATION comment on `startViteOrDev`
-//           below: `server.ts` hardcodes port 3000, which is in tension with "a dedicated port"
-//           for this mode; flagged, not silently worked around.
+//           and drives real utterances against the real model. Task 10's job, under its own
+//           protocol. `server.ts` reads `PORT` from the environment (default 3000, unchanged) —
+//           `--live` spawns it on its own dedicated `getFreePort()` pick (honoring
+//           `FORBIDDEN_PORTS`, so it can never land on the human's real-keyed :3000 LAN dev server
+//           or the :3002 one documented elsewhere in this repo) via `PORT=<port> npm run dev`, and
+//           waits on THAT port. See `startViteOrDry` below.
 //
 // SAFETY: this script does real I/O (spawns processes, writes files) even in --dry mode, and
 // --live spends real API tokens. It must NEVER run inside the test suite or a CI pipeline — the
@@ -52,10 +54,12 @@ const MAX_CONSECUTIVE_FAILURES = 2;
 
 // M2 (task-9 review round 1): NOT a brief requirement — the brief names no ports. These are
 // carried over from this project's own operational history: 3002 is documented in this repo's
-// smoke docs as a real-keyed dev server; 3000 is `server.ts`'s hardcoded `--live` port (see
-// `startViteOrDry`). `getFreePort()` (used for `--dry`'s vite port and the CDP port, in EITHER
-// mode) must never land on either by accident — stated here as this script's own operational
-// discipline, not as something the brief mandated.
+// smoke docs as a real-keyed dev server; 3000 is `server.ts`'s DEFAULT port (still its default
+// when `PORT` is unset — task-10 made it env-overridable, not renumbered) and is where this
+// machine's human-driven, real-keyed LAN dev server actually runs (see `startViteOrDry`).
+// `getFreePort()` (used for the vite/dev-server port in EITHER mode, and the CDP port) must never
+// land on either by accident — stated here as this script's own operational discipline, not as
+// something the brief mandated.
 const FORBIDDEN_PORTS = new Set([3000, 3002]);
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -229,32 +233,42 @@ function isPortOccupied(port, timeoutMs = 1000) {
   });
 }
 
-/** KNOWN LIMITATION (documented rather than silently worked around — see the file header):
- *  `server.ts` (the `npm run dev` entry --live uses) hardcodes `PORT = 3000` with no env override,
- *  so --live cannot actually honor "a dedicated port" the way --dry's raw `vite` invocation can. It
- *  does not attempt to patch `server.ts`, which would be a source change outside this task's
- *  authorized scope (App.tsx's `?register=` param is the only one) — Task 10 needs to resolve this
- *  before a live run can safely proceed unattended.
+/** Task 10 (env-overridable port — the KNOWN LIMITATION this docstring used to describe is now
+ *  resolved): `server.ts` reads `PORT` from the environment (`Number(process.env.PORT ?? 3000)`
+ *  — default unchanged), so `--live` no longer has to fight `--dry`'s "own dedicated port"
+ *  discipline. Both modes now call `getFreePort()` in `main()` for the SAME `vitePort` variable;
+ *  `--live` passes it through as `PORT=<vitePort>` to `npm run dev`'s environment and waits on
+ *  that port, never on a hardcoded :3000 — so it can never collide with (or need to refuse
+ *  because of) the human's real-keyed LAN dev server actually bound there.
+ *
+ *  The port-collision guards below predate this fix and are kept, now parameterized by whichever
+ *  port this run actually picked rather than a hardcoded one:
  *
  *  C4 (task-9 review round 1, reviewer-ruled — this docstring PREVIOUSLY claimed a real refusal
  *  existed here and it did not; `waitForHttp` happily succeeds against a pre-existing server, so
- *  `--live` silently drove whatever real-keyed dev session was already on :3000). The check below
- *  is the actual fix: a real TCP probe of :3000 BEFORE spawning anything, refusing loudly if
- *  something is already there rather than reusing it.
+ *  `--live` could silently drive whatever real-keyed dev session was already on the target port).
+ *  The check below is the actual fix: a real TCP probe of the target port BEFORE spawning
+ *  anything, refusing loudly if something is already there rather than reusing it.
  *
  *  N6 (task-9 review round 2) / P3 (task-9 review round 3, corrected — N6's own disclosure
  *  contained a false safety claim): there is an inherent check-then-start race between
  *  `isPortOccupied`'s probe and `npm run dev`'s own bind a few lines below — something could start
- *  listening on :3000 in that window. N6 claimed "neither [failure] silently drives a session this
- *  script didn't intend to start" — FALSE for the "`waitForHttp` talks to the other, pre-existing
- *  server" branch: that is EXACTLY C4's failure mode, reopened through the timing gap C4's own
- *  probe closes only for the moment before spawn. The race itself is not eliminated (that would
- *  need an atomic probe-and-reserve, which TCP does not offer without actually binding the port
- *  first) — but `waitForHttp` below is now called WITH this function's own `proc` handle
+ *  listening on the target port in that window. N6 claimed "neither [failure] silently drives a
+ *  session this script didn't intend to start" — FALSE for the "`waitForHttp` talks to the other,
+ *  pre-existing server" branch: that is EXACTLY C4's failure mode, reopened through the timing gap
+ *  C4's own probe closes only for the moment before spawn. The race itself is not eliminated (that
+ *  would need an atomic probe-and-reserve, which TCP does not offer without actually binding the
+ *  port first) — but `waitForHttp` below is now called WITH this function's own `proc` handle
  *  (`expectProc`, its own doc), which closes the specific failure this paragraph used to
  *  mis-describe as already closed: a response is trusted only while the process that was supposed
  *  to produce it is still alive, so a `npm run dev` that lost the bind race and exited can never
- *  have its silence mistaken for the other server's success. */
+ *  have its silence mistaken for the other server's success.
+ *
+ *  Since `vitePort` is now a freshly picked `getFreePort()` value (honoring `FORBIDDEN_PORTS`,
+ *  which excludes 3000/3002 outright) rather than a hardcoded, human-occupied port, the pre-spawn
+ *  `isPortOccupied` probe below is closer to belt-and-suspenders than the primary defense C4
+ *  originally needed — but it costs nothing to keep, and a free-port pick racing something else
+ *  for the same port is still a real (if narrow) possibility (see `getFreePort`'s own doc). */
 async function startViteOrDry(mode, vitePort) {
   if (mode === 'dry') {
     const proc = spawn('npx', ['vite', '--port', String(vitePort), '--strictPort'], {
@@ -275,20 +289,24 @@ async function startViteOrDry(mode, vitePort) {
     await waitForHttp(`http://localhost:${vitePort}/`, 20000, 'dry vite server', proc);
     return { proc, url: `http://localhost:${vitePort}` };
   }
-  // --live
-  if (vitePort !== 3000) {
-    console.warn(`[battery] --live ignores the picked free port (${vitePort}) — server.ts hardcodes 3000 (see KNOWN LIMITATION above).`);
-  }
-  if (await isPortOccupied(3000)) {
+  // --live: `server.ts` reads `.env` itself (this script never does) AND now reads `PORT` from
+  // the environment, so a dedicated `vitePort` reaches it the same way it always reached `--dry`'s
+  // raw `vite` invocation.
+  if (await isPortOccupied(vitePort)) {
     throw new Error(
-      'refusing to start --live: something is already listening on :3000. `server.ts` hardcodes ' +
-      'that port and bakes in real keys from .env — this script will not silently drive (and ' +
-      'possibly clobber the desk state of) a pre-existing session. Stop whatever is on :3000 first.',
+      `refusing to start --live: something is already listening on :${vitePort}, the dedicated ` +
+      'port this run just picked for its own server.ts instance. Extremely unlikely for a fresh ' +
+      '`getFreePort()` pick, but this script will not silently drive (and possibly clobber the ' +
+      'desk state of) whatever that is.',
     );
   }
-  const proc = spawn('npm', ['run', 'dev'], { cwd: ROOT, stdio: 'ignore', env: process.env });
-  await waitForHttp('http://localhost:3000/', 20000, 'live dev server', proc);
-  return { proc, url: 'http://localhost:3000' };
+  const proc = spawn('npm', ['run', 'dev'], {
+    cwd: ROOT,
+    stdio: 'ignore',
+    env: { ...process.env, PORT: String(vitePort) },
+  });
+  await waitForHttp(`http://localhost:${vitePort}/`, 20000, 'live dev server', proc);
+  return { proc, url: `http://localhost:${vitePort}` };
 }
 
 function killProc(proc) {
@@ -955,7 +973,9 @@ async function main() {
   console.log(`[battery] mode=${mode} sessions=${plan.length} outDir=${outDir}`);
 
   const cdpPort = await getFreePort();
-  const vitePort = mode === 'dry' ? await getFreePort() : 3000;
+  // Task 10: both modes now get their own dedicated free port — server.ts's `PORT` env override
+  // makes `--live` able to honor this the same way `--dry`'s raw `vite` invocation always could.
+  const vitePort = await getFreePort();
   const userDataDir = path.join(os.tmpdir(), `ff-battery-${runId}`);
 
   const browserProc = spawnBrowser(cdpPort, userDataDir);
