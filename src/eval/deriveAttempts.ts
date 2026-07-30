@@ -317,9 +317,42 @@ export function deriveAttempts(events: TelemetryEvent[]): Attempt[] {
       }
 
       case 'action': {
-        const p = ensurePending();
+        let p = ensurePending();
         p.sawAction = true;
         p.lastT = Math.max(p.lastT, ev.t);
+        // C3 fix (fix round 4, reviewer-flagged "cross-exchange contamination"): round 3's split
+        // (below, Case A) is only honest when NO settling `turn` event has fired for this pending
+        // since the rejection — i.e. this really is the same still-open, never-yet-identified
+        // window the rejection itself opened. `p.turns > 0` means the rejection's OWN turn ALREADY
+        // settled (the common shape: reject → its turn, tool_call, nothing else decided → pending
+        // stays open awaiting more — then a completely SEPARATE ordinary exchange's commit arrives
+        // here). Guard 1 in the `turn` case above is supposed to catch exactly this on the NEXT
+        // turn event — but round 3's unconditional `p.rejectedPending = false` (a few lines down)
+        // fires first (ordering discovery: a commit always precedes its own turn), so guard 1 never
+        // gets the chance: by the time the separate exchange's OWN turn event arrives, this window
+        // already looks decided, and that turn silently piles its identity/turns/duration onto the
+        // stale pending — contaminating a CORRECT refusal record and discarding the real, available
+        // identity of the second exchange. Case B below is guard 1's seal, just triggered by the
+        // signal that actually arrives first on this shape (the commit) instead of the one that
+        // doesn't get a turn first (a second `turn` event): seal the rejection immediately, using
+        // `p.turns`/`p.settledMs` exactly as they stand — guaranteed to reflect ONLY the rejection's
+        // own settled turn, never a later one, because guard 1 always intercepts any SECOND turn
+        // event before a third could ever touch these fields, so at most one turn has touched `p`
+        // by the time any `action` event reaches here with `rejectedPending` still true. Then open
+        // a fresh pending for this commit — it gets its own real identity from its own, still-to-
+        // come `turn` event, exactly like any ordinary exchange; no `-split` placeholder needed
+        // here, because (unlike Case A) a real identity genuinely exists and simply hasn't arrived
+        // yet.
+        if (ev.decision === 'commit' && p.rejectedPending && ev.verb !== p.rejectedVerb && p.turns > 0) {
+          const { outcome, reason } = resolve(p, TOOL_CALL_NOTHING); // sawAction is true (the
+            // rejection itself), so this always resolves via the `rejectedPending` branch.
+          settle(p, outcome, reason);
+          pending = null;
+          p = ensurePending(); // fresh pending for this commit — re-stamp what the top of this
+                                // case already stamped on the now-sealed old `p`
+          p.sawAction = true;
+          p.lastT = Math.max(p.lastT, ev.t);
+        }
         p.verb = ev.verb;
         if (ev.decision === 'witness') {
           p.witnessed = true;
@@ -348,6 +381,11 @@ export function deriveAttempts(events: TelemetryEvent[]): Attempt[] {
           // rejection, and this commit's own outcome. Unlike guard 1's cross-turn seal, this does
           // NOT eagerly push a record here — there is no second `turn` event yet to supply this
           // commit its own identity, so both halves stay pending together until one arrives.
+          //
+          // C3 fix (fix round 4): this branch is now ONLY reachable in the `p.turns === 0` shape —
+          // Case B above already sealed-and-reset the `p.turns > 0` shape before this line ever
+          // runs, so `p.rejectedPending` is guaranteed false here whenever Case B fired. The check
+          // below is therefore exactly Case A: a genuine same-window, no-turn-yet mismatch.
           if (p.rejectedPending && ev.verb !== p.rejectedVerb) {
             p.splitRejectedVerb = p.rejectedVerb;
           }

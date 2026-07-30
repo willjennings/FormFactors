@@ -296,6 +296,36 @@ describe('rule 5 — {error} refusal (action decision: rejected)', () => {
       id: 't1', request: 'add a heading', verb: 'set_heading', outcome: 'completed',
     });
   });
+
+  // ========================================================================================
+  // C3 (fix round 4, reviewer-flagged) — cross-exchange contamination. Round 3's unconditional
+  // `p.rejectedPending = false` on any commit fired BEFORE guard 1 (the `turn` case's seal) ever
+  // got a chance to catch the common shape: reject → its own turn (settles, nothing decided,
+  // pending stays open) → a totally separate ordinary exchange's commit → its own turn. Guard 1
+  // only fires on a SECOND turn event; here the intervening event is a COMMIT, which round 3
+  // cleared `rejectedPending` on unconditionally, so by the time the second exchange's own turn
+  // arrived, the window already looked "decided" and silently absorbed its turns/duration —
+  // contaminating a correct refusal record and discarding the second exchange's real identity.
+  // ========================================================================================
+  it('C3 — reject, its own settled turn, then a SEPARATE ordinary exchange: the refusal stays clean (its own turns/duration) and the second exchange keeps its real identity', () => {
+    const events = [
+      sessionStart(0, 'word'),
+      action(100, 'insert_object', 'rejected'),
+      turn(105, 't1', 'insert a chart', 'tool_call', 50, 20), // the rejection's OWN turn settles here — nothing decided, pending stays open
+      action(200, 'set_heading', 'commit'), // a completely separate, later, ordinary exchange
+      turn(205, 't2', 'add a heading', 'tool_call', 50, 30),
+    ];
+    const attempts = deriveAttempts(events);
+    expect(attempts).toHaveLength(2);
+    expect(attempts[0]).toMatchObject({
+      id: 't1', request: 'insert a chart', verb: 'insert_object', outcome: 'refused-honestly',
+      turns: 1, durationMs: 20, // NOT contaminated by the second exchange's turns/duration
+    });
+    expect(attempts[1]).toMatchObject({
+      id: 't2', request: 'add a heading', verb: 'set_heading', outcome: 'completed',
+      turns: 1, durationMs: 30, // the second exchange's REAL identity/turns/duration, not a zeroed -split placeholder
+    });
+  });
 });
 
 // ==========================================================================================
