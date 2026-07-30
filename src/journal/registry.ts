@@ -82,7 +82,15 @@ export function dialsReduce(s: DialsState, e: DialsEvent): DialsState {
 // ---- desk: window inventory + skin as ONE store (same reasoning as workspace, above) ----
 // Unified deliberately: as separate stores, a skin could restore without its windows, or windows
 // without their skin, and disagree with each other. One state, no disagreement.
-export const DEFAULT_DESK_RECT: WindowRect = { x: 48, y: 48, w: 680, h: 620 }; // App.tsx boot rect
+// The boot rect for a program window (App.tsx clamps it against the live plane before it goes
+// into the journaled `window.open`). 536×560, not the 680×620 it was: the narrowest plane the
+// device gate admits is 1024, and 680 wide at x 48 leaves 296px to its right — less than
+// `MIN_W` — so there was nowhere to put the desk's OTHER default, `ARTIFACT_BASE_RECT`, that did
+// not sit on top of the program window's entities. See that constant (shell/desk/selectors.ts)
+// for the full argument and the pinned arithmetic; the two are chosen as a pair and neither can
+// be changed alone. x stays 48 because skin B's 56px source rail is sized against it
+// (parts/SourceRail.tsx).
+export const DEFAULT_DESK_RECT: WindowRect = { x: 48, y: 48, w: 536, h: 560 };
 
 // ---- the registry ----
 export const JOURNAL_REGISTRY: JournalRegistry = {

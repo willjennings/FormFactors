@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { deskReduce, initialDeskState, artifactWindowId, programWindowId } from './deskStore';
 import { barItems, visibleWindows, deskSummary, reconcileArtifacts, fitWindows, ARTIFACT_BASE_RECT } from './selectors';
 import type { DeskState } from './types';
+import { clampWindow, type WindowRect } from '../windowState';
+import { DEFAULT_DESK_RECT } from '../../journal/registry';
+import { MAX_ARTIFACTS } from '../../artifacts/artifactStore';
 
 const R = { x: 48, y: 48, w: 680, h: 620 };
 const open = (s: DeskState, id: string, kind: 'program' | 'artifact', origin: 'you' | 'agent', at: number): DeskState =>
@@ -104,6 +107,38 @@ describe('reconcileArtifacts', () => {
     const a2 = next.windows.find(w => w.id === artifactWindowId('a2'))!;
     expect(a1.rect).toEqual(ARTIFACT_BASE_RECT);
     expect(a2.rect).toEqual({ x: ARTIFACT_BASE_RECT.x + 16, y: ARTIFACT_BASE_RECT.y + 24, w: ARTIFACT_BASE_RECT.w, h: ARTIFACT_BASE_RECT.h });
+  });
+});
+
+// The two rects the desk hands out when the user has not chosen — `placed: false` is now exactly
+// that state, so what they are is a desk-level decision and this is where it is pinned. The pair
+// is the shell branch's C1: a 680-wide program window at x 48 with artifacts at x 560 meant the
+// first artifact any desk ever opened sat on top of the program window's entities, and a click
+// and a hover over the same pixel resolved to different referents.
+describe('default rects', () => {
+  // The narrowest plane the device gate admits (App's `isWideEnough`: innerWidth >= 1024). If they
+  // do not overlap here they do not overlap anywhere the desk is allowed to render.
+  const NARROW = { width: 1024, height: 620 };
+  const overlaps = (a: WindowRect, b: WindowRect) =>
+    a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+
+  it('do not stack the first artifact on the program window at a 1024-wide plane', () => {
+    // Clamped, because that is what App does before either rect reaches a journaled event
+    // (App.tsx's programRect and the artifact reconcile effect).
+    const program = clampWindow(DEFAULT_DESK_RECT, NARROW);
+    const artifact = clampWindow(ARTIFACT_BASE_RECT, NARROW);
+    expect(overlaps(program, artifact)).toBe(false);
+  });
+
+  it('leaves the whole artifact cascade on a 1024-wide plane — no step is clamped away', () => {
+    // MAX_ARTIFACTS is 6, and the cascade steps +16 x per artifact already present. If the last
+    // step needed clamping it would land on the same x as the one before it, which is the one
+    // thing the cascade exists to prevent.
+    const s = reconcileArtifacts(initialDeskState('word', DEFAULT_DESK_RECT),
+      ['a1', 'a2', 'a3', 'a4', 'a5', 'a6'], 100);
+    const artifacts = s.windows.filter(w => w.kind === 'artifact');
+    expect(artifacts).toHaveLength(MAX_ARTIFACTS);
+    for (const w of artifacts) expect(clampWindow(w.rect, NARROW)).toEqual(w.rect);
   });
 });
 

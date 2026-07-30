@@ -109,14 +109,19 @@ describe('replay equals live', () => {
     // short viewport has to be fitted. The fit is a REAL change to the desk, so App journals one
     // window.move per fitted window rather than clamping silently: an unjournaled clamp would
     // leave live and replay disagreeing by exactly that correction, which is the I1 defect.
+    //
+    // The plane has to be short enough that the default actually overflows it, so it is chosen
+    // against DEFAULT_DESK_RECT rather than at random: y 48 + h 560 = 608, so a 560-tall viewport
+    // needs the fit. (It was 640 while the default was 620 tall; the SH2 defaults change made
+    // 640 fit, which would have quietly turned this into a test of nothing.)
     let live = initialDeskState(DEFAULT_PROGRAM, DEFAULT_DESK_RECT);
     let j: JournalEntry[] = [];
     const drive = (event: any) => { live = deskReduce(live, event); j = appendEntry(j, 'desk', event, j.length + 1); };
-    const fits = fitWindows(live, { width: 1280, height: 640 });
+    const fits = fitWindows(live, { width: 1280, height: 560 });
     expect(fits.length).toBe(1);                       // the fit must actually be needed here
     for (const f of fits) drive({ type: 'window.move', id: f.id, rect: f.rect });
     expect(j.map(e => (e.event as any).type)).toEqual(['window.move']);   // journaled, not silent
-    expect(fitWindows(live, { width: 1280, height: 640 })).toEqual([]);   // and now it settles
+    expect(fitWindows(live, { width: 1280, height: 560 })).toEqual([]);   // and now it settles
     vi.setSystemTime(EPOCH + SEPARATION_MS);
     expect((replay(j, JOURNAL_REGISTRY) as any).desk).toEqual(live);
   });

@@ -54,7 +54,23 @@ export function deskSummary(desk: DeskState): { pieces: number; sources: number 
 // against live truth). Offset by +16 x / +24 y per artifact window already present at the time
 // that window is added, so two artifacts arriving in one reconcileArtifacts call land at
 // distinct rects.
-export const ARTIFACT_BASE_RECT: WindowRect = { x: 560, y: 80, w: 380, h: 300 };
+//
+// `x: 600` — chosen against `DEFAULT_DESK_RECT` (journal/registry.ts), not in isolation, and
+// this pair is what the shell branch's C1 was actually made of. The old defaults put a 680-wide
+// program window at x 48 (48…728) and every artifact at x 560 (560…940), so the FIRST artifact a
+// desk ever opened landed on top of the program window's entities — and a click and a hover over
+// the same pixel could resolve to two different referents. Defaults are what the desk chooses
+// when the user has not, which is exactly what `placed: false` means, so this is a desk-level
+// decision and it belongs here.
+//
+// Two properties hold at the narrowest plane the device gate admits (`innerWidth >= 1024`), both
+// pinned in selectors.test.ts:
+//   - the default program rect (48…584) and this rect (600…944) do not overlap — 16px apart, the
+//     same gap the cascade steps by;
+//   - the whole cascade still fits: `MAX_ARTIFACTS` is 6, so the sixth window starts at
+//     600 + 5×16 = 680 and ends at exactly 1024. Wider than 344 and the last one would be
+//     clamped, which is safe but collapses two cascade steps onto one x.
+export const ARTIFACT_BASE_RECT: WindowRect = { x: 600, y: 80, w: 344, h: 300 };
 
 // reconcileArtifacts: pure derived-list reconciliation against liveArtifactIds. Opens a window
 // for every live artifact id that has none (origin 'agent'), removes windows whose kind is
