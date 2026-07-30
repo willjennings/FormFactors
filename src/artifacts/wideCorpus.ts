@@ -3,7 +3,10 @@
 // cells — success rates saturate against it and stop predicting anything). Same MockDoc schema,
 // ~5x entities, deterministic from a seed so battery runs are comparable across invocations and
 // across time. This module has NO knowledge of the `?corpus=wide` URL param — it is a pure
-// generator; src/journal/registry.ts's bootCorpus()/bootArtifactState() decide WHEN to call it.
+// generator; src/journal/registry.ts's isWideCorpusBoot()/bootCorpus() decide whether to seed the
+// document corpus from it, and App.tsx's wide-corpus boot effect decides whether to fold its
+// artifactEvents through the live artifact store (see the comment at that effect for why the
+// artifacts are NOT wired through JOURNAL_REGISTRY.artifacts.initial).
 import type { MockDoc, ProgramId } from '../scenarios';
 import { MERIDIAN } from './seeds';
 import type { ArtifactEvent } from './types';

@@ -122,7 +122,6 @@ import type { Traffic } from './shell/traffic';
 import { openTurn, noteFirstResponse, updateRequest, closeTurn,
   type OpenTurn, type ClosedTurn } from './eval/turns';
 import { idleExceeded } from './shell/idle';
-import { seedCorpus } from './artifacts/seeds';
 import { saveAndLoad } from './artifacts/corpus';
 import { serializeCorpus, serializeArtifacts } from './artifacts/serialize';
 import { initialArtifactState, reduce as artifactReduce, MAX_ARTIFACTS } from './artifacts/artifactStore';
@@ -1017,14 +1016,32 @@ export default function App() {
   // that function is identity-checked against the real initialArtifactState import
   // (registry.test.ts, "no forked behaviour from the live app") and must stay untouched — this
   // effect only runs for a FRESH boot with nothing restored (bootStates?.artifacts is the
-  // restore signal; a returning session's own history always wins). Guarded by VALUE, not call
-  // count — same discipline as the ?shell= skin effect below: StrictMode's second mount pass
-  // sees artifactStateRef.current.artifacts already at 6 (artifactDispatch writes synchronously)
-  // and skips, so the events are never double-journaled.
+  // restore signal; a returning session's own history always wins).
+  //
+  // FIX ROUND 1 (C1): the first version of this guard read `artifactStateRef.current.artifacts
+  // .length` and claimed "artifactDispatch writes synchronously" — FALSE. `artifactStateRef` is
+  // written by a MIRROR `useEffect` ([artifactState] a few lines up), the exact shape this
+  // file's OWN desk comment (a few hundred lines down, at deskRef's declaration) documents as
+  // proven broken under StrictMode: the mirror re-runs on the second mount pass with the SAME
+  // pre-dispatch `artifactState` closure and rolls the ref back over a synchronous write made
+  // during the first pass, so a guard reading the shared ref fires twice. A live drive confirmed
+  // it: a dev-mode boot journaled 12 artifact.create entries for a 6-artifact desk (6 landed, 6
+  // hit the cap). Fixed the same way the ?artifacts=1 demo effect a few hundred lines down
+  // already solves this exact class of problem: a DEDICATED ref
+  // (wideCorpusArtifactsSeeded, mirroring artifactsDemoScheduled), set synchronously the moment
+  // this effect body runs and never written by anything else, so nothing can roll it back
+  // between StrictMode's two passes. `artifactStateRef.current` is ALSO folded manually after
+  // each dispatch below — the same convention every OTHER artifactDispatchJ call site in this
+  // file already follows (none of them rely on the mirror effect's timing either) — but the
+  // mirror effect itself stays; removing it is a bigger change than this fix round's mandate.
+  const wideCorpusArtifactsSeeded = useRef(false);
   useEffect(() => {
-    if (!isWideCorpusBoot() || bootStates?.artifacts) return;
-    if (artifactStateRef.current.artifacts.length > 0) return;
-    for (const event of wideCorpus(42).artifactEvents) artifactDispatchJ(event, 'wide corpus boot seed');
+    if (!isWideCorpusBoot() || bootStates?.artifacts || wideCorpusArtifactsSeeded.current) return;
+    wideCorpusArtifactsSeeded.current = true;
+    for (const event of wideCorpus(42).artifactEvents) {
+      artifactDispatchJ(event, 'wide corpus boot seed');
+      artifactStateRef.current = artifactReduce(artifactStateRef.current, event);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   // C1 (final review): the tray is otherwise only cleared on program swap, on fire, and by
@@ -4725,8 +4742,11 @@ export default function App() {
     setPendingBeautify(null); // the post-swap session never made this proposal — drop it, don't let a confirm hint a session about a card it didn't propose
     railDispatch({ type: 'rail.dismiss' }); // answers about the OLD program are stale context in the new one (human smoke: Excel's "Cell A3" card survived into PowerPoint)
     // Corpus persistence (spec §3): the outgoing doc is SAVED, the incoming restored (or
-    // seeded on first visit) — cross-program combination needs all docs to exist.
-    const swapped = saveAndLoad(corpusRef.current, activeProgram, mockDocRef.current, id);
+    // seeded on first visit) — cross-program combination needs all docs to exist. bootCorpus()
+    // (fix round 1, I2) so a never-visited program in a `?corpus=wide` session falls back to the
+    // WIDE seed, not silently to the small default — App.tsx is where isWideCorpusBoot() is
+    // already in scope; corpus.ts stays layering-clean (see saveAndLoad's own comment).
+    const swapped = saveAndLoad(corpusRef.current, activeProgram, mockDocRef.current, id, bootCorpus());
     setCorpus(swapped.corpus);
     corpusRef.current = swapped.corpus;
     setMockDoc(swapped.doc);
@@ -4829,11 +4849,12 @@ export default function App() {
     setShareRequest(null);
     setPendingAction(null);
     lastAnswerRef.current = null;   // stale authority goes with the rest of the session state
-    // Reset restores the Meridian SEED (not the unrelated initialMockDoc placeholder) so the
-    // coherent-story invariant survives a reset; drop any saved corpus entry for the active
-    // program — the live doc is the truth, and a stale copy would resurrect the pre-reset doc
-    // on the next program swap.
-    const seeded = seedCorpus()[activeProgram];
+    // Reset restores the SEED (bootCorpus() — fix round 1, I2: not seedCorpus() directly, which
+    // silently swapped a `?corpus=wide` session back to the small default on every Reset click,
+    // "alarming for exactly the researcher this feature serves") so the coherent-story invariant
+    // survives a reset; drop any saved corpus entry for the active program — the live doc is the
+    // truth, and a stale copy would resurrect the pre-reset doc on the next program swap.
+    const seeded = bootCorpus()[activeProgram];
     setMockDoc(seeded);
     mockDocRef.current = seeded;
     journalAppend('workspace', { type: 'doc.set', program: activeProgramRef.current ?? activeProgram, doc: seeded });

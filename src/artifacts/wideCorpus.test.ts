@@ -79,6 +79,62 @@ describe('wideCorpus near-collision labels — the deixis stressor', () => {
   });
 });
 
+// Fix round 1, I1: two content-quality bugs found by driving the app (never caught by the 10
+// tests that existed at the time — both mutations below made all of them pass). Pinned here as
+// black-box, end-to-end assertions over the ACTUAL generated values (not over wideCorpus.ts's
+// internal LABEL_KIND map, which stays private) — a future revert to a substring heuristic that
+// silently drops a label must fail one of these, not just "look plausible" on a manual read.
+describe('wideCorpus value-kind regression (fix round 1, I1)', () => {
+  const { corpus } = wideCorpus(42);
+  if (corpus.excel.kind !== 'excel') throw new Error('kind');
+  const cells = corpus.excel.cells;
+  const rowOf = (label: string): { value: string } => {
+    for (const key of Object.keys(cells)) {
+      if (/^A\d+$/.test(key) && cells[key] === label) return { value: cells[`B${key.slice(1)}`] };
+    }
+    throw new Error(`label not found: ${label}`);
+  };
+  // A first draft's `formatValue` matched on `.includes('backlog value')` and silently missed
+  // plain 'Backlog'/'Backlog Q2', which then drew a STATUS_POOL phrase ("1 wk behind") into a
+  // dollar-shaped sentence ("carries the largest backlog at 1 wk behind") — caught only by
+  // reading the live app, not by any test.
+  const CURRENCY_LABELS = [
+    'Revenue', 'Revenue Q2', 'Net Revenue', 'Gross Revenue', 'Recurring Revenue',
+    'Costs', 'Cost of Goods', 'Operating Costs', 'Fixed Costs',
+    'Backlog', 'Backlog Q2', 'Backlog Value', 'Change Order Value', 'Bid Pipeline',
+  ];
+  it('every currency-shaped label gets a dollar value — never a STATUS_POOL phrase', () => {
+    for (const label of CURRENCY_LABELS) expect(rowOf(label).value).toMatch(/^\$\d+\.\d+M$/);
+  });
+  const PERCENT_LABELS = [
+    'Revenue YoY', 'Margin', 'Net Margin', 'Gross Margin', 'Margin Q2',
+    'Utilization', 'Crew Utilization', 'Retention', 'Retention Rate', 'Safety Score',
+    'Bid Win Rate', 'Equipment Uptime', 'Crane Utilization',
+  ];
+  it('every percent-shaped label gets a percent value — never a STATUS_POOL phrase', () => {
+    for (const label of PERCENT_LABELS) expect(rowOf(label).value).toMatch(/^\d+%$/);
+  });
+  // A second draft fixed the above but gave 'Safety Incidents' the SAME numeric range as
+  // 'Headcount' (4-220), so the generated prose could read "97 contractors... 98 safety
+  // incidents this quarter" — implausible at that scale. Small counts must stay small.
+  const SMALL_COUNT_LABELS = ['Change Orders', 'Safety Incidents', 'Permit Backlog'];
+  it('small-count labels stay under a sane per-quarter bound, never the 4-220 headcount range', () => {
+    for (const label of SMALL_COUNT_LABELS) {
+      const n = Number(rowOf(label).value);
+      expect(Number.isFinite(n)).toBe(true);
+      expect(n).toBeGreaterThanOrEqual(0);
+      expect(n).toBeLessThanOrEqual(12);
+    }
+  });
+  it('Headcount labels are allowed the larger range — the small-count bound is deliberate, not a blanket cap', () => {
+    for (const label of ['Headcount', 'Headcount Q2', 'Contractor Headcount']) {
+      const n = Number(rowOf(label).value);
+      expect(Number.isFinite(n)).toBe(true);
+      expect(n).toBeGreaterThanOrEqual(4);
+    }
+  });
+});
+
 describe('wideCorpus pre-seeded artifacts — real events through the real reducer', () => {
   it('folding artifactEvents through artifactReduce yields live artifacts with zero cap rejection', () => {
     const { artifactEvents } = wideCorpus(42);

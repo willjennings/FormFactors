@@ -16,4 +16,11 @@ describe('corpus persistence (spec §3: docs survive program swaps)', () => {
     const r = saveAndLoad({}, 'word', seedCorpus().word, 'powerpoint');
     expect(r.doc).toEqual(seedCorpus().powerpoint);
   });
+  it('fix round 1 (I2): an explicit fallbackCorpus is used instead of the default seed', () => {
+    const customPowerpoint: MockDoc = { kind: 'powerpoint', slides: ['Custom deck'], saved: false };
+    const custom = { ...seedCorpus(), powerpoint: customPowerpoint };
+    const r = saveAndLoad({}, 'word', seedCorpus().word, 'powerpoint', custom);
+    expect(r.doc).toEqual(customPowerpoint);
+    expect(r.doc).not.toEqual(seedCorpus().powerpoint);
+  });
 });
