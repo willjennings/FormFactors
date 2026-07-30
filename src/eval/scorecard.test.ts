@@ -26,11 +26,16 @@ function mkAgg(n: number, opts: Partial<{
   // derives it from `value`). A stricter version of this helper that REJECTED a `v` not equal to an
   // exact `count/n` was tried and reverted: many `winsWhen`/threshold fixtures across this file and
   // its siblings (register/registry.test.ts, shell/skins/registry.test.ts) deliberately use `v`
-  // values like 0.6, 0.58 that were never meant to be exact fractions of `n` — those tests assert
-  // on `.value` only and never read `.count` at all, so rejecting them would fail real, correct
-  // tests over a field they don't use. `count`'s own cross-field consistency is pinned where it
-  // matters — armAggregate.test.ts's "counts sum to n EXACTLY" test — against the real production
-  // path, not these hand-built fixtures.
+  // values like 0.6, 0.58 that were never meant to be exact fractions of `n`. P11 (fix round 3,
+  // corrected): the earlier version of this comment said those tests "never read `.count` at all" —
+  // false for THIS file specifically (`scorecard()` reads `.count` for the completed/refusals/
+  // corrected/undone/ungradeable lines, so `mkAgg(UNDERPOWERED_N, { completion: 0.6 })` really does
+  // render "completed (5/8)" from a `value` of 0.6 via `Math.round(0.6*8)`). The honest statement:
+  // none of these assertions check `count`-AGAINST-`value` COHERENCE — they read whichever one
+  // (`value` in the two `winsWhen` registries, `count`-derived text in this file) the code under
+  // test happens to use, never both together to catch a fixture where they'd disagree. `count`'s
+  // own cross-field consistency is pinned where it matters — armAggregate.test.ts's "counts sum to
+  // n EXACTLY" test — against the real production path, not these hand-built fixtures.
   const rate = (v = 0) => ({ value: v, n, count: Math.round(v * n) });
   return {
     n,
@@ -181,9 +186,20 @@ describe('I2 — every non-refusal ledger kind surfaces under Watch, not just no
 // Binding test 3: every goodAt/shaky/watch line carries its n.
 // ==========================================================================================
 describe('every good-at/shaky/watch line carries n', () => {
-  it('every line matches (n/n)', () => {
+  // P14 (fix round 3, reviewer-ruled): this is the repo's most load-bearing anti-flattery test, and
+  // it used to pass on a fixture that never exercised the two ledger kinds (deixis-miss,
+  // grounding-disagree) whose line shape it could NOT match — `/\(\d+\/\d+\)/` never matches
+  // "... (seen 3×)" (N1, fix round 2's own reviewer-sanctioned alternative to a fraction that could
+  // read greater than 1). A regex that only ever saw fixture rows shaped one way was passing by
+  // omission, not by proof. Both shapes are now in the fixture, and the assertion accepts either —
+  // "every line carries its n" is the invariant, not "every line is a fraction".
+  it('every line carries its n — either "(n/n)" or "(seen n×)"', () => {
     const agg = mkAgg(20, { refusal: 0.1, corrected: 0.1, wrong: 0.05, ungradeable: 0.25 });
-    const ledger = [noOpRow(2, 'nothing happened')];
+    const ledger: LedgerRow[] = [
+      noOpRow(2, 'nothing happened'),
+      { kind: 'deixis-miss', key: 'that/word', n: 3, examples: ['"that" -> resolved "B2" (wanted "C4")'] },
+      { kind: 'grounding-disagree', key: 'B2/word', n: 1, examples: ['app said "B2", model said "C4"'] },
+    ];
     const deck: CardResult[] = [
       cardResult('point-what-is-this', 'done'),
       cardResult('point-then-change', 'failed'),
@@ -191,7 +207,10 @@ describe('every good-at/shaky/watch line carries n', () => {
     const model = scorecard(agg, ledger, deck, ARM, opts([]));
     const all = [...model.goodAt, ...model.shaky, ...model.watch];
     expect(all.length).toBeGreaterThan(0);
-    for (const line of all) expect(line).toMatch(/\(\d+\/\d+\)/);
+    // Both shapes are actually present in this fixture's output — not just accepted in principle.
+    expect(all.some((l) => /\(\d+\/\d+\)/.test(l))).toBe(true);
+    expect(all.some((l) => /seen \d+×/.test(l))).toBe(true);
+    for (const line of all) expect(line).toMatch(/(\(\d+\/\d+\)|seen \d+×)/);
   });
 });
 
@@ -571,6 +590,30 @@ describe('N5 — latency and cost are scoped to the arm under test, not the whol
     expect(model.latency.sessionCount).toBe(1);
     expect(model.latency.worst).toEqual({ ms: 4900, label: 'guided warm' });
     expect(model.latency.coldStartMs).toBe(5000);
+  });
+
+  // P2 (fix round 3, reviewer-ruled — the Important finding): the round-2 re-review's exact Probe A
+  // reproduction, at the `eventsForArm` level. A mid-session shell switch (no reconnect, so no new
+  // `session_start`) used to leave the post-switch turn scored under the PRE-switch shell.
+  it('a mid-session shell_switch moves the latency/cost boundary too, with no reconnect', () => {
+    const familiarArm: Arm = { register: 'terminal', dials: DEFAULT_DIALS, shell: 'familiar' };
+    const materialArm: Arm = { register: 'terminal', dials: DEFAULT_DIALS, shell: 'material' };
+    const events: TelemetryEvent[] = [
+      sessionStart(0, familiarArm),
+      turn(10, 'f1', 'under familiar', 'tool_call', 100),        // Familiar's cold row-1
+      { t: 20, type: 'shell_switch', from: 'familiar', to: 'material', midSession: true },
+      turn(30, 'm1', 'under material', 'tool_call', 4900),        // Material's own cold row-1 (new arm, fresh cold slot)
+    ];
+    const aggFamiliar = mkAgg(1, { completion: 1 });
+    const modelFamiliar = scorecard(aggFamiliar, [], [], familiarArm, opts(events));
+    // Reproduced bug: without the fix, this would read 4900 (Material's turn, mis-scored).
+    expect(modelFamiliar.latency.coldStartMs).toBe(100);
+    expect(modelFamiliar.latency.medianMs).toBeNull(); // one turn total, and it's the cold one
+    expect(modelFamiliar.latency.worst).toBeNull();
+
+    const aggMaterial = mkAgg(1, { completion: 1 });
+    const modelMaterial = scorecard(aggMaterial, [], [], materialArm, opts(events));
+    expect(modelMaterial.latency.coldStartMs).toBe(4900);
   });
 });
 

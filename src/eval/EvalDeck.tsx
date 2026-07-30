@@ -6,7 +6,7 @@
 import React, { useEffect, useRef } from 'react';
 import { X } from 'lucide-react';
 import { Button } from '../ui/Button';
-import { EVAL_DECK, currentCard, isDeckComplete, deckTally, type DeckState, type ObservedGrade } from './deck';
+import { EVAL_DECK, currentCard, isDeckComplete, wasAbandoned, deckTally, type DeckState, type ObservedGrade } from './deck';
 
 /** The eval deck's face (design spec §4b). The whole evaluation protocol is visible from here:
  *  one card, what to try, and where you are in the twelve. It is also the outside participant's
@@ -142,11 +142,17 @@ export function EvalDeck({ open, state, recording, unrecorded, onStart, onSelfGr
 
       {isDeckComplete(state) && (
         <div className="flex flex-col gap-2">
-          <p className="text-sm text-[var(--text-primary)]">Deck complete.</p>
+          {/* P3 (fix round 3, reviewer-ruled): `isDeckComplete` is true for BOTH a run that
+              advanced through all twelve cards and one that was abandoned mid-way (the 'abandon'
+              reducer event jumps `index` to the end so grading stops — deck.ts's own comment on
+              that case). Before `wasAbandoned` existed this branch said "Deck complete." either
+              way — the exact defect N2 fixed one layer up (the toast/log/rail/card), reintroduced
+              here by the mechanism that fixed N3. */}
+          <p className="text-sm text-[var(--text-primary)]">{wasAbandoned(state) ? 'Deck abandoned.' : 'Deck complete.'}</p>
           {/* Counts only — never a rate. Every number here is its own n (eval spec §5), and the
               observed/your-call split is reported rather than summed. */}
           <p className="text-[11px] font-mono text-[var(--text-secondary)]">
-            {tally.total} of {total} recorded · {tally.done} worked · {tally.failed} didn’t · {tally.skipped} skipped
+            {tally.total} of {total} recorded{wasAbandoned(state) ? ' before this panel was closed' : ''} · {tally.done} worked · {tally.failed} didn’t · {tally.skipped} skipped
           </p>
           <p className="text-[11px] font-mono text-[var(--text-secondary)]">
             {tally.observed} observed · {tally.self} your call

@@ -77,9 +77,12 @@ export function Scorecard({ model }: { model: ScorecardModel }) {
           </p>
         )}
         {model.latency.sessionCount > 1 && (
-          // I3: latency reads the WHOLE sitting, not "this session" — say so when it actually spans
-          // more than one, rather than leaving the scope to be assumed.
-          <p className="text-[11px] text-[var(--text-secondary)]">across {model.latency.sessionCount} sessions this sitting</p>
+          // I3: latency reads more than "this session" whenever this ARM was visited more than
+          // once — say so rather than leaving the scope to be assumed. P7 (fix round 3, corrected):
+          // `sessionCount` is THIS ARM's session count (post `eventsForArm` scoping), not the
+          // sitting's — "this sitting" read as a claim about the whole sitting, which a sitting
+          // that also visited other arms would make false.
+          <p className="text-[11px] text-[var(--text-secondary)]">across {model.latency.sessionCount} of this arm's sessions</p>
         )}
       </div>
 
@@ -87,7 +90,8 @@ export function Scorecard({ model }: { model: ScorecardModel }) {
         <span className="text-[10px] font-mono uppercase tracking-widest text-[var(--text-secondary)]">Cost</span>
         <p className="text-[12px] text-[var(--text-primary)]">
           {model.cost.frames} frames, {model.cost.hints} hints sent
-          {model.cost.sessionCount > 1 && ` — across ${model.cost.sessionCount} sessions this sitting`}
+          {/* P7 (fix round 3, corrected) — same fix as latency's line above. */}
+          {model.cost.sessionCount > 1 && ` — across ${model.cost.sessionCount} of this arm's sessions`}
         </p>
       </div>
 

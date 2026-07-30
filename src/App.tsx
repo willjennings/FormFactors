@@ -4963,13 +4963,24 @@ export default function App() {
   // state, so pressing Esc on card 3 of 12 produced a toast, log line and rail card reading
   // "complete" — indistinguishable from finishing all twelve.
   const showEvalScorecard = (results: CardResult[], startedAt: number | null, abandoned: boolean) => {
+    // P4 (fix round 3, reviewer-ruled): record the abandonment as a durable telemetry EVENT before
+    // anything else — mirrors `mission_abandoned`'s precedent. Pushed BEFORE `telemetry.snapshot()`
+    // below so this same snapshot (and therefore `snap.events`) already carries it: without this,
+    // `abandoned` was a live-React-state-only fact, invisible to `snapshot()`'s own internal
+    // scorecard (what `exportJSON()` ships, what the drawer's mini reads) — which always built one
+    // with `abandoned: false`, positively asserting "normally completed" about a run that was not.
+    if (abandoned) telemetry.evalDeckAbandoned(results.length, EVAL_DECK.length);
     const snap = telemetry.snapshot();
     const arm = snap.config?.arm;
     if (!arm) {
       // No session ever started (unreachable in practice — EvalDeck disables Start until
       // `recording`, spec §4b's own I7 fix — but the deck's own reducer is otherwise unaware of
       // recording state, so this is a defensive, honest fallback rather than a crash).
-      addLog('event', 'Eval deck — complete (no session recorded, nothing to score)');
+      // P8 (fix round 3, reviewer-ruled): this branch used to hardcode "complete" even when
+      // `abandoned` was true — the exact N2 defect, left inside the function that fixed it.
+      addLog('event', abandoned
+        ? 'Eval deck — abandoned (no session recorded, nothing to score)'
+        : 'Eval deck — complete (no session recorded, nothing to score)');
       setEvalDeckOpen(false);
       return;
     }
@@ -5052,7 +5063,7 @@ export default function App() {
     }
     setEvalDeckOpen(false);
   };
-  // N4 (fix round 2, reviewer-ruled): the OTHER direction of I1's exclusivity. `showEvalScorecard`
+  // N4 (fix round 2, reviewer-ruled): the OPENING direction of I1's exclusivity. `showEvalScorecard`
   // clears the deck panel when the scorecard opens; this clears the scorecard when the deck panel
   // opens (the menu-bar "Eval deck" toggle, MenuBar.tsx) — without it, finishing/abandoning a run
   // then reopening the deck from the menu bar re-mounts `EvalDeck` at the scorecard's own
@@ -5060,10 +5071,19 @@ export default function App() {
   // restoring the I1 overlap one click away from "fixed". Reads `evalDeckOpen` directly rather
   // than a functional updater: this fires once per discrete menu-bar click, not from a rapid-fire
   // dispatch context, so the render-scope value is exactly the one the click acted on.
+  //
+  // P5 (fix round 3, reviewer-ruled): the CLOSING direction used to be a bare `setEvalDeckOpen
+  // (false)` — this is the SAME control the deck panel's own × and Esc go through (`closeEvalDeck`),
+  // and the §4b protocol tells participants to use this exact button to open the deck in the first
+  // place, so closing a mid-run deck from here is not a rare path. Bypassing `closeEvalDeck` meant
+  // no abandonment summary, no `abandon` dispatch, and the observe effect left grading the card on
+  // screen — every N3 finding, still true, on the one control N3's own fix never touched. Routed
+  // through the identical handler now: this function no longer duplicates ANY closing logic, only
+  // decides which direction a toggle click means.
   const toggleEvalDeck = () => {
-    const opening = !evalDeckOpen;
-    if (opening) setScorecardModel(null);
-    setEvalDeckOpen(opening);
+    if (evalDeckOpen) { closeEvalDeck(); return; }
+    setScorecardModel(null);
+    setEvalDeckOpen(true);
   };
 
   // Undo the most recent committed document mutation (restore the memento).
@@ -5380,7 +5400,14 @@ export default function App() {
               close while the deck is mid-run is an abandonment, and spec §4b requires abandoning
               the deck to render the same card-grammar summary completing it does — `closeEvalDeck`
               is the one place that decision (`isAbandoned`, deck.ts, pure) is made. */}
-          <EvalDeck open={evalDeckOpen} state={evalDeck} recording={telemetry.eventCount() > 0}
+          {/* P15 (fix round 3, reviewer-ruled): `open={evalDeckOpen && !scorecardModel}`, not a bare
+              `evalDeckOpen` — round 2's exclusivity was enforced by CONVENTION across two call sites
+              (`showEvalScorecard` clears `evalDeckOpen`; `toggleEvalDeck` clears `scorecardModel`),
+              with nothing to catch a future THIRD `setEvalDeckOpen(true)` (a hotkey, a deep link, a
+              mission step) that forgets to clear the scorecard first. This render-time guard makes
+              the invariant structural instead of conventional: whatever sets `evalDeckOpen` true,
+              the panel still will not mount while a scorecard is up. */}
+          <EvalDeck open={evalDeckOpen && !scorecardModel} state={evalDeck} recording={telemetry.eventCount() > 0}
                     unrecorded={evalUnrecorded} onStart={startEvalDeck}
                     onSelfGrade={selfGradeEvalCard} onSkip={skipEvalCard} onAdvance={advanceEvalCard}
                     onClose={closeEvalDeck} />
@@ -5388,14 +5415,13 @@ export default function App() {
               above), cleared by its own × OR by `toggleEvalDeck` reopening the deck. `ScorecardView.tsx`
               (named for the TS1149 casing collision documented in its own header, NOT `Scorecard.tsx`)
               is a thin map over the model; no computation happens here. I1 (fix round 1) + N4 (fix
-              round 2, reviewer-ruled): this panel and `EvalDeck` share the SAME coordinate
-              (`absolute top-10 right-[21.5rem] z-40 w-80`) on purpose — they are kept mutually
-              exclusive by BOTH directions clearing the other in the same update
-              (`showEvalScorecard` clears `evalDeckOpen`; `toggleEvalDeck` clears `scorecardModel`
-              when opening), rather than by giving them different coordinates. Round 1 only did the
-              first direction, which the menu-bar "Eval deck" button (MenuBar.tsx) could still
-              defeat by reopening the deck over an un-cleared scorecard — verified fixed by a CDP
-              re-probe (fix round 2). */}
+              round 2, reviewer-ruled) + P15 (fix round 3, reviewer-ruled): this panel and `EvalDeck`
+              share the SAME coordinate (`absolute top-10 right-[21.5rem] z-40 w-80`) on purpose —
+              kept mutually exclusive by the two handlers clearing each other (N4) AND, now, by the
+              render-time guard above on `EvalDeck`'s own `open` prop (P15), so a future caller of
+              `setEvalDeckOpen(true)` that forgets to clear `scorecardModel` still cannot cause the
+              overlap — only a silently-stale deck (`evalDeckOpen` staying true while unrendered)
+              until the scorecard itself is closed, which is the safe direction to fail in. */}
           {scorecardModel && (
             <div className="absolute top-10 right-[21.5rem] z-40 w-80 max-h-[80vh] overflow-y-auto pointer-events-auto"
                  role="dialog" aria-label="Scorecard" data-shell>

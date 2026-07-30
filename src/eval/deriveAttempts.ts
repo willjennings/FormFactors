@@ -52,6 +52,7 @@
 import type { TelemetryEvent, Arm } from '../telemetry';
 import type { ProgramId } from '../scenarios';
 import type { Attempt, AttemptOutcome } from './types';
+import { advanceArm } from './types';
 
 interface Pending {
   id: string | null;
@@ -237,18 +238,31 @@ export function deriveAttempts(events: TelemetryEvent[]): Attempt[] {
     switch (ev.type) {
       case 'session_start': {
         // The nearest honest signal this schema carries for a program swap: the live app wipes
-        // and restarts the event stream on any mid-session reconnect (register/shell/backend/
-        // PROGRAM change all reconnect — App.tsx), so a genuine program swap would show up here as
-        // exactly a second `session_start`. No `guidance` event `kind` denotes a program change —
-        // despite the design spec's shorthand "program swap (`guidance`/`session` markers)" — so
-        // this module treats `guidance` events as carrying no boundary signal at all (see the
-        // `default` case below).
+        // and restarts the event stream on any mid-session reconnect (register/backend/PROGRAM
+        // change all reconnect — App.tsx; P2, fix round 3, corrected: SHELL change does not, see
+        // the `shell_switch` case below), so a genuine program swap would show up here as exactly
+        // a second `session_start`. No `guidance` event `kind` denotes a program change — despite
+        // the design spec's shorthand "program swap (`guidance`/`session` markers)" — so this
+        // module treats `guidance` events as carrying no boundary signal at all (see the `default`
+        // case below).
         if (seenSessionStart) closeAtBoundary();
         seenSessionStart = true;
         currentProgram = ev.config.program as ProgramId;
-        currentArm = ev.config.arm;
+        currentArm = advanceArm(currentArm, ev);
         break;
       }
+
+      // P2 (fix round 3, reviewer-ruled — the Important finding): a shell switch (App.tsx's
+      // `handleSkinSelect`) is the ONE arm change the app makes WITHOUT reconnecting — no new
+      // `session_start`, so nothing else in this switch would ever see it. Before this case
+      // existed, every attempt from here to the session's end kept the PRE-switch shell, silently
+      // (Probe A, round-2 re-review: a Terminal sitting that switched Familiar->Material mid-run
+      // reported the post-switch attempt, its deixis miss and its latency all as Familiar). No
+      // boundary close here — unlike `session_start`, a shell switch does not end the current
+      // pending exchange; it only changes what arm the NEXT attempt(s) get stamped with.
+      case 'shell_switch':
+        currentArm = advanceArm(currentArm, ev);
+        break;
 
       case 'turn': {
         let p = ensurePending();
@@ -470,7 +484,10 @@ export function deriveAttempts(events: TelemetryEvent[]): Attempt[] {
       default:
         break; // no grading signal in this module: deixis, grounding, map, fill, gap_question,
                // readback, stall, session_complete, error, guidance, mission_*, register_switch,
-               // shell_switch, pin, combine_tray, artifact_created, eval_card. `eval_card` in particular is a
+               // pin, combine_tray, artifact_created, eval_card. `shell_switch` moved OUT of this
+               // list (fix round 3, P2) — it has its own case above; it carries no GRADING signal
+               // either, but it does carry an arm-attribution one, which is why it is no longer
+               // lumped in as inert. `eval_card` in particular is a
                // deliberate no-op here: it records which TRIAL was run and how the deck graded it,
                // which must never feed back into how this module grades the attempt — the deck
                // reads deriveAttempts (via the scorecard), not the other way round.

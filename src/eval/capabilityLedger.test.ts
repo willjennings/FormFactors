@@ -347,4 +347,21 @@ describe('the optional `arm` parameter scopes pass 2 (deixis-miss/grounding-disa
     const rows = capabilityLedger(events, []); // no arm — unscoped, prior behaviour
     expect(rows.filter((r) => r.kind === 'deixis-miss').map((r) => r.key).sort()).toEqual(['that/word', 'this/word']);
   });
+
+  // P2 (fix round 3, reviewer-ruled): pass 2 used to track `currentArm` off `session_start` ONLY —
+  // a mid-session shell switch (no reconnect) left it silently attributed to the pre-switch shell.
+  it('a shell_switch (no reconnect, no new session_start) moves pass 2\'s arm-attribution boundary too', () => {
+    const familiarArm: Arm = { register: 'terminal', dials: DEFAULT_DIALS, shell: 'familiar' };
+    const materialArm: Arm = { register: 'terminal', dials: DEFAULT_DIALS, shell: 'material' };
+    const events: TelemetryEvent[] = [
+      sessionStart(0, 'word', familiarArm),
+      deixis(10, 'that', 'B2', 'C4', false),              // under Familiar
+      { t: 20, type: 'shell_switch', from: 'familiar', to: 'material', midSession: true },
+      deixis(30, 'this', 'A1', 'A2', false),              // under Material — same session, no reconnect
+    ];
+    const familiarRows = capabilityLedger(events, [], familiarArm);
+    const materialRows = capabilityLedger(events, [], materialArm);
+    expect(familiarRows.filter((r) => r.kind === 'deixis-miss').map((r) => r.key)).toEqual(['that/word']);
+    expect(materialRows.filter((r) => r.kind === 'deixis-miss').map((r) => r.key)).toEqual(['this/word']);
+  });
 });

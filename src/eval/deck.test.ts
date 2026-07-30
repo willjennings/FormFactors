@@ -5,7 +5,7 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  EVAL_DECK, deckReduce, initialDeckState, currentCard, isDeckComplete, isAbandoned, deckTally, deckTallyOf,
+  EVAL_DECK, deckReduce, initialDeckState, currentCard, isDeckComplete, isAbandoned, wasAbandoned, deckTally, deckTallyOf,
   type DeckState, type EvalCard,
 } from './deck';
 import { UTTERANCES, utteranceFor } from './utterances';
@@ -456,7 +456,7 @@ const started = (): DeckState => deckReduce(initialDeckState(), { type: 'start',
 describe('deckReduce', () => {
   it('starts once and is idempotent — a second start is a no-op (StrictMode double-invoke)', () => {
     const s = started();
-    expect(s).toEqual({ index: 0, results: [], startedAt: 1000 });
+    expect(s).toEqual({ index: 0, results: [], startedAt: 1000, abandonedAt: null });
     const again = deckReduce(s, { type: 'start', at: 2000 });
     expect(again).toBe(s);
   });
@@ -543,19 +543,30 @@ describe('deckReduce', () => {
       expect(currentCard(s)).toBeNull();          // the observe effect's own `if (!card) return` guard now fires
       expect(isDeckComplete(s)).toBe(true);
       expect(isAbandoned(s)).toBe(false);         // no longer "in progress" — it just stopped
+      // P3 (fix round 3, reviewer-ruled): `isDeckComplete` alone can no longer tell an abandoned
+      // run from a naturally-completed one — `wasAbandoned` is the durable fact that still can.
+      expect(s.abandonedAt).toBe(2);
+      expect(wasAbandoned(s)).toBe(true);
     });
     it('a deck never started: abandon is a no-op, same discipline as every other event', () => {
       const s = deckReduce(initialDeckState(), { type: 'abandon', at: 1 });
       expect(s).toEqual(initialDeckState());
+      expect(wasAbandoned(s)).toBe(false);
     });
-    it('an already-complete deck: abandon changes nothing further', () => {
+    it('an already-complete deck: abandon changes nothing further, and does NOT retroactively mark it abandoned', () => {
       let s = started();
       for (let i = 0; i < EVAL_DECK.length; i++) s = deckReduce(s, { type: 'advance' });
       expect(isDeckComplete(s)).toBe(true);
+      expect(wasAbandoned(s)).toBe(false);
       const before = s;
       s = deckReduce(s, { type: 'abandon', at: 1 });
       expect(s.index).toBe(before.index);
       expect(s.results).toEqual(before.results);
+      // P3 (fix round 3, reviewer-ruled): a real completion must never be relabelled an
+      // abandonment just because 'abandon' was (harmlessly, structurally) dispatched at it.
+      expect(s.abandonedAt).toBeNull();
+      expect(wasAbandoned(s)).toBe(false);
+      expect(s).toBe(before); // same reference — truly unchanged, not a new object with equal fields
     });
     it('reopening after abandon shows the complete state, not a resumed live card (App.tsx cannot re-grade)', () => {
       let s = started();
@@ -563,6 +574,10 @@ describe('deckReduce', () => {
       // What App's observe effect actually branches on: `EVAL_DECK[s.index]` is undefined once
       // abandoned, so its `if (!card) return` guard is what makes grading stop — pinned directly.
       expect(EVAL_DECK[s.index]).toBeUndefined();
+    });
+    it("'start' resets abandonedAt to null (defensive — no restart path exists today, but the reducer stays honest if one ever does)", () => {
+      const s = deckReduce(initialDeckState(), { type: 'start', at: 1 });
+      expect(s.abandonedAt).toBeNull();
     });
   });
   it('results and index move independently — grading does not advance', () => {

@@ -59,7 +59,7 @@
 // order, never re-ordered or replaced by a "better" example later.
 
 import type { Arm, TelemetryEvent } from '../telemetry';
-import { sameArm } from './types';
+import { advanceArm, sameArm } from './types';
 import type { Attempt } from './types';
 
 export interface LedgerRow {
@@ -124,14 +124,19 @@ export function capabilityLedger(events: TelemetryEvent[], attempts: Attempt[], 
   // Pass 2: raw-event rows. `deixis`/`grounding` are graded per-signal and never reach `Attempt` —
   // there is no field on `Attempt` for "the referent resolved wrong" or "the app and model
   // disagreed about the referent". Track the active program AND arm the same way deriveAttempts
-  // tracks program (off the most recent `session_start`), since these events carry neither of
-  // their own.
+  // does — program off the most recent `session_start` alone; arm via the SHARED `advanceArm`
+  // (P2, fix round 3, reviewer-ruled — corrected from round 2's "the only place arm is recorded is
+  // on the `session_start` that opened the session", which was false: a `shell_switch` moves the
+  // arm-attribution boundary too, without a reconnect, so without this the pass-2 rows below would
+  // silently stay attributed to the pre-switch shell for the rest of the session).
   let program: string = 'unknown';
   let currentArm: Arm | undefined;
   for (const ev of events) {
     if (ev.type === 'session_start') {
       program = ev.config.program;
-      currentArm = ev.config.arm;
+      currentArm = advanceArm(currentArm, ev);
+    } else if (ev.type === 'shell_switch') {
+      currentArm = advanceArm(currentArm, ev);
     } else if (ev.type === 'deixis') {
       // `correct === null` is UNGRADED (no ground truth for this keyword), never wrong — must
       // never produce a row (binding, per the task-4 brief).

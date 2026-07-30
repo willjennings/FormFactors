@@ -421,6 +421,13 @@ describe('N16 — snapshot().scorecard is arm-scoped end-to-end across a real re
     telemetry.turn('g1', 'voice', 'make this pop', 'speech_only', 300, null);
     telemetry.turn('g2', 'voice', 'make this pop', 'speech_only', 310, null);
     telemetry.turn('g3', 'voice', 'make this pop', 'speech_only', 320, null);
+    // P1 (fix round 3, reviewer-ruled — the mutation guard): a deixis MISS under Guided, before the
+    // switch. Round 2's version of this test had no `deixis`/`grounding` event at all, so dropping
+    // the `arm` argument from `capabilityLedger(events, scopedAttempts, arm)` at telemetry.ts's own
+    // production call site left the WHOLE suite green (mutation-verified) — the pass-2 half of the
+    // N1 fix had no end-to-end guard. This line is that guard: if `arm` is dropped there, this
+    // Guided-only miss leaks onto Terminal's card below.
+    telemetry.deixis('that', 'B2', 'C4', 'high');
 
     telemetry.start({ backend: 'gemini', autonomy: 'auto-safe', feedback: 'earcon', program: 'word', honest: false, device,
       arm: { register: 'terminal', dials, shell: 'material' } });
@@ -434,9 +441,51 @@ describe('N16 — snapshot().scorecard is arm-scoped end-to-end across a real re
     // N1: Guided's no-op-turn ledger row ("make this pop" x3) must not appear on Terminal's card at
     // all — not as a `(3/1)` fraction, not at any denominator. It belongs to a different arm.
     expect(model!.watch.some((l) => l.includes('make this pop'))).toBe(false);
+    // P1: Guided's deixis-miss must not appear either — this is the pass-2 half of N1, unguarded
+    // until this line existed.
+    expect(model!.watch.some((l) => l.includes('wrong referent'))).toBe(false);
     // N5: latency/cost must be Terminal's own session, not Guided's (whose 3 speech-only turns are
     // `abandoned`, never timed anyway, but whose SESSION must not be counted either).
     expect(model!.latency.sessionCount).toBe(1);
     expect(model!.cost.sessionCount).toBe(1);
+  });
+});
+
+// ==========================================================================================
+// P4 (fix round 3, reviewer-ruled — the Important finding): before `eval_deck_abandoned` existed,
+// `abandoned` was a live-React-state-only fact — `snapshot()`'s own internal scorecard had no way
+// to know a run had been abandoned, and always built one with `abandoned: false`, which per that
+// field's own contract POSITIVELY ASSERTS "normally completed". Mirrors `mission_abandoned`'s
+// precedent: a durable event, derived from the real event stream, not passed in from outside.
+// ==========================================================================================
+describe('P4 — evalDeckAbandoned makes snapshot().scorecard.abandoned durably true', () => {
+  // `cfg` (this file's shared top-level fixture) carries no `arm`, and `snapshot()`'s scorecard is
+  // `null` without one — these tests need a real arm-bearing config to get a non-null scorecard.
+  const cfgWithArm = { ...cfg, arm: { register: 'guided', dials: {
+    honest: false, autonomy: 'auto-safe' as const, feedback: 'earcon' as const, confirmGoals: false,
+    markings: false, chipDensity: 'full' as const, traceView: 'ticker' as const, teaching: 'normal' as const, proactivity: 'on-goal' as const,
+  } } };
+
+  it('with no eval_deck_abandoned event, the export asserts abandoned: false (a real completion, or no deck run at all)', () => {
+    telemetry.reset();
+    telemetry.start(cfgWithArm);
+    telemetry.action('edit_content', 'mutate', 'commit');
+    const model = telemetry.snapshot().scorecard;
+    expect(model).not.toBeNull();
+    expect(model!.abandoned).toBe(false);
+  });
+
+  it('after evalDeckAbandoned, snapshot().scorecard.abandoned is true — derived from the event, not any external flag', () => {
+    telemetry.reset();
+    telemetry.start(cfgWithArm);
+    telemetry.action('edit_content', 'mutate', 'commit');
+    telemetry.evalDeckAbandoned(3, 12);
+    const model = telemetry.snapshot().scorecard;
+    expect(model).not.toBeNull();
+    expect(model!.abandoned).toBe(true);
+    // The raw event itself is in the export too — a reader of the raw JSON (without re-deriving
+    // the scorecard) can still see how far the run got.
+    const events = JSON.parse(telemetry.exportJSON()).events as any[];
+    expect(events.find((e) => e.type === 'eval_deck_abandoned')).toMatchObject({ cardsRecorded: 3, totalCards: 12 });
   });
 });

@@ -82,6 +82,14 @@ export interface DeckState {
   index: number;              // the card on screen; === EVAL_DECK.length means the deck is finished
   results: CardResult[];      // one per graded/skipped card, in the order they were recorded
   startedAt: number | null;   // null until the participant starts the deck
+  // P3 (fix round 3, reviewer-ruled): null for a run that reached the end by ADVANCING through all
+  // twelve cards; set to the 'abandon' event's timestamp for a run that was closed mid-way. Exists
+  // because `index: EVAL_DECK.length` (the abandon transition's own mechanism for stopping grading
+  // — see 'abandon' below) makes `isDeckComplete` true either way, and without this field an
+  // abandoned run and a naturally-completed one become INDISTINGUISHABLE the instant abandonment
+  // takes effect — which is exactly what happened one round earlier at the toast/log/rail/card
+  // layer (N2) and, before this field, was reintroduced one layer down, in this very panel.
+  abandonedAt: number | null;
 }
 
 export type DeckEvent =
@@ -99,7 +107,7 @@ export type DeckEvent =
   | { type: 'abandon'; at: number };
 
 export function initialDeckState(): DeckState {
-  return { index: 0, results: [], startedAt: null };
+  return { index: 0, results: [], startedAt: null, abandonedAt: null };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -497,7 +505,7 @@ export function deckReduce(s: DeckState, e: DeckEvent): DeckState {
     case 'start':
       // Idempotent by VALUE, not by a call count — the discipline App.tsx's desk/skin effects use,
       // and what makes StrictMode's double-invoked mount effect harmless here.
-      return s.startedAt === null ? { index: 0, results: [], startedAt: e.at } : s;
+      return s.startedAt === null ? { index: 0, results: [], startedAt: e.at, abandonedAt: null } : s;
 
     case 'observe':
     case 'selfGrade':
@@ -521,18 +529,37 @@ export function deckReduce(s: DeckState, e: DeckEvent): DeckState {
       if (s.startedAt === null) return s;
       return { ...s, index: Math.min(s.index + 1, EVAL_DECK.length) };
 
-    case 'abandon':
+    case 'abandon': {
       // N3 (fix round 2, reviewer-ruled): actually STOPS the run, rather than only announcing a
       // summary over one that keeps going. Idempotent-by-value like 'start': a deck never started
-      // has nothing to abandon; a deck already at the end is unaffected (advancing past the last
-      // card already does this). Jumping `index` to `EVAL_DECK.length` mirrors what 'advance' does
+      // has nothing to abandon. Jumping `index` to `EVAL_DECK.length` mirrors what 'advance' does
       // at the natural finish — `currentCard` returns null, so App's observe effect's own `if
-      // (!card) return` guard stops grading, and `isDeckComplete` becomes true, so reopening the
-      // panel shows the (already-summarised) complete state instead of resuming a live card.
-      // `results` are untouched: nothing already recorded is discarded by abandoning.
-      return s.startedAt === null ? s : { ...s, index: EVAL_DECK.length };
+      // (!card) return` guard stops grading. `results` are untouched: nothing already recorded is
+      // discarded by abandoning.
+      if (s.startedAt === null) return s;
+      // P3 (fix round 3, reviewer-ruled): a deck already at the end (naturally complete — every
+      // card advanced through) is left UNCHANGED, not just "unaffected on the index" — abandoning
+      // an already-finished run must never stamp `abandonedAt` over a real completion. Checked by
+      // index rather than calling `isDeckComplete` (defined later in this module) to avoid a
+      // forward-reference; the condition is the same one that predicate tests.
+      if (s.index >= EVAL_DECK.length) return s;
+      // `index: EVAL_DECK.length` is still what stops grading (see above); `abandonedAt` is the
+      // NEW part — the persistent fact this transition, and only this transition, ever sets. Round
+      // 2's version of this case set only the former, so once it fired, an abandoned run and a
+      // naturally-completed one became indistinguishable — reintroducing N2's defect one layer
+      // down, in `EvalDeck.tsx`'s own "Deck complete." panel (P3, round-2 re-review).
+      return { ...s, index: EVAL_DECK.length, abandonedAt: e.at };
+    }
   }
 }
+
+/** P3 (fix round 3, reviewer-ruled): the one place `abandonedAt` is read as a boolean fact, so a
+ *  consumer never has to know the field exists or reconstruct the rule from `!== null`. TRUE
+ *  forever after an `abandon` transition actually applied (see the reducer's own guards above for
+ *  the two cases it does NOT apply: never started, already complete) — unlike `isAbandoned`
+ *  (below), which stops being true the instant the run ends, `wasAbandoned` is a durable record of
+ *  HOW it ended, for exactly as long as `DeckState` itself lives. */
+export const wasAbandoned = (s: DeckState): boolean => s.abandonedAt !== null;
 
 /** The card on screen, or null when the deck has not started or has run out. */
 export function currentCard(s: DeckState): EvalCard | null {

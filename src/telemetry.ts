@@ -117,7 +117,18 @@ export type TelemetryEvent =
   // reconnects the deck's own cards cause only because `start()` archives rather than wipes (see
   // priorRuns). `graded` is carried verbatim and never collapsed: a scorecard that counted a human's
   // "it worked" alongside an observed commit would be measuring optimism.
-  | { t: number; type: 'eval_card'; cardId: string; dimension: string; grade: 'done' | 'failed' | 'skipped'; graded: 'observed' | 'self' };
+  | { t: number; type: 'eval_card'; cardId: string; dimension: string; grade: 'done' | 'failed' | 'skipped'; graded: 'observed' | 'self' }
+  // P4 (fix round 3, reviewer-ruled): the durable record that a deck run was ABANDONED, not just
+  // completed — following `mission_abandoned`'s precedent (line above the `register_switch` pair).
+  // Before this event existed, abandonment was a live-React-state-only fact (App.tsx's `closeEvalDeck`
+  // -> `deck.ts`'s `abandon` reducer event, which is deliberately unjournaled and produces no
+  // telemetry of its own): `snapshot()`'s OWN internal scorecard computation had no way to know a run
+  // had been abandoned, so it always built one with `abandoned: false` — which, per that field's own
+  // documented contract, POSITIVELY ASSERTS "normally completed". The exported JSON was making a false
+  // claim about the one property spec §5.6 says must never be dressed up. `cardsRecorded`/`totalCards`
+  // are carried so a reader of the raw export (without re-deriving the scorecard) can still see how
+  // far the run got.
+  | { t: number; type: 'eval_deck_abandoned'; cardsRecorded: number; totalCards: number };
 
 export function detectDevice(): DeviceInfo {
   const width = typeof window !== 'undefined' ? window.innerWidth : 0;
@@ -312,6 +323,13 @@ class Telemetry {
   evalCard(cardId: string, dimension: string, grade: 'done' | 'failed' | 'skipped', graded: 'observed' | 'self') {
     this.push({ type: 'eval_card', cardId, dimension, grade, graded });
   }
+  /** P4 (fix round 3, reviewer-ruled): the durable half of a deck ABANDONMENT — see the event's own
+   *  doc comment in the union above. App.tsx's `showEvalScorecard` calls this exactly when it is
+   *  about to build an `abandoned: true` scorecard, so the event and the live model agree by
+   *  construction rather than by two separate call sites staying in sync. */
+  evalDeckAbandoned(cardsRecorded: number, totalCards: number) {
+    this.push({ type: 'eval_deck_abandoned', cardsRecorded, totalCards });
+  }
 
   /** Aggregated, human-readable summary for the live readout + export. */
   metrics() {
@@ -425,9 +443,11 @@ class Telemetry {
    *  stays a plain event log, not a React store). What WAS wrong (not architectural, just unwired):
    *  DebugDrawer's `ScorecardMini` called `snapshot()` with no way to hand that count in at all, so
    *  its Watch bucket could never carry the partial-recording marker the completion card's own
-   *  scorecard does. This optional parameter is the one prop's worth of plumbing that closes it —
-   *  callers with nothing to report (the export, anywhere off-recorder results are structurally
-   *  impossible to have happened) simply omit it, unchanged from before. */
+   *  scorecard does. This optional parameter is the one prop's worth of plumbing that closes it.
+   *  P12 (fix round 3, corrected): round 2's version of this comment named "the export" as a caller
+   *  with structurally nothing to report — wrong; `exportJSON()` forwards `opts` straight through
+   *  now, so the only genuine "nothing to thread" callers are ones with no live `evalUnrecorded` to
+   *  read at all (this file's own tests, any future non-App caller of this class). */
   snapshot(opts?: { unrecorded?: number }) {
     const events = this.eventsSnapshot();
     // Same derivation every other consumer of this stream uses — deriveAttempts is the ONE place
@@ -465,16 +485,27 @@ class Telemetry {
       const deck: CardResult[] = events
         .filter((e): e is Extract<TelemetryEvent, { type: 'eval_card' }> => e.type === 'eval_card')
         .map((e) => ({ cardId: e.cardId, grade: e.grade, graded: e.graded, at: e.t }));
+      // P4 (fix round 3, reviewer-ruled): derived from the SAME durable event the abandon path now
+      // pushes (`evalDeckAbandoned`, following `mission_abandoned`'s precedent) — not from any
+      // live-App-only state this class has no access to. At most one such event can ever exist in
+      // a sitting (the deck cannot be restarted once started — deck.ts's own header), so presence
+      // alone is the whole check.
+      const abandoned = events.some((e) => e.type === 'eval_deck_abandoned');
       scorecardModel = scorecard(agg, scopedLedger, deck, arm, {
-        events, control, backend: this.config?.backend, unrecorded: opts?.unrecorded,
+        events, control, backend: this.config?.backend, unrecorded: opts?.unrecorded, abandoned,
       });
     }
     return { config: this.config, metrics: this.metrics(), runs: this.runCount(), events, attempts, ledger, scorecard: scorecardModel };
   }
 
-  /** Download the session as JSON for offline analysis / A/B aggregation. */
-  exportJSON() {
-    const json = JSON.stringify(this.snapshot(), null, 2);
+  /** Download the session as JSON for offline analysis / A/B aggregation.
+   *  P12 (fix round 3, reviewer-ruled): `opts` forwards straight to `snapshot()` — this is not a
+   *  caller with structurally nothing to report (round 2's `snapshot()` doc claimed it was); its
+   *  only real trigger is DebugDrawer's Export button, in a component that already holds
+   *  `props.evalUnrecorded` two lines away. Optional, so every existing no-arg call (including the
+   *  whole of telemetry.test.ts) is unaffected. */
+  exportJSON(opts?: { unrecorded?: number }) {
+    const json = JSON.stringify(this.snapshot(opts), null, 2);
     if (typeof window !== 'undefined') {
       const blob = new Blob([json], { type: 'application/json' });
       const url = URL.createObjectURL(blob);

@@ -182,7 +182,9 @@ export function DebugDrawer(props: DrawerProps) {
         <Button
           size="sm"
           className="mt-2 w-full"
-          onClick={() => telemetry.exportJSON()}
+          // P12 (fix round 3, reviewer-ruled): threaded so the exported JSON's own scorecard can
+          // carry the partial-recording marker too, not just the drawer's live mini.
+          onClick={() => telemetry.exportJSON({ unrecorded: props.evalUnrecorded })}
         >
           Export session JSON
         </Button>
@@ -201,7 +203,19 @@ export function DebugDrawer(props: DrawerProps) {
           plain App-local state (`evalUnrecorded`), one prop away, and is now passed through
           (`evalUnrecorded` above) so this Watch bucket carries the same partial-recording marker
           the completion card's does. Both still call the same `scorecard()`, so no math forks
-          either way. */}
+          either way.
+          P13 (fix round 3, disclosed further, NOT fixed): the deck-array divergence above re-enters
+          THIS line's own denominator. scorecard.ts's unrecorded Watch line reads
+          `Math.max(deck.length, n)` — and `deck.length` is exactly the array that differs between
+          the two surfaces (events-reconstructed here, excluding unrecorded results by construction;
+          live `DeckState.results` on the card, including them). So the SAME `unrecorded` count can
+          read as a smaller total, and therefore a LARGER share, in this mini than on the card — e.g.
+          2 unrecorded out of 5 played reads "(2/2)" here and "(2/5)" there, from the same sitting.
+          Fixture-only in practice (Start is disabled until recording, so `unrecorded` should always
+          be 0 — carried forward from round 1's "cannot verify" list), and out of scope to fix this
+          round: the actual fix would mean this mini either receiving the live `DeckState` (which
+          is exactly the coupling `snapshot()`'s event-sourced design avoids) or the card's total
+          deck length threaded through as a second number. */}
       {scorecardModel && (
         <div className="w-full px-4 py-3 rounded-2xl border bg-[var(--inner-box-bg)] border-[var(--card-border)]">
           <ScorecardMini model={scorecardModel} />

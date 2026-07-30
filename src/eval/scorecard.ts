@@ -60,7 +60,7 @@ import type { LedgerRow } from './capabilityLedger';
 import type { CardResult, EvalDimension } from './deck';
 import { deckTallyOf, EVAL_DECK } from './deck';
 import type { Attempt, ProbeVerdict } from './types';
-import { sameArm } from './types';
+import { advanceArm, sameArm } from './types';
 import { REGISTERS } from '../register/registry';
 import { SHELL_SKINS } from '../shell/skins/registry';
 
@@ -92,9 +92,12 @@ export interface ScorecardModel {
     // contributed one, and the view states this explicitly rather than implying a single connect.
     coldStartMs: number | null;
     coldStartN: number;
-    // How many `session_start` boundaries `opts.events` contains — the scope every number in this
-    // block actually spans (I3: latency/cost read the WHOLE sitting, not "this session", and the
-    // card must say so honestly rather than imply a single run).
+    // How many of THIS ARM's `session_start` boundaries the scoped stream contains (P6, fix round
+    // 3, corrected — round 2's version said "opts.events"/"the whole sitting", but this is counted
+    // AFTER `eventsForArm` scopes to the arm under test, N5/P2). I3's original point stands: latency
+    // spans more than "this session" whenever this arm was visited more than once, and the card
+    // must say so rather than imply a single run — but the scope is THIS ARM's sessions, not the
+    // sitting's; a sitting with five sessions of which two are this arm reports 2 here, not 5.
     sessionCount: number;
   };
   cost: { frames: number; hints: number; sessionCount: number };
@@ -161,27 +164,35 @@ function splitColdAndWarmTurns(events: TelemetryEvent[]): {
   return { cold, warm };
 }
 
-/** How many `session_start` boundaries `events` contains — the scope disclosure for the
- *  latency/cost block (I3): both read the whole sitting, and the number of sessions that spans is
- *  what makes "across N sessions" honest rather than a guess. */
+/** How many `session_start` boundaries the (already arm-scoped, post `eventsForArm`) stream
+ *  contains — P6 (fix round 3, corrected): this is called on `armEvents`, never on the raw
+ *  whole-sitting `opts.events`, so it counts THIS ARM's sessions, not the sitting's. A sitting with
+ *  five sessions of which two belong to this arm reports `sessionCount: 2` here — see P7 for how
+ *  the view now states that honestly rather than implying a sitting-wide count. */
 const sessionCount = (events: TelemetryEvent[]): number =>
   events.filter((e) => e.type === 'session_start').length;
 
-/** N5 (fix round 2, reviewer-ruled): scopes the whole-sitting event stream down to only the
- *  SESSIONS whose `session_start.config.arm` matches `arm` (`sameArm`, same register+shell rule
- *  as `attemptsForArm`). `latency`/`cost` reduce directly over events, and a `turn`/`session_
- *  complete` event carries no `arm` field of its own the way `Attempt` does — the only place arm
- *  is recorded is on the `session_start` that opened the session the event belongs to. So scoping
- *  means walking the stream and keeping whatever falls between a matching `session_start` and the
- *  next one, rather than filtering by a field on the event itself. An event stream with no
- *  `session_start` at all (a hand-authored fragment) matches nothing and returns `[]` — silence,
- *  not a guess. */
+/** N5 (fix round 2, reviewer-ruled) + P2 (fix round 3, reviewer-ruled): scopes the whole-sitting
+ *  event stream down to only the events that happened while `arm` was actually active, so
+ *  `latency`/`cost` (which reduce directly over events — a `turn`/`session_complete` carries no
+ *  `arm` field of its own the way `Attempt` does) cannot attribute one arm's numbers to another's
+ *  card. Walks the stream tracking the current arm via the SAME `advanceArm` state machine
+ *  `deriveAttempts.ts` and `capabilityLedger.ts` use, rather than session boundaries alone — P2
+ *  (round-2 re-review): a `session_start`-only version is blind to a mid-session SHELL switch
+ *  (`App.tsx`'s `handleSkinSelect` does not reconnect), so events after such a switch kept scoring
+ *  under the PRE-switch shell, silently and uniformly (probe-confirmed: a Terminal sitting that
+ *  switched Familiar->Material mid-session reported Material's own trial, deixis miss and slowest
+ *  turn all as Familiar's). `advanceArm` also updates on `shell_switch`, so `inScope` is
+ *  re-evaluated at both boundary types. An event stream with no `session_start` at all (a
+ *  hand-authored fragment) matches nothing and returns `[]` — silence, not a guess. */
 function eventsForArm(events: TelemetryEvent[], arm: Arm): TelemetryEvent[] {
   const out: TelemetryEvent[] = [];
+  let currentArm: Arm | undefined;
   let inScope = false;
   for (const e of events) {
-    if (e.type === 'session_start') {
-      inScope = sameArm(e.config.arm, arm);
+    if (e.type === 'session_start' || e.type === 'shell_switch') {
+      currentArm = advanceArm(currentArm, e);
+      inScope = sameArm(currentArm, arm);
       if (inScope) out.push(e);
       continue;
     }
@@ -260,17 +271,10 @@ function dimensionTallies(deck: CardResult[]): Map<EvalDimension, { done: number
  *  actually what the resulting `ArmAggregate` claims to be. This is the split `armAggregate.ts`'s
  *  own header says it deliberately does not do itself ("Tasks 5/8... own that split").
  *
- *  IDENTITY RULE (`sameArm`, ./types.ts): two attempts are the same arm iff `register` AND `shell`
- *  match. `dials` are EXCLUDED from the comparison — N6 (fix round 2, corrected): this is NOT
- *  because a `custom` twiddle "rolls up with" the register it started from (it does not — App.tsx's
- *  dials effect stamps `register: 'custom'` on a twiddle, `App.tsx:3658`, so `attemptsForArm`
- *  already gives it its own bucket by register alone, with `base` recording where it started,
- *  `telemetry.ts`). Excluding `dials` is simply INERT for every named register: a non-'custom'
- *  register key already implies that register's preset dials, so comparing them too would never
- *  change which bucket an attempt lands in. What excluding `dials` DOES do, and is not defended
- *  further here: two 'custom' arms with genuinely different dial values are treated as the SAME
- *  arm by this rule (both are just `register: 'custom'`) — a known, disclosed coarseness, not a
- *  claim that finer-grained dial drift is being tracked.
+ *  IDENTITY RULE: `sameArm` (./types.ts) — see ITS doc comment for the full rationale (what
+ *  excluding `dials` buys, and does not). P9 (fix round 3): kept in ONE place rather than repeated
+ *  here, after round 2 left two copies of the same (then-incorrect) rationale in this file and
+ *  types.ts, and only one of them got the mechanism right.
  *
  *  An attempt whose `arm` is `undefined` (a stream fragment with no `session_start` — see
  *  eval/types.ts's DEVIATION 2) NEVER matches any named arm and is excluded. Before this fix that

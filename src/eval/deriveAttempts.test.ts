@@ -8,6 +8,7 @@ import { deriveAttempts } from './deriveAttempts';
 import { DEFAULT_DIALS } from '../register/registry';
 import { reversesAgent } from '../telemetry';
 import type { TelemetryEvent, Arm, SessionConfig } from '../telemetry';
+import type { SkinKey } from '../shell/skins/types';
 
 // ---- fixture builders: real TelemetryEvent shapes, nothing invented ----------------------
 //
@@ -47,6 +48,9 @@ const correction = (t: number, overAgent?: boolean, slotId?: string): TelemetryE
 
 const ask = (t: number, field: string, answered: boolean, viaChip = false): TelemetryEvent =>
   ({ t, type: 'unspecified_ask', field, answered, viaChip });
+
+const shellSwitch = (t: number, from: SkinKey, to: SkinKey, midSession = true): TelemetryEvent =>
+  ({ t, type: 'shell_switch', from, to, midSession });
 
 // ==========================================================================================
 // Rule 1 — boundary: opens on a turn, closes on commit; durationMs sourced from settledMs only
@@ -682,5 +686,41 @@ describe('rule 2 grades what handleUndo actually emits', () => {
   it("a USER-origin memento undone -> stays 'completed' (the user editing their own work blames nobody)", () => {
     const [a] = deriveAttempts(stream('user'));
     expect(a).toMatchObject({ outcome: 'completed', undos: 0, corrections: 1 });
+  });
+});
+
+// ==========================================================================================
+// P2 (fix round 3, reviewer-ruled — the Important finding): a mid-session SHELL switch does not
+// reconnect (App.tsx's `handleSkinSelect` only dispatches the desk-skin change and emits
+// `telemetry.shellSwitch`), so before this fix `currentArm` here only ever updated on
+// `session_start` — every attempt after a shell switch kept the PRE-switch shell, silently.
+// Round-2 re-review Probe A reproduced it end-to-end: a Terminal sitting that switched
+// Familiar->Material mid-session reported the post-switch attempt as Familiar's.
+// ==========================================================================================
+describe('P2 — a shell_switch event moves the arm-attribution boundary without a session_start', () => {
+  it('an attempt AFTER a mid-session shell_switch carries the NEW shell, not the connect-time one', () => {
+    const events: TelemetryEvent[] = [
+      sessionStart(0, 'word', { register: 'terminal', dials: DEFAULT_DIALS, shell: 'familiar' }),
+      action(100, 'edit_content', 'commit'),
+      turn(110, 't1', 'before the switch', 'tool_call', 40, 200),
+      shellSwitch(250, 'familiar', 'material', true),
+      action(300, 'edit_content', 'commit'),
+      turn(310, 't2', 'after the switch', 'tool_call', 40, 400),
+    ];
+    const attempts = deriveAttempts(events);
+    expect(attempts).toHaveLength(2);
+    expect(attempts[0].arm).toEqual({ register: 'terminal', dials: DEFAULT_DIALS, shell: 'familiar' });
+    // The reproduced bug: without this fix, attempts[1].arm.shell would still read 'familiar'.
+    expect(attempts[1].arm).toEqual({ register: 'terminal', dials: DEFAULT_DIALS, shell: 'material' });
+  });
+
+  it('a shell_switch before any session_start has nothing to attach a shell to — arm stays undefined, never guessed', () => {
+    const events: TelemetryEvent[] = [
+      shellSwitch(0, 'familiar', 'material', false),
+      action(100, 'edit_content', 'commit'),
+      turn(110, 't1', 'no session ever started', 'tool_call', 40, 200),
+    ];
+    const [a] = deriveAttempts(events);
+    expect(a.arm).toBeUndefined();
   });
 });

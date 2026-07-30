@@ -9,7 +9,7 @@
 // grades through `Attempt` records produced by `deriveAttempts` (./deriveAttempts.ts).
 
 import type { ProgramId } from '../scenarios';
-import type { Arm } from '../telemetry';
+import type { Arm, TelemetryEvent } from '../telemetry';
 
 export type AttemptOutcome =
   | 'completed'          // the asked-for change is in the committed state
@@ -39,10 +39,12 @@ export interface Attempt {
                              // what the agent did, the signal rule 2 (`wrong`) fires on
   witnessed: boolean;       // did a witness card gate it
   durationMs: number | null;
-  // DEVIATION 2 (ordered by task-3 brief): same reasoning as `program` — `arm` comes from
+  // DEVIATION 2 (ordered by task-3 brief): same reasoning as `program` — `arm` STARTS from
   // `session_start.config.arm`, which is itself optional on `SessionConfig` (`arm?: Arm`). A
   // stream with no `session_start` yields attempts with a null-ish arm; this module uses the
-  // `Arm` type's existing optionality rather than inventing a default arm.
+  // `Arm` type's existing optionality rather than inventing a default arm. P2 (fix round 3): not
+  // the ONLY source any more — a `shell_switch` event (no reconnect, so no new `session_start`)
+  // also updates it mid-stream; see `deriveAttempts.ts`'s own `shell_switch` case / `advanceArm`.
   arm: Arm | undefined;
   // DEVIATION 3: not in the spec's code block, but required by the spec's OWN prose — §2 says
   // "Anything the rules cannot place → `ungradeable`, with the reason recorded." The interface
@@ -60,17 +62,47 @@ export type ProbeVerdict = { verdict: 'met' | 'not-met' | 'underpowered'; becaus
 /** Arm identity, shared (fix round 2, N1/N6): two arms are "the same" iff `register` AND `shell`
  *  match — `dials` are excluded. This is scorecard.ts's `attemptsForArm` rule, factored out here
  *  (rather than left there, or moved into capabilityLedger.ts) so BOTH modules can use the
- *  identical predicate without an import cycle: scorecard.ts already value-imports
- *  capabilityLedger.ts for `LedgerRow`, so capabilityLedger.ts cannot import scorecard.ts back.
- *  `./types.ts` is a leaf both already sit downstream of.
+ *  identical predicate. P10 (fix round 3, corrected): round 2's placement reasoning cited an
+ *  import-cycle risk that does not exist — `scorecard.ts`'s import of `LedgerRow` from
+ *  `capabilityLedger.ts` is `import type`, erased at compile time, so it forbids nothing either
+ *  way. The placement is still right for a plainer reason: `./types.ts` is a genuine runtime
+ *  LEAF (every one of ITS OWN imports is `import type` too), so putting shared logic here can
+ *  never itself create a cycle, regardless of what any future caller's import turns out to be.
  *
- *  What "dials excluded" actually buys: a hand-twiddled arm stamps `register: 'custom'`
- *  (App.tsx's dials effect: `registerKeyRef.current ?? 'custom'`), so it already lands in its own
- *  bucket by register alone — excluding dials from the comparison changes nothing for that case;
- *  it is inert rather than load-bearing, because a non-'custom' register key already implies that
- *  register's preset dials. Two 'custom' arms with genuinely different dials are (perhaps
- *  surprisingly) treated as the SAME arm by this rule — a known, disclosed gap, not a claim that
- *  they roll up "back to" a named register (they do not; 'custom' is not any named register). */
+ *  What "dials excluded" actually buys: P9 (fix round 3, corrected — round 2's version of this
+ *  paragraph named a "dials effect" that does not exist). `register: 'custom'` is stamped in
+ *  exactly ONE place, `App.tsx`'s `telemetry.start()` call inside the voice provider's `onOpen`
+ *  callback (`arm: { register: registerKeyRef.current ?? 'custom', ... }`) — CONNECT-TIME only,
+ *  not on every twiddle. So excluding `dials` from this comparison is inert for a session that
+ *  twiddled a `promptDialsKey` dial (autonomy/feedback/traceView/…): that reconnects, so the NEXT
+ *  `session_start` re-stamps `'custom'` (or a matching named register) fresh, and comparing dials
+ *  too would not have changed which bucket it lands in. It is NOT inert, and this rule does not
+ *  claim to handle, a twiddle of a dial OUTSIDE `promptDialsKey` (confirmGoals/markings/…): that
+ *  reconnects nothing, re-stamps nothing, and the attempt keeps whatever arm the session already
+ *  had — a real, disclosed gap in what dial changes this rule can ever see, not just in what it
+ *  chooses to compare. Two 'custom' arms with genuinely different dials are (perhaps surprisingly)
+ *  treated as the SAME arm by this rule regardless — 'custom' is not any named register, so there
+ *  is no "roll up to the base register" happening either. */
 export function sameArm(a: Arm | undefined, b: Arm): boolean {
   return a?.register === b.register && a?.shell === b.shell;
+}
+
+/** P2 (fix round 3, reviewer-ruled — the Important finding): advances the "current arm" a
+ *  stream-walker is tracking, given the NEXT event — shared so `deriveAttempts.ts`,
+ *  `capabilityLedger.ts`'s pass 2, and `scorecard.ts`'s `eventsForArm` cannot drift out of sync on
+ *  which events move the arm-attribution boundary (they drifted once already: all three tracked
+ *  `session_start` only, and a comment asserted that was the ONLY place arm is ever recorded).
+ *  `session_start` carries the WHOLE arm — a genuine reconnect. `shell_switch` does NOT reconnect
+ *  (`App.tsx`'s `handleSkinSelect` dispatches the desk-skin change and emits this telemetry marker
+ *  only; the only reconnect triggers in the app are the `promptDialsKey`/`voiceBackend`/
+ *  `activeProgram` effects) — it is the one other event type that moves the boundary, updating
+ *  only `.shell` on whatever arm is already current. `register_switch` needs no case here: every
+ *  register pair differs in at least one `promptDialsKey` dial, so a register switch already always
+ *  reconnects and already always writes its own `session_start`. Every other event type leaves the
+ *  current arm unchanged. Returns `undefined` unchanged (a `shell_switch` before any `session_start`
+ *  has nothing to attach a shell to, and is not guessed onto one). */
+export function advanceArm(current: Arm | undefined, ev: TelemetryEvent): Arm | undefined {
+  if (ev.type === 'session_start') return ev.config.arm;
+  if (ev.type === 'shell_switch') return current ? { ...current, shell: ev.to } : current;
+  return current;
 }
