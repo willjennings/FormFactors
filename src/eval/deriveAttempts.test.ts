@@ -228,6 +228,49 @@ describe('rule 5 — {error} refusal (action decision: rejected)', () => {
     expect(attempts[0].outcome).toBe('completed');
     expect(attempts[0].turns).toBe(2);
   });
+
+  // ========================================================================================
+  // C1 (fix round 2, reviewer-flagged) — the vanishing refusal. Reviewer's exact probe: a
+  // rejected insert_object, then later an UNRELATED unspecified_ask + commit for set_heading.
+  // Before the fix, the rejection vanished entirely and the unrelated success inherited the
+  // rejected request's verbatim text: ONE attempt, `{ outcome: 'asked-and-answered', verb:
+  // 'set_heading', request: 'insert a chart' }`. The ledger built over that list produced zero
+  // refusal rows and the aggregate credited 100% ask success — exactly the failure mode §3/§5
+  // exist to prevent, reproduced inside the artefact built to prevent it.
+  // ========================================================================================
+  it('C1 — a rejection followed by an UNRELATED ask+commit (a new utterance, its own turn event) yields TWO attempts, not one: refused-honestly (verbatim) + asked-and-answered', () => {
+    const events = [
+      sessionStart(0, 'excel'),
+      action(100, 'insert_object', 'rejected'),
+      turn(105, 't1', 'insert a chart', 'tool_call', 50, 20), // the rejected exchange's own settling turn
+      turn(140, 't2', 'add a heading saying Q1 Results', 'tool_call', 50, 25), // a NEW utterance's own turn — this is the signal that seals the rejection
+      ask(145, 'heading', true),
+      action(150, 'set_heading', 'commit'), // unrelated verb — must NOT supersede the sealed rejection
+      turn(155, 't3', 'call it Q1 Results', 'tool_call', 50, 30),
+    ];
+    const attempts = deriveAttempts(events);
+    expect(attempts).toHaveLength(2);
+    expect(attempts[0]).toMatchObject({ id: 't1', request: 'insert a chart', verb: 'insert_object', outcome: 'refused-honestly' });
+    expect(attempts[1]).toMatchObject({ id: 't2', request: 'add a heading saying Q1 Results', verb: 'set_heading', outcome: 'asked-and-answered' });
+  });
+
+  it('C1 defence-in-depth — same window (no intervening turn), a commit for an UNRELATED verb does not supersede the rejection either', () => {
+    // No `turn` event at all between the rejection and the unrelated commit: the same-verb-match
+    // guard on the `action` case is what has to catch this one (the turn-event guard above never
+    // fires, because no second turn ever arrives to trigger it). There is no boundary here to
+    // honestly split the single verbatim request into two attempts, so the unrelated commit's
+    // effects are simply not credited — the rejection stands.
+    const events = [
+      sessionStart(0, 'powerpoint'),
+      action(100, 'insert_object', 'rejected'),
+      action(110, 'set_heading', 'commit'), // unrelated verb, same window, no turn in between
+      turn(115, 't1', 'insert a chart', 'tool_call', 50, 20),
+    ];
+    const attempts = deriveAttempts(events);
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0].outcome).toBe('refused-honestly');
+    expect(attempts[0].verb).toBe('insert_object'); // not 'set_heading' — the unrelated commit never wins
+  });
 });
 
 // ==========================================================================================

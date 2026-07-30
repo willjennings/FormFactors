@@ -70,6 +70,14 @@ interface Pending {
   askAnswered: boolean;           // rule 6, the answered half — awaiting the commit that fulfils it
   rejectedPending: boolean;       // rule 5, tentative — a later commit in this window (a retry)
                                    // supersedes it; see the "no successful retry" carve-out
+  rejectedVerb: string | null;    // C1 fix (fix round 2, reviewer-flagged "vanishing refusal"):
+                                   // which verb was actually rejected. `p.verb` alone can't gate
+                                   // the retry carve-out because EVERY action event overwrites it,
+                                   // including one for a totally different, unrelated tool — this
+                                   // field is the one thing in `Pending` that stays pinned to what
+                                   // was actually refused, so the commit branch below can tell a
+                                   // genuine retry from an unrelated success landing in the same
+                                   // still-open window.
   sawAction: boolean;             // any action/ask ever touched this window — the
                                    // tool-call-without-action guard
   decided: AttemptOutcome | null; // set by a commit (rules 2-4/6) or a dropped ask (rule 6); once
@@ -104,7 +112,7 @@ export function deriveAttempts(events: TelemetryEvent[]): Attempt[] {
   const blank = (): Pending => ({
     id: null, askedAt: null, request: null, program: currentProgram, arm: currentArm,
     verb: null, turns: 0, corrections: 0, undos: 0, witnessed: false, committed: false,
-    correctedBeforeCommit: false, askAnswered: false, rejectedPending: false,
+    correctedBeforeCommit: false, askAnswered: false, rejectedPending: false, rejectedVerb: null,
     sawAction: false, decided: null, lastT: 0, settledMs: null,
   });
   const ensurePending = (): Pending => { if (!pending) pending = blank(); return pending; };
@@ -201,7 +209,30 @@ export function deriveAttempts(events: TelemetryEvent[]): Attempt[] {
       }
 
       case 'turn': {
-        const p = ensurePending();
+        let p = ensurePending();
+        // C1 fix (fix round 2, reviewer-flagged "vanishing refusal"): a SECOND `turn` event
+        // touching an already-identified window (`p.id !== null` — this is not the rejected
+        // exchange's own settling turn, which is what assigns `p.id` in the first place) is the
+        // one unambiguous signal this schema carries for "a new utterance started" (spec §2's
+        // boundary rule: an attempt closes on "a program change... or session end" — a NEW turn
+        // is the missing case: it means the PREVIOUS exchange is over). If a rejection is still
+        // sitting unresolved (`rejectedPending`, `!decided`) when that happens, this is not a
+        // retry — a genuine same-verb retry's `action` event would have arrived BEFORE now (the
+        // file-header ORDERING DISCOVERY: action precedes its own turn) and already cleared
+        // `rejectedPending` via the verb-matched carve-out below. So: seal the rejection as its
+        // own `refused-honestly` attempt right here, using what this window actually knows (the
+        // ORIGINAL request, verbatim), and open a fresh pending for whatever THIS turn event
+        // introduces. Before this fix, a later unrelated ask+commit silently inherited the
+        // rejected request's identity — the "vanishing refusal" — because `p.id === null` never
+        // re-fired once the first turn had already claimed it.
+        if (p.id !== null && p.rejectedPending && !p.decided) {
+          const { outcome, reason } = resolve(p, TOOL_CALL_NOTHING); // sawAction is true (the
+            // rejection itself), so this always resolves via the `rejectedPending` branch, not
+            // `nothingHappened` — `TOOL_CALL_NOTHING` is passed only because `resolve` requires it.
+          settle(p, outcome, reason);
+          pending = null;
+          p = ensurePending(); // fresh pending for this turn's own content, identity assigned below
+        }
         p.lastT = Math.max(p.lastT, ev.t);
         if (p.id === null) {
           p.id = ev.id;
@@ -251,7 +282,28 @@ export function deriveAttempts(events: TelemetryEvent[]): Attempt[] {
           // Double-count guard (spec §5.5): witness never closes the boundary by itself — the
           // commit that follows for the same action is what does. One attempt, not two.
         } else if (ev.decision === 'commit') {
-          p.rejectedPending = false; // a successful retry supersedes an earlier `rejected` — rule 5's carve-out
+          // C1 fix (fix round 2, reviewer-flagged "vanishing refusal"): the carve-out below only
+          // supersedes a PENDING rejection for a genuine same-verb retry — same window (no `turn`
+          // event has intervened; see the guard at the top of the `turn` case above, which is the
+          // primary defence and handles the far more common cross-turn case), same verb. Before
+          // this fix, ANY commit — for ANY verb — cleared `rejectedPending` unconditionally, so an
+          // unrelated success arriving later in the SAME still-open window (spec §2: "nested tool
+          // calls belong to the open attempt" — a second, unrelated tool call within one exchange)
+          // could also silently erase a real refusal, one step later than the turn-event case.
+          if (p.rejectedPending && ev.verb !== p.rejectedVerb) {
+            // A same-window commit for a DIFFERENT verb than the one that was rejected. This is
+            // not a retry of it, and there is no `turn` boundary here to honestly split the single
+            // verbatim request into two attempts (unlike the cross-turn case above). Rather than
+            // guess which of the two outcomes the one request "belongs" to, this commit's effects
+            // are NOT recorded as this window's decision — the rejection stands, uncredited by an
+            // unrelated success, exactly as spec §5.1 requires ("a refusal is never a failure",
+            // read the other way: a refusal is never silently overwritten by an unrelated success
+            // either). `p.verb` is restored to the rejected verb so the eventual `refused-honestly`
+            // record reports what was actually refused, not whatever unrelated tool fired last.
+            p.verb = p.rejectedVerb;
+            break;
+          }
+          p.rejectedPending = false; // a successful same-verb retry supersedes the rejection
           p.committed = true;
           // Rule 2 (`wrong`, the single most important rule in the file) can never be decided
           // here: a reversing correction always arrives chronologically AFTER its commit (the user
@@ -268,6 +320,7 @@ export function deriveAttempts(events: TelemetryEvent[]): Attempt[] {
         } else {
           // 'rejected' — tentative, not a boundary close by itself (see rule 5's comment above).
           p.rejectedPending = true;
+          p.rejectedVerb = ev.verb;
         }
         break;
       }

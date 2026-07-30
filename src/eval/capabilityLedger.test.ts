@@ -267,16 +267,38 @@ describe('examples cap at 5, first-seen order', () => {
 // Ranked by n desc.
 // ==========================================================================================
 describe('ranked by n desc', () => {
-  it('rows sort with the highest-n row first', () => {
+  // I2 (fix round 2, reviewer-ruled): the original fixture here inserted the eventual high-n row
+  // FIRST, so a mutation that dropped the sort entirely (plain insertion order) still passed —
+  // the assertion was decorative. This fixture inverts that: the LOW-n row is inserted first, the
+  // eventual HIGH-n row's occurrences come later, so only a real sort-by-n puts it first.
+  it('rows sort with the highest-n row first, even when it was NOT the first row created', () => {
     const attempts = [
+      attempt({ outcome: 'abandoned', verb: null, program: 'word', request: 'low-n, inserted first' }), // n=1
       attempt({ outcome: 'refused-honestly', verb: 'insert_object', program: 'powerpoint', request: 'r1' }),
       attempt({ outcome: 'refused-honestly', verb: 'insert_object', program: 'powerpoint', request: 'r2' }),
-      attempt({ outcome: 'refused-honestly', verb: 'insert_object', program: 'powerpoint', request: 'r3' }),
-      attempt({ outcome: 'abandoned', verb: null, program: 'word', request: 'r4' }),
+      attempt({ outcome: 'refused-honestly', verb: 'insert_object', program: 'powerpoint', request: 'r3' }), // n=3, created AFTER the n=1 row above
     ];
     const rows = capabilityLedger([], attempts);
-    expect(rows[0].n).toBeGreaterThanOrEqual(rows[1].n);
-    expect(rows[0].key).toBe('insert_object/powerpoint');
+    expect(rows).toHaveLength(2);
+    expect(rows[0].key).toBe('insert_object/powerpoint'); // n=3 sorts first despite being created second
     expect(rows[0].n).toBe(3);
+    expect(rows[1].key).toBe('speech-only/word');
+    expect(rows[1].n).toBe(1);
+  });
+
+  // I2's tie-break requirement: stated in capabilityLedger.ts's file header ("ties keep first-seen
+  // row order... Array.prototype.sort is stable"), pinned here rather than left implicit.
+  it('a tie in n is broken by first-seen row order, never re-sorted', () => {
+    const attempts = [
+      attempt({ outcome: 'refused-honestly', verb: 'verbA', program: 'word', request: 'a1' }), // key A first-seen here
+      attempt({ outcome: 'refused-honestly', verb: 'verbB', program: 'word', request: 'b1' }), // key B first-seen here
+      attempt({ outcome: 'refused-honestly', verb: 'verbA', program: 'word', request: 'a2' }), // A -> n=2
+      attempt({ outcome: 'refused-honestly', verb: 'verbB', program: 'word', request: 'b2' }), // B -> n=2, same as A
+    ];
+    const rows = capabilityLedger([], attempts);
+    expect(rows.map((r) => ({ key: r.key, n: r.n }))).toEqual([
+      { key: 'verbA/word', n: 2 },
+      { key: 'verbB/word', n: 2 },
+    ]);
   });
 });

@@ -26,18 +26,21 @@
 // struct meant to summarise an arm is exactly the silent omission that section exists to forbid. A
 // sixth field, `abandoned`, is included below.
 //
-// `ungradeable` deliberately has NO rate field: unlike abandonment, spec §5.7 does not call for it
-// to be counted and averaged in — it calls for the OPPOSITE ("if the ungradeable share ... exceeds
-// a stated threshold, the session's aggregates are reported as unreliable rather than averaged into
-// the corpus"), i.e. a gate on whether to trust the numbers at all, not one more rate sitting beside
-// them. That gate is a Task 5/8-shaped concern (it acts on an ArmAggregate from the outside); this
-// module stays honest about it the simple way available at this layer: `ungradeable` attempts still
-// count in `n` (so a run with many of them visibly fails to sum the other six rates to ~1, itself a
-// signal), but never claim a rate of their own.
+// REVISED (fix round 2, I1, reviewer-ruled): the first version of this module gave `ungradeable`
+// NO rate field, reasoning that spec §5.7 wants a GATE on trust ("if the ungradeable share ...
+// exceeds a stated threshold, the session's aggregates are reported as unreliable"), not one more
+// rate — and that inferring the share by subtracting six floats from 1 was visibility enough. The
+// reviewer ruled that non-compliant: §5.7 says the share must be VISIBLE, and an implicit remainder
+// nobody computes directly is not visibility, it's an exercise left to the reader. `ungradeable` is
+// now a seventh rate field below, same shared-`n` denominator as the other six. The §5.7 GATE itself
+// (deciding a session is "unreliable" past some threshold and excluding it from the corpus) is still
+// a Task 5/8-shaped concern layered on TOP of this number — `armAggregate` reports the share
+// honestly; it does not decide what a caller does once the share is high. Task 8's scorecard is
+// expected to render `ungradeable` under its own unreliability rule rather than silently drop it.
 //
-// completion/corrected/wrong/refusal/ask/abandoned are mutually exclusive by construction — every
-// `Attempt` has exactly one `outcome` — so their six numerators partition `n` with `ungradeable` as
-// the seventh, silent remainder.
+// completion/corrected/wrong/refusal/ask/abandoned/ungradeable are mutually exclusive by
+// construction — every `Attempt` has exactly one `outcome` — so all seven numerators now partition
+// `n` exactly (their seven `value`s sum to 1 for any non-empty `attempts`, modulo floating point).
 
 import type { Attempt } from './types';
 
@@ -60,6 +63,9 @@ export interface ArmAggregate {
                              // `asks` block: "asks kept deliberately separate from errors"), not a
                              // success or a failure rate by itself
   abandoned: Rate;          // outcome === 'abandoned' — see the file-header FIELD LIST note
+  ungradeable: Rate;         // outcome === 'ungradeable' — visibility for §5.7, not a verdict:
+                             // this field reports the share; deciding a run "unreliable" past some
+                             // threshold is Task 5/8's to do with this number, not this module's
   // Population statistics over WHATEVER `attempts` this call was given — not narrowed to
   // 'completed' outcomes only, despite spec §4's shorthand "median turns to completion". Restricting
   // to completions only would hide exactly the turn-cost of the row classes an evaluation ledger
@@ -104,6 +110,7 @@ export function armAggregate(attempts: Attempt[]): ArmAggregate {
     refusal: rate(count('refused-honestly'), n),
     ask: rate(askCount, n),
     abandoned: rate(count('abandoned'), n),
+    ungradeable: rate(count('ungradeable'), n),
     medianTurns: { value: lowerMedian(turns), n: turns.length },
     medianDurationMs: { value: lowerMedian(durations), n: durations.length },
   };

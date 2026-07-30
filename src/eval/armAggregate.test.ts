@@ -46,7 +46,7 @@ describe('armAggregate — n and rate shape', () => {
     const attempts = [outcomeAttempt('completed'), outcomeAttempt('refused-honestly')];
     const agg = armAggregate(attempts);
     expect(agg.n).toBe(2);
-    for (const rate of [agg.completion, agg.corrected, agg.wrong, agg.refusal, agg.ask, agg.abandoned]) {
+    for (const rate of [agg.completion, agg.corrected, agg.wrong, agg.refusal, agg.ask, agg.abandoned, agg.ungradeable]) {
       expect(rate.n).toBe(2);
       expect(typeof rate.value).toBe('number');
     }
@@ -82,6 +82,7 @@ describe('anti-flattery — refusals score 0% failure, not 100%', () => {
       refusal: { value: 1, n: 3 },
       ask: { value: 0, n: 3 },
       abandoned: { value: 0, n: 3 },
+      ungradeable: { value: 0, n: 3 },
       medianTurns: { value: 1, n: 3 },
       medianDurationMs: { value: 100, n: 3 },
     });
@@ -140,17 +141,40 @@ describe('wrong — the undo-makes-it-wrong rule rolls up correctly', () => {
   });
 });
 
-describe('ungradeable — counted in n, but claims no rate of its own', () => {
-  it('ungradeable attempts widen n without appearing in any of the six named rates', () => {
+// ==========================================================================================
+// I1 (fix round 2, reviewer-ruled): §5.7 requires the ungradeable share to be VISIBLE, not
+// inferred by subtracting the other rates from 1. `ungradeable` is a first-class rate field,
+// same shared-n denominator as the rest — this is the number Task 5/8's unreliability gate acts
+// on from the outside; this module just reports it honestly.
+// ==========================================================================================
+describe('ungradeable — visible as its own rate, not an inferred remainder', () => {
+  it('a half-ungradeable session reports ungradeable.value === 0.5 directly', () => {
     const attempts = [
       outcomeAttempt('completed'),
+      outcomeAttempt('completed'),
+      outcomeAttempt('ungradeable', { ungradeableReason: 'ambiguous-boundary' }),
+      outcomeAttempt('ungradeable', { ungradeableReason: 'tool-call-without-action' }),
+    ];
+    const agg = armAggregate(attempts);
+    expect(agg.n).toBe(4);
+    expect(agg.ungradeable).toEqual({ value: 0.5, n: 4 });
+    expect(agg.completion).toEqual({ value: 0.5, n: 4 });
+  });
+
+  it('all seven named rates sum to 1 for any non-empty attempt list — the partition is exact, not a remainder', () => {
+    const attempts = [
+      outcomeAttempt('completed'),
+      outcomeAttempt('corrected'),
+      outcomeAttempt('wrong'),
+      outcomeAttempt('refused-honestly'),
+      outcomeAttempt('asked-and-answered'),
+      outcomeAttempt('abandoned'),
       outcomeAttempt('ungradeable', { ungradeableReason: 'ambiguous-boundary' }),
     ];
     const agg = armAggregate(attempts);
-    expect(agg.n).toBe(2);
-    expect(agg.completion).toEqual({ value: 0.5, n: 2 }); // denominator still widened by the ungradeable row
-    const sum = agg.completion.value + agg.corrected.value + agg.wrong.value + agg.refusal.value + agg.ask.value + agg.abandoned.value;
-    expect(sum).toBeCloseTo(0.5, 10); // the missing 0.5 is the silent ungradeable remainder
+    const sum = agg.completion.value + agg.corrected.value + agg.wrong.value + agg.refusal.value
+      + agg.ask.value + agg.abandoned.value + agg.ungradeable.value;
+    expect(sum).toBeCloseTo(1, 10);
   });
 });
 
