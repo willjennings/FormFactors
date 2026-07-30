@@ -89,7 +89,7 @@ export function sameArm(a: Arm | undefined, b: Arm): boolean {
 
 /** P2 (fix round 3, reviewer-ruled — the Important finding): advances the "current arm" a
  *  stream-walker is tracking, given the NEXT event — shared so `deriveAttempts.ts`,
- *  `capabilityLedger.ts`'s pass 2, and `scorecard.ts`'s `eventsForArm` cannot drift out of sync on
+ *  `capabilityLedger.ts`'s pass 2, and `scorecard.ts`'s `scopeToArm` cannot drift out of sync on
  *  which events move the arm-attribution boundary (they drifted once already: all three tracked
  *  `session_start` only, and a comment asserted that was the ONLY place arm is ever recorded).
  *  `session_start` carries the WHOLE arm — a genuine reconnect. `shell_switch` does NOT reconnect

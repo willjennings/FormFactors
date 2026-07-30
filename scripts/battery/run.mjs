@@ -183,8 +183,14 @@ async function waitForHttp(url, timeoutMs, label, expectProc) {
   const deadline = Date.now() + timeoutMs;
   let lastErr;
   while (Date.now() < deadline) {
-    if (expectProc && expectProc.exitCode !== null) {
-      throw new Error(`${label}: the process that was supposed to serve ${url} already exited (code ${expectProc.exitCode}) — refusing to trust any response from ${url} as this script's own server (it may be a pre-existing one that won a bind race)`);
+    // Q3 (task-9 review round 4, Minor — the cheap half; the bind-race ordering gap itself is
+    // disclosed above and PARKED for the settle-detector pass): `exitCode` alone misses a
+    // SIGKILLed child — Node reports `exitCode: null` and `signalCode: 'SIGKILL'` (or another
+    // signal) for a process the OS terminated rather than one that exited normally, so a dead
+    // child killed by a signal would slip this guard and let the next poll read from whatever won
+    // the bind race after it died.
+    if (expectProc && (expectProc.exitCode !== null || expectProc.signalCode !== null)) {
+      throw new Error(`${label}: the process that was supposed to serve ${url} already exited (code ${expectProc.exitCode}, signal ${expectProc.signalCode}) — refusing to trust any response from ${url} as this script's own server (it may be a pre-existing one that won a bind race)`);
     }
     try {
       const res = await fetch(url);
@@ -533,9 +539,10 @@ async function switchProgram(rpc, programId) {
  *
  *  THE ACTUAL INVARIANT (verified against all four reachable states — clean default boot, after a
  *  swap, a journal-restore boot, a clean wide boot): exactly ONE program chip is ever NOT
- *  minimized (a program swap minimizes the outgoing window; the desk holds at most one program
- *  window at a time, so there is nothing to minimize until a second swap happens, and the incoming
- *  window never boots minimized). "Program chip AND label does not contain the put-away marker" —
+ *  minimized (a program swap minimizes the outgoing window rather than closing it, so the desk can
+ *  hold MORE than one program window at once once a swap has happened — the minimized ones persist,
+ *  per the paragraph above; there is simply nothing to minimize until the first swap, and the
+ *  incoming window never boots minimized). "Program chip AND label does not contain the put-away marker" —
  *  not `aria-pressed`/focus, which a wide boot's artifact window can also claim — is the predicate
  *  that is correct in all four states. */
 async function readActiveProgram(rpc) {
@@ -708,7 +715,13 @@ function safeReaddir(dir) {
  *  front — same outcome as the navigate-based approach, with the entire risk class removed rather
  *  than guarded. */
 async function clearOriginStorage(rpc, browserUrl) {
-  await rpc('Storage.clearDataForOrigin', { origin: browserUrl, storageTypes: 'local_storage,session_storage' });
+  // Q2 (task-9 review round 4, Minor): `session_storage` is not a valid CDP `StorageType` (the real
+  // enum members are `cookies`, `local_storage`, `indexeddb`, `websql`, `service_workers`, `cache_storage`
+  // and a few others — no `session_storage`); CDP silently ignores the unrecognized member rather than
+  // erroring, so this was an inert no-op ingredient, not a functional bug (a fresh target's own
+  // sessionStorage is empty anyway). `'all'` clears everything CDP knows about this origin, which is
+  // both correct and simpler than naming individual types.
+  await rpc('Storage.clearDataForOrigin', { origin: browserUrl, storageTypes: 'all' });
 }
 
 /** I1 (task-9 review round 1, Important): `recordSessionEnd` (App.tsx) — which flushes the last
@@ -727,8 +740,10 @@ async function clearOriginStorage(rpc, browserUrl) {
 // ended". The connect path already checks BOTH directions (`clickMicToggle` + `pollUntil(isLiveNow)`
 // below, in `driveSession`); this mirrors it. Two real failure modes this closes: (1) if the
 // session was ALREADY down when this fires (a dropped socket, or a reconnect from the LAST
-// program swap still in flight — every default cell does 15 mid-session swaps, each a real close/
-// reconnect), clicking the toggle STARTS a session instead of ending one — the last turn is never
+// program swap still in flight — every default cell does 15 mid-session swaps, one per program
+// change between consecutive rows of the 28-row default utterance corpus (counted once, off the
+// corpus's own `program` sequence — Q4/task-9 review round 4 — not a rounded estimate), each a real
+// close/reconnect), clicking the toggle STARTS a session instead of ending one — the last turn is never
 // flushed (I1's defect, reintroduced silently) and, under --live, a real billed connection opens
 // and runs until the page closes; (2) if the click lands but the app never actually tears down
 // (a wedged reconnect effect), the export would still be attempted against a live-but-unflushed
@@ -745,7 +760,8 @@ async function clearOriginStorage(rpc, browserUrl) {
 //     its `session_start` count.
 // (b) The pre-check's throw discards the WHOLE export, including every turn already paid for, if
 //     the session dropped on its own near the end (a mid-session program swap's reconnect racing
-//     the final settle sleep). At ~16 program-swap reconnects per live default session and
+//     the final settle sleep). At 15 program-swap reconnects per live default session (the default
+//     corpus's own program sequence — see the `15 mid-session swaps` comment above) and
 //     `MAX_CONSECUTIVE_FAILURES = 2`, two such sessions in a row would abort a paid 12-session
 //     pilot run over a single dropped socket near the finish line. A softer alternative (export
 //     anyway, flag the manifest entry `endedCleanly: false` instead of discarding) was considered

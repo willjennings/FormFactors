@@ -112,12 +112,18 @@ export interface ScorecardModel {
     // contributed one, and the view states this explicitly rather than implying a single connect.
     coldStartMs: number | null;
     coldStartN: number;
-    // How many of THIS ARM's `session_start` boundaries the scoped stream contains (P6, fix round
-    // 3, corrected — round 2's version said "opts.events"/"the whole sitting", but this is counted
-    // AFTER `eventsForArm` scopes to the arm under test, N5/P2). I3's original point stands: latency
-    // spans more than "this session" whenever this arm was visited more than once, and the card
-    // must say so rather than imply a single run — but the scope is THIS ARM's sessions, not the
-    // sitting's; a sitting with five sessions of which two are this arm reports 2 here, not 5.
+    // How many of the sitting's SESSIONS this arm was active during (P6/P7, fix rounds 3-4,
+    // corrected — round 2's version said "opts.events"/"the whole sitting"; a later drift in this
+    // comment then claimed it counted "session_start boundaries the scoped stream contains", which
+    // is also wrong — `scopeToArm` (this file, below) counts distinct SESSIONS that contributed at
+    // least one in-scope event, not `session_start` events inside the scope: an arm entered
+    // mid-session by a `shell_switch` owns real turns in a session whose `session_start` belongs to
+    // the PREVIOUS arm, so counting boundaries-in-scope would silently undercount it. Matches
+    // `ArmScope.sessionCount`'s own doc exactly — this field is that value, forwarded unchanged. I3's
+    // original point stands: latency spans more than "this session" whenever this arm was visited
+    // more than once, and the card must say so rather than imply a single run — but the scope is
+    // THIS ARM's sessions, not the sitting's; a sitting with five sessions of which two are this arm
+    // reports 2 here, not 5.
     sessionCount: number;
   };
   cost: { frames: number; hints: number; sessionCount: number };
@@ -143,6 +149,17 @@ export interface ScorecardOpts {
                                   // never infers it from `deck`'s length (a legitimately full deck
                                   // and one closed exactly after its last card are indistinguishable
                                   // from `deck` alone — the caller already knows which happened).
+  // N4 (task-9 review, the wave's only behaviour change): how many of the sitting's attempts
+  // belonged to some OTHER arm — `attempts.length - scopedAttempts.length` at the call site, i.e.
+  // the population `attemptsForArm` filtered OUT. §5.6-shaped: R1 (fix round 4) already stopped
+  // POST-switch trials vanishing (the card used to be headlined by the pre-switch arm, silently
+  // scoping every later trial out of it); this is the mirror gap — PRE-switch trials silently
+  // scoped OUT of the card that switching TO a new arm draws. A shell/register switch after real
+  // work moves the subject arm, and the only drawable card can legitimately show 0 trials while
+  // `deckSummary` (sitting-scoped, by design) still reports cards played — with no note anywhere
+  // that other, real trials happened this sitting and are simply not on THIS card. Omitted or 0
+  // renders nothing (a single-arm sitting has nothing to disclose here).
+  otherArmTrials?: number;
 }
 
 /** §5.7's "ungradeable share exceeds a stated threshold" gate, pre-registered here as the Task
@@ -253,6 +270,13 @@ export function buildLatency(scope: ArmScope): ScorecardModel['latency'] {
   return { medianMs, warmN: warm.length, worst, coldStartMs, coldStartN: cold.length, sessionCount: scope.sessionCount };
 }
 
+/** N5 (task-9 review, disclosed rather than fixed): `session_complete`'s `framesSent`/`hintsSent`
+ *  are a whole-SESSION total (App.tsx's `recordSessionEnd` reads its own running counters once, at
+ *  flush) — the event carries no per-arm breakdown to split. So a session that switched arm
+ *  mid-stream (a `shell_switch`, which moves `scopeToArm`'s boundary without a reconnect) attributes
+ *  the WHOLE session's frame/hint cost to whichever arm was live at the moment `session_complete`
+ *  fired, not proportionally to how long each arm was actually active. Defensible — there is no
+ *  finer signal to attribute by — but was undocumented here; now it is. */
 function buildCost(scope: ArmScope): ScorecardModel['cost'] {
   const { frames, hints } = scope.events.reduce(
     (acc, e) => e.type === 'session_complete'
@@ -444,6 +468,17 @@ export function scorecard(agg: ArmAggregate, ledger: LedgerRow[], deck: CardResu
       `card result${n === 1 ? '' : 's'} recorded in this panel only — the recorder was off`,
       n, Math.max(deck.length, n),
     ));
+  }
+
+  // N4 (task-9 review, the wave's only behaviour change) — see `ScorecardOpts.otherArmTrials`'s own
+  // doc for the full rationale. No denominator here: this is a count of trials NOT on this card, so
+  // there is no honest "out of N" to divide it by (agg.n is THIS arm's population; the excluded
+  // trials are, by definition, not in it).
+  if (opts.otherArmTrials && opts.otherArmTrials > 0) {
+    const n = opts.otherArmTrials;
+    watch.push(n === 1
+      ? `${n} trial from another arm this sitting is not on this card`
+      : `${n} trials from other arms this sitting are not on this card`);
   }
 
   // N5 (fix round 2, reviewer-ruled): `opts.events` is the whole-sitting stream; `scopeToArm`

@@ -547,7 +547,7 @@ describe('EVAL_DECK sanity — the dimension-routing test above uses real card i
 // ==========================================================================================
 // N5 (fix round 2, reviewer-ruled): latency/cost were still whole-sitting/all-arm even after C1
 // scoped `agg`. Probe A reproduced a Terminal-headed card whose `medianMs`/`worst` were actually
-// Guided's turns. `eventsForArm` scopes `opts.events` to only the sessions matching `arm` before
+// Guided's turns. `scopeToArm` scopes `opts.events` to only the sessions matching `arm` before
 // either block reduces over it.
 // ==========================================================================================
 describe('N5 — latency and cost are scoped to the arm under test, not the whole sitting', () => {
@@ -593,7 +593,7 @@ describe('N5 — latency and cost are scoped to the arm under test, not the whol
   });
 
   // P2 (fix round 3, reviewer-ruled — the Important finding): the round-2 re-review's exact Probe A
-  // reproduction, at the `eventsForArm` level. A mid-session shell switch (no reconnect, so no new
+  // reproduction, at the `scopeToArm` level. A mid-session shell switch (no reconnect, so no new
   // `session_start`) used to leave the post-switch turn scored under the PRE-switch shell.
   it('a mid-session shell_switch moves the latency/cost boundary too, with no reconnect', () => {
     const familiarArm: Arm = { register: 'terminal', dials: DEFAULT_DIALS, shell: 'familiar' };
@@ -770,5 +770,66 @@ describe('R1 — currentArmFrom reads the arm in effect at the END of the stream
   it('a stream with no session_start has no arm — undefined, never a guess', () => {
     expect(currentArmFrom([])).toBeUndefined();
     expect(currentArmFrom([{ t: 0, type: 'shell_switch', from: 'familiar', to: 'material', midSession: true }])).toBeUndefined();
+  });
+});
+
+// ==========================================================================================
+// N4 (task-9 review, the wave's only behaviour change): a shell/register switch after real work
+// moves the subject arm — R1 above already fixed the card's HEADLINE and SCOPE to follow that
+// switch, but a sitting that did real work under an EARLIER arm and then switched drew a card
+// whose `agg.n`/scope were legitimately empty (or small) for the new arm, with `deckSummary` (which
+// is deliberately sitting-scoped) still claiming cards were played, and no note anywhere that other,
+// real trials happened this sitting and simply are not on this particular card. `otherArmTrials`
+// closes that: both call sites (App.tsx, telemetry.ts) compute it as
+// `attempts.length - attemptsForArm(attempts, arm).length` — mirrored here — and thread it through
+// `ScorecardOpts`.
+// ==========================================================================================
+describe('N4 — the cross-arm note names trials this sitting that are not on this card', () => {
+  const guidedArm: Arm = { register: 'guided', dials: DEFAULT_DIALS, shell: 'familiar' };
+  const terminalArm: Arm = { register: 'terminal', dials: DEFAULT_DIALS, shell: 'familiar' };
+
+  it('a mixed-arm stream: the line appears, naming exactly the OTHER arms\' count', () => {
+    const attempts: Attempt[] = [
+      mkAttempt({ arm: guidedArm }),
+      mkAttempt({ arm: guidedArm }),
+      mkAttempt({ arm: terminalArm }),
+    ];
+    const scopedAttempts = attemptsForArm(attempts, terminalArm);
+    const otherArmTrials = attempts.length - scopedAttempts.length; // the two Guided attempts
+    expect(otherArmTrials).toBe(2);
+    const agg = armAggregate(scopedAttempts);
+    const model = scorecard(agg, [], [], terminalArm, opts([], { otherArmTrials }));
+    expect(model.watch).toContain('2 trials from other arms this sitting are not on this card');
+  });
+
+  it('exactly one other-arm trial uses the singular phrasing', () => {
+    const attempts: Attempt[] = [
+      mkAttempt({ arm: guidedArm }),
+      mkAttempt({ arm: terminalArm }),
+    ];
+    const scopedAttempts = attemptsForArm(attempts, terminalArm);
+    const otherArmTrials = attempts.length - scopedAttempts.length;
+    expect(otherArmTrials).toBe(1);
+    const agg = armAggregate(scopedAttempts);
+    const model = scorecard(agg, [], [], terminalArm, opts([], { otherArmTrials }));
+    expect(model.watch).toContain('1 trial from another arm this sitting is not on this card');
+  });
+
+  it('a single-arm stream: no other-arm trials, the line is absent', () => {
+    const attempts: Attempt[] = [
+      mkAttempt({ arm: terminalArm }),
+      mkAttempt({ arm: terminalArm }),
+    ];
+    const scopedAttempts = attemptsForArm(attempts, terminalArm);
+    const otherArmTrials = attempts.length - scopedAttempts.length;
+    expect(otherArmTrials).toBe(0);
+    const agg = armAggregate(scopedAttempts);
+    const model = scorecard(agg, [], [], terminalArm, opts([], { otherArmTrials }));
+    expect(model.watch.some((l) => l.includes('not on this card'))).toBe(false);
+  });
+
+  it('omitted opts.otherArmTrials (every pre-N4 caller/fixture) renders no line either', () => {
+    const model = scorecard(mkAgg(1, { completion: 1 }), [], [], terminalArm, opts([]));
+    expect(model.watch.some((l) => l.includes('not on this card'))).toBe(false);
   });
 });

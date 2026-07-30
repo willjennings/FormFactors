@@ -113,6 +113,16 @@ describe('winsWhen', () => {
     expect(REGISTERS.find(r => r.key === 'guided')!.winsWhen).toBeUndefined();
   });
 
+  // Task 5 (task-9 review, negative-space guard): the positive assertion above only checks the
+  // THREE named registers claim `winsWhen` — it says nothing about whether some OTHER register
+  // (present today, or added later) also lacks one. Guided must be the ONLY register without
+  // `winsWhen` — it is the control arm and a self-comparison predicate can only ever compute a
+  // tautology (buildComparison's own doctrine, scorecard.ts) — so this asserts the exclusion list
+  // directly, in both directions: exactly `['guided']`, not a superset or a subset of it.
+  it('guided is the ONLY register without winsWhen', () => {
+    expect(REGISTERS.filter(r => !r.winsWhen).map(r => r.key)).toEqual(['guided']);
+  });
+
   it('every register with winsWhen returns underpowered — BY NAME — when either side is below ' +
      'threshold, iterated so a fifth entry is covered on arrival', () => {
     const strong = mkAgg(UNDERPOWERED_N, { medianDurationMs: 100, medianTurns: 3, completion: 0.5 });

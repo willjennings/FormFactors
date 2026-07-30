@@ -83,7 +83,7 @@ export function Scorecard({ model }: { model: ScorecardModel }) {
         {model.latency.sessionCount > 1 && (
           // I3: latency reads more than "this session" whenever this ARM was visited more than
           // once — say so rather than leaving the scope to be assumed. P7 (fix round 3, corrected):
-          // `sessionCount` is THIS ARM's session count (post `eventsForArm` scoping), not the
+          // `sessionCount` is THIS ARM's session count (post `scopeToArm` scoping), not the
           // sitting's — "this sitting" read as a claim about the whole sitting, which a sitting
           // that also visited other arms would make false.
           <p className="text-[11px] text-[var(--text-secondary)]">across {model.latency.sessionCount} of this arm's sessions</p>

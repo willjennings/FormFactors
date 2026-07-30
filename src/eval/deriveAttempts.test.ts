@@ -171,12 +171,24 @@ describe('rule 2 — commit reversed by a correction (overAgent) → wrong', () 
 // Rule 3 — corrected
 // ==========================================================================================
 describe('rule 3 — a correction precedes the commit, not reversed → corrected', () => {
+  // Task 3 (task-9 review, fixture discipline): the pre-fix version of this fixture opened with a
+  // `turn` event (supplying identity FIRST), then a correction, then the commit `action` — but the
+  // file's own FIXTURE DISCIPLINE (top of this file) stamps every fixture `turn.t >= action.t`
+  // because production always pushes `action` before its OWN reporting `turn` (the file-header
+  // ORDERING DISCOVERY); this fixture had it backwards (`turn.t: 100 < action.t: 200`), and no turn
+  // event exists in real telemetry with no action of its own preceding it once the exchange is
+  // genuinely decided. Reshaped to actual production ordering: a `witness` action opens `pending`
+  // un-decided (spec §5.5 — witness alone never closes the boundary), the correction lands on that
+  // still-undecided window, the real `commit` action decides it 'corrected', and the exchange's own
+  // settling `turn` arrives LAST, with `t >= ` every action that preceded it — session end still
+  // never has to flush this one because the turn itself closes it.
   it('grades corrected, not completed', () => {
     const events = [
       sessionStart(0),
-      turn(100, 't1', 'add heading Quarterly', 'tool_call'), // opened fresh; nothing decided yet
-      correction(150), // pre-commit correction
-      action(200, 'set_heading', 'commit'), // decided here; the turn already supplied identity — session end flushes it
+      action(100, 'set_heading', 'witness'), // tentative; decided stays null (spec §5.5)
+      correction(150), // pre-commit correction, while still undecided
+      action(200, 'set_heading', 'commit'), // decided here: correctedBeforeCommit -> 'corrected'
+      turn(205, 't1', 'add heading Quarterly', 'tool_call'), // the exchange's own turn, arriving last
     ];
     const attempts = deriveAttempts(events);
     expect(attempts).toHaveLength(1);

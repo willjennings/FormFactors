@@ -21,7 +21,7 @@ export interface OpenTurn {
   id: string;
   t: number;                       // when this turn opened, ms since session start
   modality: InputModality;
-  request: string;                 // verbatim; mutated in place via updateRequest as deltas accumulate
+  request: string;                 // verbatim; replaced (never mutated — updateRequest is pure) as deltas accumulate
   firstResponseAt: number | null;  // ms since session start of the first model output of any kind
 }
 

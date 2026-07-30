@@ -485,8 +485,12 @@ class Telemetry {
       // loop divides row counts by the now-scoped `agg.n`, printing fractions like `(3/1)` when
       // the populations disagree. A second, arm-scoped ledger is computed here just for the card:
       // pass 1 (attempt-derived rows) gets `scopedAttempts`; pass 2 (deixis/grounding, which reads
-      // raw events directly and never consulted `attempts` at all) gets `arm` itself so it can
-      // gate on which session's `config.arm` was active per signal.
+      // raw events directly and never consulted `attempts` at all) gets `arm` itself so it can gate
+      // on the `advanceArm`-tracked arm each signal falls under — NOT "which session's `config.arm`
+      // was active": `advanceArm` also moves on `shell_switch` (P2, capabilityLedger.ts), which is
+      // the whole point of that fix — a signal after a mid-session shell switch, with no reconnect
+      // and therefore no new `session_start`, must gate on the POST-switch arm, not the one
+      // `config.arm` (stamped at connect) still names.
       const scopedLedger = capabilityLedger(events, scopedAttempts, arm);
       // Reconstructed from the SAME `eval_card` events the export itself carries (telemetry holds
       // no DeckState of its own — the deck's React state is deliberately unjournaled, deck.ts's
@@ -505,8 +509,12 @@ class Telemetry {
       // so presence alone is the whole check. Note the scope this gives the field: WHOLE SITTING,
       // not this arm — see `ScorecardModel.abandoned`'s own doc for why that is the right answer.
       const abandoned = events.some((e) => e.type === 'eval_deck_abandoned');
+      // N4 (task-9 review, the wave's only behaviour change): mirrors App.tsx's own call site —
+      // see `ScorecardOpts.otherArmTrials`'s doc.
+      const otherArmTrials = attempts.length - scopedAttempts.length;
       scorecardModel = scorecard(agg, scopedLedger, deck, arm, {
         events, control, backend: this.config?.backend, unrecorded: opts?.unrecorded, abandoned,
+        otherArmTrials,
       });
     }
     return { config: this.config, metrics: this.metrics(), runs: this.runCount(), events, attempts, ledger, scorecard: scorecardModel };

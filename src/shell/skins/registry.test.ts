@@ -102,6 +102,17 @@ describe('winsWhen', () => {
     expect(withWinsWhen.map(s => s.key)).toEqual(['familiar', 'material', 'provenance', 'conversation']);
   });
 
+  // Task 5 (task-9 review, negative-space guard, the skins analogue of register/registry.test.ts's
+  // own gap): the positive assertion above only checks that these FOUR named skins each carry
+  // `winsWhen` — it says nothing about whether `SHELL_SKINS` also carries some OTHER skin (present
+  // today, or added later) with none. Unlike the register registry, there is no control-arm skin
+  // exempt by design — every skin is expected to declare one — so the honest exclusion-list
+  // assertion here is that the exclusion list is EMPTY, not merely that the inclusion list is what
+  // was expected.
+  it('no skin is missing winsWhen', () => {
+    expect(SHELL_SKINS.filter(s => !s.winsWhen).map(s => s.key)).toEqual([]);
+  });
+
   it('every skin with winsWhen returns underpowered — BY NAME — when either side is below ' +
      'threshold, iterated so a fifth entry is covered on arrival', () => {
     const strong = mkAgg(UNDERPOWERED_N, { medianDurationMs: 100, corrected: 0.2, completion: 0.5 });

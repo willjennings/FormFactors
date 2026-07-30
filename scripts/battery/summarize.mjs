@@ -90,6 +90,17 @@ function renderLatencyTable(cells) {
   return [header, sep, ...rows].join('\n');
 }
 
+// Q4/Important-2 (task-9 final review): the Runs-vs-Sessions footnote used to illustrate the point
+// with a HARDCODED example ("Runs=3, Sessions=48") that matched no cell any real or dry run could
+// ever produce — a fabricated number sitting next to a table of real ones. Picks an ACTUAL cell out
+// of THIS run's own `graded.cells` instead, so the illustration can never drift from the table above
+// it again — it IS a row of that table, read back. Prefers a cell with more than one run (the point
+// is clearest there); falls back to whatever cell exists, or to null if this run graded none.
+function pickRunsSessionsExample(cells) {
+  if (!cells.length) return null;
+  return cells.find((c) => c.runs > 1) ?? cells[0];
+}
+
 function renderProbeVerdicts(cells) {
   return cells.map((c) => `- **${c.register} · ${c.shell} · ${c.corpus}** (n=${c.agg.n}): ${c.comparison}`).join('\n');
 }
@@ -127,9 +138,34 @@ function main() {
       + 'Everything below reflects ONLY the sessions that finished — read every count against '
       + `\`${graded.plannedSessions}\` planned, not as a complete pilot.\n`
     : '';
+  // Important-1 (task-9 final review, 2026-07-30): the dominant fact about the abandonment/
+  // completion numbers below is a harness ceiling, not an app measurement — see the matching
+  // "Known limitations" bullet for the full explanation. Said HERE too, right beside the table a
+  // reader hits first, deliberately: the ledger already knows this ("tracks the harness's OWN
+  // pre-flagged limitation... not necessarily an app defect"), and the one thing a future reader
+  // sees is this doc, not the ledger. Skipped for a dry run — the dry banner above already states
+  // (correctly, and more strongly) that every attempt there is `abandoned` by construction, not by
+  // any timing effect.
+  const settleCeilingBanner = graded.mode !== 'dry'
+    ? '\n> **READ THE ABANDONMENT/COMPLETION NUMBERS BELOW AGAINST A HARNESS CEILING FIRST.** A '
+      + 'fixed 8-second settle sleep between submits (`SETTLE_MS.live`, run.mjs) force-closes any '
+      + 'response slower than 8s as `speech_only`/`no_response`, and roughly 15 mid-session program '
+      + 'reconnects per live default run force-close whatever turn was open when each one fired. See '
+      + '"Known limitations" below for the full explanation.\n'
+    : '';
+
+  const runsSessionsExample = pickRunsSessionsExample(graded.cells);
+  const runsSessionsExampleSentence = runsSessionsExample
+    ? `This is exactly what this run's own numbers show: **${runsSessionsExample.register} · ` +
+      `${runsSessionsExample.shell} · ${runsSessionsExample.corpus}** is a real cell with ` +
+      `Runs=${runsSessionsExample.runs}, Sessions=${runsSessionsExample.latency.sessionCount} — ` +
+      `not a made-up round number, and not necessarily ${runsSessionsExample.runs} x 16 either ` +
+      '(see the reconnect-count paragraph above: the observed count runs somewhat above the ' +
+      'theoretical floor).'
+    : 'This run graded no cells, so there is no real cell to illustrate the point with here.';
 
   const doc = `# Battery run — ${date}
-${dryBanner}${abortedBanner}
+${dryBanner}${abortedBanner}${settleCeilingBanner}
 Mode: **${graded.mode}**. ${graded.totalRuns} of ${graded.plannedSessions} planned session(s) graded, ${graded.totalAttempts} total attempt(s) across ${graded.cells.length} cell(s).
 
 ## Per-cell results
@@ -148,15 +184,22 @@ queued-text flush, a joint-system number, not model latency); "Cold-start" is th
 reported on its own rather than silently discarded. A cell whose sessions all failed before a
 timeable first turn landed shows \`n/a\` for both, honestly, rather than a manufactured zero.
 **"Runs" (per-cell table above) and "Sessions" (this table) are NOT the same count** (N7, task-9
-review round 2; corrected P6, round 3 — the previous wording claimed "Runs" is always one per
-cell, which is false): "Runs" counts EXPORT FILES fed into that cell — the pilot plan gives a live
-cell THREE (one per repeat), not one. "Sessions" counts telemetry \`session_start\`s summed across
-every one of those runs, because a mid-session program swap reconnects (App.tsx's \`activeProgram\`
-effect) and \`scopeToArm\` opens a fresh cold slot on every one. A single live default RUN
-(one session, the full 28-row default-corpus utterance set) reconnects roughly 16 times on its
-own — so a 3-run cell's Sessions total is roughly 3 x that, not 3 x 1: \`Runs=3, Sessions=48\` is
-one real cell whose three exports reconnected 48 times BETWEEN them, not a typo and not "16 per
-cell". Expect most turns in a live cell to classify "cold-start" for exactly this reason._
+review round 2; corrected P6, round 3; corrected again Q4/Important-2, final review — the previous
+wording claimed a live cell always gets exactly THREE runs, which is false whenever Guided's
+wide-corpus split is in play, below): "Runs" counts EXPORT FILES fed into that cell — MOST cells in
+the pilot plan get three
+repeats, but Guided's three repeats split across two corpora instead (the pilot spec's own §5
+ruling): two default-corpus runs and one wide-corpus run, so those two cells show Runs=2 and Runs=1
+respectively, never three. "Sessions" counts telemetry \`session_start\`s summed across every run fed
+into the cell, because a mid-session program swap reconnects (App.tsx's \`activeProgram\` effect) and
+\`scopeToArm\` opens a fresh cold slot on every one. A single live default RUN (one session, the full
+28-row default-corpus utterance set) has 15 program-swap reconnects built into its own utterance
+sequence — counted once, off the corpus's own \`program\` field (scripts/battery/run.mjs), not a
+rounded estimate — so 16 sessions per run in principle (1 initial connect + 15 reconnects). Real runs
+land somewhat above that: other things reconnect too (a dropped socket, the idle guard) that are not
+program swaps, so the theoretical 16-per-run floor is not the same as the observed count.
+${runsSessionsExampleSentence} Expect most turns in a live cell to classify "cold-start" for exactly
+this reason._
 
 ## Probe verdicts (winsWhen, register/shell registries)
 
@@ -168,6 +211,20 @@ ${renderLedger(graded.ledgerTop)}
 
 ## Known limitations
 
+- **Abandonment and completion rates are bounded by the harness, not just the model** (Important-1,
+  task-9 final review, 2026-07-30). This is the DOMINANT fact about the table above, so it is stated
+  first, not last. Every submit is followed by a FIXED 8-second sleep before the next one fires
+  (\`SETTLE_MS.live\`, \`scripts/battery/run.mjs\`) — not a real "wait for the model to finish
+  responding" poll (\`driveSession\`'s own SETTLE-WAIT SCOPE NOTE says so explicitly). Any response
+  slower than 8 seconds is therefore force-closed \`speech_only\`/\`no_response\` by the next submit,
+  exactly as if the model had never answered at all. On top of that, a live default run's own program
+  sequence forces around 15 mid-session reconnects (see the latency table's own footnote above), and
+  each one force-closes whatever turn happened to be open when it fired. Read the Abandoned and
+  Completed columns in the per-cell table above against THIS ceiling first: they are at least as
+  much a measurement of the harness's settle-wait and reconnect cadence as of the app's own
+  responsiveness, and this run cannot separate the two. A real settle-detector (poll the omnibox's
+  busy state, or grow-watch the telemetry stream, instead of a fixed sleep) is the named next
+  investment before these rates can be read as app numbers on their own.
 - **Recorded requests are not always byte-identical to the utterance sent** (M7, task-9 review
   round 1, pre-existing app behavior — not introduced by this harness). \`App.tsx\`'s transcript
   ASCII filter strips non-ASCII punctuation from what it records, so e.g. \`point-by-number\`'s em

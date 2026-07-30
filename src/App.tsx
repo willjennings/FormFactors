@@ -3196,6 +3196,13 @@ export default function App() {
     if (liveTurn && (sameSpokenTurn || joinedTyped)) {
       const grown = sameSpokenTurn ? runUtterance(runAccumRef.current)
         : `${liveTurn.open.request}\n${cleanedText}`;
+      // THE ONE-BUMP BOUND, MECHANICALLY: `...liveTurn` keeps `liveTurn.run` at its OLD value here,
+      // deliberately not re-stamping it to `transcriptRunRef.current` — so `sameSpokenTurn`'s forgiven
+      // case (`transcriptRunRef.current === liveTurn.run + 1`) can only ever match once per open turn.
+      // A second bump on the same turn would need `liveTurn.run` to already equal the run one below
+      // the new current — it never does, because this merge never updates it — so the SECOND bump
+      // falls through to the `else` branch below and closes the turn instead, exactly as the
+      // paragraph above promises ("exactly one bump, extension only").
       openTurnRef.current = { ...liveTurn, open: updateRequest(liveTurn.open, grown) };
     } else {
       const { open, closedPrev } = openTurn(liveTurn?.open ?? null, nextTurnId(), turnClock(),
@@ -5042,8 +5049,13 @@ export default function App() {
     // `(3/1)`. A second, arm-scoped ledger is computed here just for the card, same pattern as
     // telemetry.ts's `snapshot()` uses for its own internal scorecard.
     const scopedLedger = capabilityLedger(snap.events, scopedAttempts, arm);
+    // N4 (task-9 review, the wave's only behaviour change): how many of the sitting's attempts
+    // `attemptsForArm` just scoped OUT of `scopedAttempts` — see `ScorecardOpts.otherArmTrials`'s
+    // own doc for why this needs to reach the card at all.
+    const otherArmTrials = snap.attempts.length - scopedAttempts.length;
     const model = scorecard(agg, scopedLedger, results, arm, {
       events: snap.events, control, backend: snap.config?.backend, unrecorded: evalUnrecorded, abandoned,
+      otherArmTrials,
     });
     setScorecardModel(model);
     setEvalDeckOpen(false); // one card-grammar summary, not the deck panel underneath it (I1)
