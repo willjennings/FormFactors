@@ -11,20 +11,17 @@ type Chrome = ShellSkin['slots']['windowChrome'];
 type Props = {
   title: string;
   statusLabel: string;
+  /** What this window is DRAWN at — App's projected rect (skins/projectDesk.ts), which is not the
+   *  authored rect the desk journals whenever a projection is in effect. A drag therefore starts
+   *  from this rect and needs nothing else: it moves the thing the user can see. Touch promotes
+   *  (design spec §3) — the settled rect of that drag is what App journals as the user's own
+   *  placement, after which this window is drawn where they dropped it in every skin. */
   rect: WindowRect;
   /** Paint order, ranked from the desk's z by App — never the raw `z` (it grows unbounded). */
   zIndex: number;
   chrome: Chrome;
   /** Stamped when the window was opened; rendered only under `provenance` chrome. */
   origin: WindowOrigin;
-  /** Where a drag STARTS from: the rect the active skin PROJECTS this window to (projectDesk.ts),
-   *  which is not the authored `rect` above whenever a projection is in effect. Read at
-   *  pointerdown rather than passed as a value because it depends on the measured plane and on
-   *  the desk as of that moment; returns null when there is no projection to speak of, and the
-   *  drag then starts from `rect` exactly as it always did. Touch promotes (design spec §3): the
-   *  settled rect of a drag that started in projected space is what App journals as the user's
-   *  own placement, after which this window is never projected again. */
-  dragOrigin?: () => WindowRect | null;
   /** `settled` is false for the intermediate frames of a drag and true once the pointer is
    *  released — App journals only the settled rect (one drag would otherwise write hundreds of
    *  journal entries against a cap of 500). */
@@ -43,7 +40,7 @@ type Props = {
  *  A program window is never destroyed: both title-bar controls minimize it, so it keeps its
  *  rect and its place in the inventory and is recoverable from the restore surface every skin
  *  is required to name (spec §2). */
-export function ProgramWindow({ title, statusLabel, rect, zIndex, chrome, origin, dragOrigin, onRectChange, onMinimize, onFocus, planeRef, children }: Props) {
+export function ProgramWindow({ title, statusLabel, rect, zIndex, chrome, origin, onRectChange, onMinimize, onFocus, planeRef, children }: Props) {
   const drag = useRef<{ mode: 'move' | 'resize'; startX: number; startY: number; start: WindowRect; last: WindowRect } | null>(null);
 
   const plane = () => {
@@ -54,12 +51,12 @@ export function ProgramWindow({ title, statusLabel, rect, zIndex, chrome, origin
   const begin = (mode: 'move' | 'resize') => (e: React.PointerEvent) => {
     e.stopPropagation(); // the plane's pointer handlers own deixis painting, not window drags
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
-    // The drag operates in PROJECTED space: a skin may draw this window somewhere other than its
-    // authored rect, and a drag has to move the thing the user can see, not the value behind it.
+    // The drag operates in PROJECTED space, and does so for free now that `rect` IS the projected
+    // rect (see the prop): a skin may draw this window somewhere other than its authored rect,
+    // and a drag has to move the thing the user can see, not the value behind it.
     // `start` and `last` are the SAME object on purpose — that identity is what `end` reads to
     // tell a press-and-release from a real move.
-    const from = dragOrigin?.() ?? rect;
-    drag.current = { mode, startX: e.clientX, startY: e.clientY, start: from, last: from };
+    drag.current = { mode, startX: e.clientX, startY: e.clientY, start: rect, last: rect };
   };
   const move = (e: React.PointerEvent) => {
     if (!drag.current) return;

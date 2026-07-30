@@ -31,17 +31,33 @@ const GAP = 24;
 // and it grows/shrinks again); a size relative to the plane does not — projecting a projection
 // recomputes the identical target, which is exactly the "stable" property the tests pin.
 const MATERIAL_ARTIFACT_W_FRAC = 0.5;
-const MATERIAL_ARTIFACT_H_FRAC = 0.6;
+const MATERIAL_ARTIFACT_H_FRAC = 0.6;  // the height ONE artifact gets; several share the band below
+const MATERIAL_ARTIFACT_BAND_FRAC = 0.88; // the vertical band all artifacts share, centred on the plane
 const MATERIAL_PROGRAM_W_FRAC = 0.22;
 const MATERIAL_PROGRAM_H_FRAC = 0.32;
 const MATERIAL_PROGRAM_DOCK_X = 24; // hugs the left rail programs are drawn from
 
-function materialRect(w: DeskWindow, plane: { width: number; height: number }): WindowRect {
-  if (w.kind === 'artifact') {
-    const rw = plane.width * MATERIAL_ARTIFACT_W_FRAC;
-    const rh = plane.height * MATERIAL_ARTIFACT_H_FRAC;
-    return { x: (plane.width - rw) / 2, y: (plane.height - rh) / 2, w: rw, h: rh };
-  }
+// Every artifact used to land on the SAME centred rect, so two artifacts drew exactly on top of
+// each other and Material's own probe ("what you have made is the desk") was unreadable with more
+// than one thing made. They share a vertical band instead: n slots of equal height, GAP apart,
+// the whole block centred — so no two artifact rects overlap, and a single artifact still gets
+// EXACTLY the rect this function returned before (rh = 0.6H, block centred = the old centring).
+//
+// `index`/`count` are positions among ALL artifact windows in desk order, INCLUDING placed ones
+// (which never reach here — `projectOne` returns their authored rect first). Counting the placed
+// ones is what keeps this stable across a promotion: dragging a2 out of the projected set must
+// not slide a1 into its slot, and re-projecting must not walk anything.
+function materialArtifactRect(index: number, count: number, plane: { width: number; height: number }): WindowRect {
+  const rw = plane.width * MATERIAL_ARTIFACT_W_FRAC;
+  const band = plane.height * MATERIAL_ARTIFACT_BAND_FRAC;
+  // Fractions of the PLANE and of the count — never of the window's current rect (see the note
+  // above), so projecting a projection recomputes the identical slot.
+  const rh = Math.min(plane.height * MATERIAL_ARTIFACT_H_FRAC, (band - (count - 1) * GAP) / count);
+  const blockH = count * rh + (count - 1) * GAP;
+  return { x: (plane.width - rw) / 2, y: (plane.height - blockH) / 2 + index * (rh + GAP), w: rw, h: rh };
+}
+
+function materialProgramRect(plane: { width: number; height: number }): WindowRect {
   const rw = plane.width * MATERIAL_PROGRAM_W_FRAC;
   const rh = plane.height * MATERIAL_PROGRAM_H_FRAC;
   return { x: MATERIAL_PROGRAM_DOCK_X, y: (plane.height - rh) / 2, w: rw, h: rh };
@@ -88,9 +104,14 @@ function projectOne(skin: ShellSkin, w: DeskWindow, desk: DeskState, plane: { wi
     case 'provenance':
       candidate = w.rect;
       break;
-    case 'material':
-      candidate = materialRect(w, plane);
+    case 'material': {
+      if (w.kind !== 'artifact') { candidate = materialProgramRect(plane); break; }
+      // Recomputed from the current desk each call (not cached), same discipline as
+      // Conversation's `sameSide` below.
+      const artifacts = desk.windows.filter(o => o.kind === 'artifact');
+      candidate = materialArtifactRect(artifacts.findIndex(o => o.id === w.id), artifacts.length, plane);
       break;
+    }
     case 'conversation': {
       // "Same side" is recomputed from the current desk each call (not cached), so it stays
       // consistent with `conversationRect`'s own side test above and with repeated projection.

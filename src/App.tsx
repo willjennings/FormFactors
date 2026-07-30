@@ -1330,20 +1330,15 @@ export default function App() {
     width: mainContainerRef.current?.clientWidth ?? window.innerWidth,
     height: mainContainerRef.current?.clientHeight ?? window.innerHeight,
   });
-  // The rect the ACTIVE SKIN projects a window to (skins/projectDesk.ts) — what the skin means to
-  // draw, as opposed to the authored rect the desk journals. Returns null when there is no window
-  // by that id or the skin key does not resolve; callers fall back to the authored rect.
-  //
-  // Computed on demand rather than memoized, and deliberately so: both of its inputs are outside
-  // the render — `deskRef.current` (never the captured `desk`, per the ref contract above) and a
-  // DOM measurement of the plane. Its only caller today is a pointerdown handler, where "on
-  // demand" is exactly right. Task 4 of this plan, which makes the WINDOWS render from the
-  // projection, is what needs a memo, and it needs a render-time plane size to build one honestly.
-  const projectedRect = (id: string): WindowRect | null => {
-    const skin = resolveSkin(deskRef.current.skin);
-    if (!skin) return null;
-    return projectDesk(skin, deskRef.current, planeSize()).find((p) => p.id === id)?.rect ?? null;
-  };
+  // The same plane as a RENDER-TIME value, because the projection is now what windows draw from
+  // (below) and a memo whose input is a DOM read has no honest dependency. Seeded from
+  // `planeSize()` so the very first render — before any layout, any resize event and any observer
+  // callback — projects against the viewport rather than against 0×0, and thereafter written by
+  // `updateLayout`, which the EXISTING resize listener, scroll listener and ResizeObserver already
+  // drive (no second observer is added for this). Written through a comparison, so a re-measure
+  // that finds the same plane changes no state and cannot loop with the layout effect that reads
+  // the projection.
+  const [planeState, setPlaneState] = useState(planeSize);
   // Where a program window opens when the desk has never held one. Clamped, and that clamped
   // rect travels INSIDE the journaled window.open event, so replay lands on the same geometry.
   const programRect = (): WindowRect => clampWindow(DEFAULT_DESK_RECT, planeSize());
@@ -1459,10 +1454,56 @@ export default function App() {
     return m;
   }, [desk]);
   const programWin = desk.windows.find((w) => w.id === programWindowId(activeProgram)) ?? null;
+
+  // ── What the skin DRAWS (design spec §1) ─────────────────────────────────────────────────
+  // The projection: authored rects in, drawn rects out, keyed by window id. The store never sees
+  // it — `desk.windows[i].rect` stays the authored value, the only thing journaled.
+  //
+  // Depends on the whole `desk` rather than on `desk.windows` alone. `projectDesk` reads only
+  // `windows` today, so `desk` is a strict superset: it recomputes on a focus or a skin event
+  // that could not have changed the answer, which is one map over a handful of windows, and it
+  // never lies to the dependency checker about what the closure captures. A null skin (a journal
+  // from a newer build) projects nothing and every window falls back to its authored rect.
+  const projected = React.useMemo(() => {
+    const m = new Map<string, WindowRect>();
+    if (!activeSkin) return m;
+    for (const p of projectDesk(activeSkin, desk, planeState)) m.set(p.id, p.rect);
+    return m;
+  }, [activeSkin, desk, planeState]);
+  // The window being dragged RIGHT NOW, or null. Set from the first intermediate frame of a drag
+  // and cleared when it settles.
+  //
+  // Why it exists: `placed` only flips on the SETTLED move (deskStore, and deliberately — that is
+  // the journaled event, so replay and live agree), while Material and Conversation compute a
+  // dragged window's projection from the skin's own arithmetic and ignore its current rect
+  // entirely. Feed the render from the projection alone and a dragged window would sit pinned at
+  // its dock, unmoved, until the pointer came up — the drag's live `window.move`s would update
+  // the authored rect that nothing was drawing. So while a drag is in flight the window is drawn
+  // from its LIVE AUTHORED RECT, which is exactly where the user is putting it: the drag began at
+  // the projected rect (ProgramWindow reads the drawn rect at pointerdown) and each frame adds
+  // the pointer delta to it, so the hand-off is continuous in both directions — no jump at grab,
+  // and none at release either, since the settled `byUser` move has by then made the projection
+  // return that same rect as identity.
+  //
+  // The alternative — stamping `byUser` on the intermediate frames — was rejected: intermediates
+  // are unjournaled, so it would flip `placed` in live state at a moment the journal has no
+  // record of, and "the user placed this" would become true in a way replay could not reconstruct
+  // until the drag ended.
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  // The rect a window is DRAWN at — the single answer, used by the components AND by the layout
+  // signature below, so the scene can never be measured against geometry it does not have.
+  const renderRect = (w: DeskWindow): WindowRect =>
+    (w.id === draggingId ? w.rect : projected.get(w.id) ?? w.rect);
+
   // Re-measurement keys (spec §7): a drag, a resize, a minimize, a restore and a skin change all
   // move bounding boxes on the plane, and the layout scan below must re-run for every one.
+  //
+  // Built from the DRAWN rects, not the authored ones (design spec §5). Two skins project the
+  // same authored rect to different places, so an authored signature would hold still across a
+  // switch that moved every box on the plane — measuring the scene against geometry it no longer
+  // has, which is the failure class this project has already paid for twice.
   const deskGeometrySignature = desk.windows
-    .map((w) => `${w.id}:${w.rect.x},${w.rect.y},${w.rect.w},${w.rect.h},${w.minimized}`).join('|');
+    .map((w) => { const r = renderRect(w); return `${w.id}:${r.x},${r.y},${r.w},${r.h},${w.minimized}`; }).join('|');
   // Narrower: which windows are MOUNTED. The observer effect re-attaches on this rather than on
   // the geometry signature, so a drag doesn't tear down and rebuild a ResizeObserver per frame.
   const deskMountSignature = desk.windows.filter((w) => !w.minimized).map((w) => w.id).join('|');
@@ -1813,6 +1854,13 @@ export default function App() {
     const main = mainContainerRef.current;
     if (!main) return;
     const mainRect = main.getBoundingClientRect();
+    // The render-time plane (see `planeState`). Measured with the SAME reader `planeSize` uses —
+    // clientWidth/clientHeight, not this bounding rect — so the plane the projection is computed
+    // against and the plane `clampWindow`/`fitWindows` clamp against are one number, never two
+    // that differ by a border. Only written when it actually changed: `deskGeometrySignature`
+    // reads the projection and re-runs this callback, so an unconditional set would loop.
+    const plane = { width: main.clientWidth, height: main.clientHeight };
+    setPlaneState((p) => (p.width === plane.width && p.height === plane.height ? p : plane));
 
     const winEl = main.querySelector('.program-window');
 
@@ -5454,7 +5502,7 @@ export default function App() {
             if (!win || win.minimized) return null;
             return (
             <ArtifactWindow key={a.id} artifact={a}
-              rect={win.rect}
+              rect={renderRect(win)}
               zIndex={windowZ[win.id] ?? 10}
               chrome={windowChrome}
               onFocus={() => focusWindow(win.id)}
@@ -5606,11 +5654,10 @@ export default function App() {
             <ProgramWindow
               title={program.label}
               statusLabel={docStatusLabel(mockDoc)}
-              rect={programWin.rect}
+              rect={renderRect(programWin)}
               zIndex={windowZ[programWin.id] ?? 10}
               chrome={windowChrome}
               origin={programWin.origin}
-              dragOrigin={() => projectedRect(programWin.id)}
               onRectChange={(r, settled) => {
                 // Only the settled rect is journaled; the frames in between are state-only.
                 //
@@ -5621,8 +5668,17 @@ export default function App() {
                 // (`fitWindows` effect) and the artifact reconcile effect stay byUser-free on
                 // purpose — a desk the app positioned is not a desk you placed, and marking one
                 // placed at boot would kill projection permanently.
-                if (settled) deskDispatchJ({ type: 'window.move', id: programWin.id, rect: r, byUser: true });
-                else deskDispatchLive({ type: 'window.move', id: programWin.id, rect: r });
+                //
+                // `draggingId` is what keeps the window under the cursor in between: until the
+                // settled move flips `placed`, the projection would keep drawing this window at
+                // its docked/orbiting slot no matter what the live rect said (see `draggingId`).
+                if (settled) {
+                  setDraggingId(null);
+                  deskDispatchJ({ type: 'window.move', id: programWin.id, rect: r, byUser: true });
+                } else {
+                  setDraggingId(programWin.id);
+                  deskDispatchLive({ type: 'window.move', id: programWin.id, rect: r });
+                }
               }}
               onMinimize={() => deskDispatchJ({ type: 'window.minimize', id: programWin.id })}
               onFocus={() => focusWindow(programWin.id)}

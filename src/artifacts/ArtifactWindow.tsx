@@ -27,7 +27,17 @@ function fmtStamp(ts: number): string {
 // Geometry, stacking and visibility come from the desk (spec §1) — the window no longer cascades
 // itself off its array index, which is why two artifacts could previously sit at the same place
 // after a third was closed. `rect.h` is the window's MAX height: the content is short and
-// self-sizing, and nothing drags or resizes an artifact window in this phase.
+// self-sizing.
+//
+// `rect` is the PROJECTED rect (skins/projectDesk.ts): what the active skin draws, which under
+// Material is a slot in the artifact band and elsewhere the authored rect unchanged.
+//
+// KNOWN GAP, disclosed rather than papered over: this window has no drag handle and no resize
+// handle — it never had one, in any phase — so "touch promotes" (design spec §3) is unreachable
+// for an artifact. An artifact is drawn wherever the skin puts it and the user has no way to
+// place it themselves, which is a real asymmetry with the program window. Giving artifacts a drag
+// path is a piece of work in its own right (a pointer/capture/clamp system this file has none of)
+// and was deliberately not smuggled into the projection phase.
 export function ArtifactWindow({ artifact, rect, zIndex, chrome, onFocus, onClose, onMinimize, onRevert, onEditPart }: {
   artifact: Artifact;
   rect: WindowRect;
