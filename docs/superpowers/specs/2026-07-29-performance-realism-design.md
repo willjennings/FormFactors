@@ -63,6 +63,14 @@ silence) closes it.
   outcome `abandoned` (or `ungradeable` when the turn was `transcription_lost`).
 - `firstResponseMs`/`settledMs` are measured at the provider seam (`onResponseStart` and the ack path
   already exist); no new clock machinery.
+- **Cold first turns are joint-system numbers, and the battery produces one per session.** A turn opens
+  when the user submits, which for a typed command with no session yet is *before* the socket exists —
+  so that turn's `firstResponseMs` contains the mic pre-flight, the connect and the queued-text flush
+  (measured 2085ms cold against 397ms warm on an identical stubbed reply). Since the battery drives
+  typed input, **row 1 of every session is such a turn**. The summariser must therefore exclude the
+  first turn of each session from the arm's latency aggregate and report it separately as a cold-start
+  figure — never average the two, and never silently drop it (the connect cost is real, it is just not
+  a model latency).
 - Token/frame counts: the traffic meter already counts frames and hints in the header UI; fold its
   totals into `session_complete` (`framesSent`, `hintsSent`, `audioSecondsIn/Out` where the provider
   exposes them) so cost lives in the export, not the pixels.

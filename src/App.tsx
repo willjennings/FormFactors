@@ -724,7 +724,11 @@ export default function App() {
     if (isInitialPromptSync.current) { isInitialPromptSync.current = false; return; }
     if (isLive && providerRef.current) {
       addLog('info', `Interaction dials changed — reconnecting to apply prompt variant...`);
-      providerRef.current.close(); // onClose sets isLive=false
+      // closeLiveSession, not a bare close: this session's telemetry is closed out first (the turn
+      // in flight will never be answered on the socket we are dropping, and its traffic totals are
+      // this session's). Bare, the openai backend — which suppresses onClose for a close we asked
+      // for — left the end unrecorded and the next session's duration measured from this one.
+      closeLiveSession(); // onClose sets isLive=false
       setTimeout(() => { startLiveSession(); }, 800);
     }
   }, [promptDialsKey]);
@@ -757,7 +761,7 @@ export default function App() {
     if (isInitialBackendSync.current) { isInitialBackendSync.current = false; return; }
     if (isLive && providerRef.current) {
       addLog('info', `Switching voice backend to ${voiceBackend} — reconnecting...`);
-      providerRef.current.close();
+      closeLiveSession();   // record this session's end before dropping it (see the dials effect)
       setTimeout(() => { startLiveSession(); }, 800);
     }
   }, [voiceBackend]);
@@ -769,7 +773,7 @@ export default function App() {
     if (isInitialProgramSync.current) { isInitialProgramSync.current = false; return; }
     if (isLive && providerRef.current) {
       addLog('info', `Reconnecting to load ${program.label} tools + prompt...`);
-      providerRef.current.close();
+      closeLiveSession();   // record this session's end before dropping it (see the dials effect)
       setTimeout(() => { startLiveSession(); }, 800);
     }
   }, [activeProgram]);
@@ -817,6 +821,18 @@ export default function App() {
     runAccumRef.current = EMPTY_RUN_ACCUM;
     transcriptRunRef.current += 1;
   };
+  /** Arm the 3-second silence that ends a run: the live display clears and whatever is said next
+   *  is a new utterance. Pulled out of processInputTranscript because the UNUSABLE-transcript
+   *  branch has to arm it too — a run that only ever produced text the app could not read must
+   *  still be able to end, or a second lost utterance minutes later would be silently swallowed as
+   *  more of the first (the lost-turn guard is keyed on the run). */
+  const armRunIdleTimeout = () => {
+    if (transcriptionTimeoutRef.current) clearTimeout(transcriptionTimeoutRef.current);
+    transcriptionTimeoutRef.current = setTimeout(() => {
+      setLiveTranscription("");
+      endTranscriptRun();          // 3s idle: whatever is said next is a new utterance
+    }, 3000);
+  };
 
   // ── TURNS (src/eval/turns.ts): every user utterance gets an outcome ─────────────────────────
   // A turn opens on each utterance/submit and closes on what actually happened — tool call,
@@ -827,13 +843,22 @@ export default function App() {
   // arrival, response start, tool ack, session end).
   //
   // ONE ref holding the open turn WITH the transcript run it belongs to — the two are never
-  // independently true, because a spoken run is ONE turn and the run id is what distinguishes a
-  // later delta of the same utterance from a genuinely new one. Every reader is a stale-closure
-  // context (the provider callbacks are bound at connect time), so it is written SYNCHRONOUSLY at
-  // every site; a useEffect mirror would be rolled back by StrictMode's second mount pass.
+  // independently true, because a spoken run is ONE turn and the run id is most of what
+  // distinguishes a later delta of the same utterance from a genuinely new one (the rest is the
+  // late-transcript rule at the open seam). MOST readers are stale-closure contexts — the provider
+  // callbacks are bound at connect time, the quick-fire listener registers once with [] deps —
+  // while the typed-submit path reaches the same seam from a fresh render closure; one ref serves
+  // both, written SYNCHRONOUSLY at every site, because a useEffect mirror would be rolled back by
+  // StrictMode's second mount pass.
   const openTurnRef = useRef<{ open: OpenTurn; run: number } | null>(null);
   const turnSeqRef = useRef(0);
   const nextTurnId = () => `turn-${(turnSeqRef.current += 1)}`;
+  // The run a `transcription_lost` row has already been recorded for. One lost row per run, not
+  // per delta: an utterance in a script the character filter empties arrives as several deltas
+  // ("这是" → "这是什么" → "这是什么？"), and one unreadable utterance is ONE ungradeable turn.
+  // -1 is "no run has lost anything yet"; a later run's id differs, so a second genuinely lost
+  // utterance still records — which is why the lost branch arms the run-idle timeout.
+  const lostRunRef = useRef(-1);
   // The clock for turn timestamps. The pure layer only ever SUBTRACTS these values from each
   // other (firstResponseMs and settledMs are both measured from the turn's own open time), so
   // what matters is that one turn's stamps share an origin — not which origin it is. Date.now()
@@ -842,6 +867,13 @@ export default function App() {
   // onOpen would land mid-turn and skew that turn's latencies. `ClosedTurn.t` is therefore
   // absolute epoch ms here, and nothing reads it: telemetry.turn() takes no `t` — the exported
   // event's session-relative `t` is stamped by telemetry's own clock.
+  //
+  // CONSEQUENCE FOR GRADERS, and it is not small: a turn opened before the session existed pays
+  // the whole connect (mic pre-flight, socket, first flush) inside its firstResponseMs — measured
+  // 2085ms cold against 397ms warm on the same stubbed reply. Every battery session's FIRST typed
+  // row is such a turn. It is an honest joint-system number, not a model latency, so it belongs
+  // outside the arm's latency aggregate and beside it as its own figure — stated in the
+  // performance-realism spec §1 so the summariser does not average the two.
   const turnClock = () => Date.now();
   /** One telemetry row per ClosedTurn — the single place a turn becomes an event. Silently records
    *  nothing before a session has started (telemetry.push ignores everything outside one), which
@@ -873,9 +905,11 @@ export default function App() {
    *  traffic meter's totals reach the export so cost is data rather than pixels.
    *
    *  Idempotent per session — both the provider's onClose (deaths we did not ask for) and
-   *  closeLiveSession (the ones we did) call it, and on gemini/azure both happen. A dial/backend/
-   *  program reconnect also lands here via its close; the record it writes is then cleared by the
-   *  next telemetry.start(), which resets the event stream. */
+   *  closeLiveSession (the ones we did, reconnects included) call it, and on gemini/azure both
+   *  happen. The record a RECONNECT writes is then cleared by the next telemetry.start(), which
+   *  resets the event stream; it is still written rather than skipped, because a reconnect that
+   *  FAILS never reaches that reset, and the alternative left this flag stuck false so the next
+   *  session's timeToCompleteMs would have been measured from the previous session's start. */
   const recordSessionEnd = () => {
     if (sessionEndRecordedRef.current) return;
     sessionEndRecordedRef.current = true;
@@ -887,10 +921,12 @@ export default function App() {
     // can be compared on what it cost to run.
     telemetry.sessionComplete(Date.now() - sessionStartedAtRef.current, 0, 0, t.frames, t.hints);
   };
-  /** An APP-INITIATED end of the session: record its final telemetry, then close. This exists
-   *  instead of relying on onClose alone because openai.ts suppresses that callback for a close we
-   *  asked for (its `closed` flag — openai.ts:111, :121, set in close() at :244), so on that
-   *  backend the flush and the traffic totals would simply never happen. */
+  /** An APP-INITIATED end of the session: record its final telemetry, then close. EVERY close this
+   *  app asks for goes through here — mic toggle, End session, the idle guard, and the three
+   *  reconnect effects. It exists instead of relying on onClose alone because openai.ts suppresses
+   *  that callback for a close we asked for (its `closed` flag — openai.ts:111, :121, set in
+   *  close() at :244), so on that backend the flush and the traffic totals would simply never
+   *  happen. On gemini/azure onClose then calls recordSessionEnd again and its guard absorbs it. */
   const closeLiveSession = () => {
     recordSessionEnd();
     providerRef.current?.close();
@@ -2568,6 +2604,18 @@ export default function App() {
         addLog('tool', `Tool Call: ${fc.name}`);
         ack({ success: true });
       }
+    } else {
+      // NO BRANCH CLAIMED THIS NAME — a hallucinated tool. Every other outcome in this handler is
+      // data the model can read and retry against (validate.ts's doctrine); this was the one
+      // exception: the chain simply ended, no ack was ever sent, and the model waited forever for
+      // a tool result that could not arrive. A silent hang is the least honest failure available,
+      // so it becomes a refusal that names the tools this session actually has. Read from
+      // voiceToolsRef, never a literal list: the tool set is per-program and a hard-coded one here
+      // would go stale and lie about what is callable. (The turn settles as `tool_call` via ack,
+      // with no `action` row — nothing was attempted against the document.)
+      const known = voiceToolsRef.current.map(t => t.name).join(', ');
+      addLog('tool', `Tool Call: ${fc.name} REJECTED — no such tool`);
+      ack({ success: false, error: `There is no tool called "${fc.name}". The tools available here are: ${known}. Use one of those, or just answer in speech.` });
     }
   };
 
@@ -2818,9 +2866,20 @@ export default function App() {
       // once the markers are gone, while noise markers and punctuation-or-symbol-only deltas
       // ("♪♪") hold none. That turn has no gradeable request, so it opens and closes on the spot
       // as ungradeable rather than vanishing from the denominator — and, being a real utterance,
-      // it supersedes any turn still open. `request` keeps the RAW text: it is the only diagnosis
-      // there is of what was lost.
-      if (/\p{L}/u.test(markerless)) {
+      // it supersedes any turn still open. `request` keeps the RAW text of the delta that recorded
+      // the row — the FIRST readable-as-letters one of the run, not the fullest, since the row is
+      // written once and the later deltas of that run are deliberately swallowed. It is the only
+      // diagnosis there is of what was lost.
+      //
+      // ONCE PER RUN, not once per delta: such an utterance arrives in several deltas exactly like
+      // any other, and one unreadable utterance is one ungradeable turn — a row per delta would
+      // inflate the very denominator this event exists to make honest. The run-idle timeout is
+      // armed here (and only here — a bare noise marker is not speech and must not reset it) so
+      // this run can end on its own; without that the model's silence would leave the run id
+      // frozen and a second lost utterance would be swallowed as more of the first.
+      if (/\p{L}/u.test(markerless) && lostRunRef.current !== transcriptRunRef.current) {
+        lostRunRef.current = transcriptRunRef.current;
+        armRunIdleTimeout();
         const { open, closedPrev } = openTurn(openTurnRef.current?.open ?? null, nextTurnId(),
           turnClock(), lastInputModalityRef.current, text.trim());
         if (closedPrev) pushTurn(closedPrev);
@@ -2901,11 +2960,7 @@ export default function App() {
 
     setLiveTranscription(currentText);
 
-    if (transcriptionTimeoutRef.current) clearTimeout(transcriptionTimeoutRef.current);
-    transcriptionTimeoutRef.current = setTimeout(() => {
-      setLiveTranscription("");
-      endTranscriptRun();          // 3s idle: whatever is said next is a new utterance
-    }, 3000);
+    armRunIdleTimeout();
 
     const lowerText = currentText.toLowerCase();
     const prevLowerText = lowerPrev;
@@ -2938,14 +2993,43 @@ export default function App() {
     // folded the typed text in too — reviseHeldAnswer's own comment notes the same about this
     // shared seam. The verbatim request can carry that prefix; the turn identity cannot.)
     //
+    // …AND ACROSS THE MODEL'S OWN RUN BUMP, or one utterance becomes two rows. onResponseStart
+    // calls endTranscriptRun, so the run id advances the moment the model starts answering — and on
+    // azure/openai the CLOSING transcript of the utterance being answered routinely lands after
+    // that (input transcription is a separate async stream: `response.created` first, then
+    // `…input_audio_transcription.completed`). Run identity alone therefore read that closing
+    // restatement as a new utterance and superseded the turn it belonged to, emitting a FABRICATED
+    // speech_only beside the real tool_call for a single "Now save the file" — the worst artefact
+    // an honesty measure can produce, and it also re-dated the surviving turn's latency to the
+    // late transcript. So one further bump is forgiven when the arriving text EXTENDS the open
+    // turn's request (a prefix-extension, which is exactly what a restatement of the same
+    // utterance is — accumulateRun relies on the same property). Bounded deliberately: exactly one
+    // bump, extension only, so a genuinely new utterance still closes the previous turn. Residual,
+    // stated: a new utterance that literally re-says the last one and adds to it, inside that one
+    // bump, merges into it — an UNDER-count of one row, where the alternative fabricated a row on
+    // every azure utterance.
+    //
     // Opening over an unfinished turn CLOSES it — speech_only if the model had said anything,
     // no_response if it never did (turns.ts openTurn). That close is the row this whole event
     // exists for, so it is pushed here, not dropped.
     const voiceTurn = lastInputModalityRef.current === 'voice';
     const liveTurn = openTurnRef.current;
-    if (liveTurn && voiceTurn && liveTurn.open.modality === 'voice'
-        && liveTurn.run === transcriptRunRef.current) {
-      openTurnRef.current = { ...liveTurn, open: updateRequest(liveTurn.open, runUtterance(runAccumRef.current)) };
+    const extendsOpen = (next: string, prev: string) =>
+      !!prev && next.toLowerCase().startsWith(prev.toLowerCase());
+    const sameSpokenTurn = !!liveTurn && voiceTurn && liveTurn.open.modality === 'voice'
+      && (liveTurn.run === transcriptRunRef.current
+          || (transcriptRunRef.current === liveTurn.run + 1 && extendsOpen(cleanedText, liveTurn.open.request)));
+    // A JOINED TYPED PAYLOAD IS ONE REQUEST. Two submits made before the session opens are merged
+    // into one pendingTypedRef flush (see sendTypedInput's queue branch, which runs right after
+    // this) and reach the model as a single turn of text, so recording two turns would mark the
+    // first no_response for an answer the model did give — to the joined text. pendingTypedRef is
+    // non-null only while a queued flush is still pending, which is exactly when the join happens.
+    const joinedTyped = !!liveTurn && !voiceTurn && liveTurn.open.modality === 'typed'
+      && pendingTypedRef.current !== null;
+    if (liveTurn && (sameSpokenTurn || joinedTyped)) {
+      const grown = sameSpokenTurn ? runUtterance(runAccumRef.current)
+        : `${liveTurn.open.request}\n${cleanedText}`;
+      openTurnRef.current = { ...liveTurn, open: updateRequest(liveTurn.open, grown) };
     } else {
       const { open, closedPrev } = openTurn(liveTurn?.open ?? null, nextTurnId(), turnClock(),
         lastInputModalityRef.current, cleanedText);
