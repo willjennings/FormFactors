@@ -147,6 +147,8 @@ import { MISSIONS } from './missions/defs';
 import { startMission, advanceMission } from './missions/runStore';
 import { loadRuns, saveRuns } from './missions/persistence';
 import type { MissionRun, MissionObservables } from './missions/types';
+import { EvalDeck } from './eval/EvalDeck';
+import { EVAL_DECK, deckReduce, initialDeckState, isDeckComplete, deckTally, type DeckEvent, type ObservedGrade } from './eval/deck';
 import { bootJournal, resetBootMemo } from './journal/boot';
 import { appendEntry, compact, type JournalEntry } from './journal/journal';
 import {
@@ -1461,6 +1463,60 @@ export default function App() {
     }
     setTeachingSnapshot(next);
   };
+
+  // --- The eval deck (design spec §4b: "open the app → open the deck → follow the cards"). Sits
+  // beside missions because it is the same kind of surface from the user's side, and grades by the
+  // same discipline (committed state + telemetry, run-baselined, never a model self-report).
+  //
+  // NAMING WARNING, read before touching anything below: `evalDeck` is one letter from `desk` and
+  // `evalDeckRef` from `deskRef`. They are unrelated — the desk is journaled window geometry, the
+  // eval deck is an unjournaled sitting record. The `eval` prefix is not decoration.
+  //
+  // DELIBERATELY NOT JOURNALED (see deck.ts's reducer header): JOURNAL_VERSION stays at 2. A deck
+  // run is a human sitting, not document state; replaying a journal must reproduce the DOCUMENT,
+  // and re-dealing someone's half-finished cards on replay would fabricate a sitting. The durable
+  // record is the `eval_card` telemetry event, emitted below from what the reducer actually did.
+  const [evalDeckOpen, setEvalDeckOpen] = useState(false);
+  const [evalDeck, evalDeckDispatchRaw] = useReducer(deckReduce, undefined, initialDeckState);
+  // Written SYNCHRONOUSLY by the wrapper below — the deskRef contract, for the same reason: the
+  // observe effect is a stale-closure context (it reacts to telemetry growth, not to a render), so
+  // it must read the ref. There is DELIBERATELY no `useEffect(() => { evalDeckRef.current = evalDeck })`
+  // mirror: that shape re-runs on StrictMode's SECOND mount pass with the pre-dispatch value and
+  // rolls a correct synchronous write back — the failure this file has now hit seven times (see the
+  // long note at deskRef's declaration, and wideCorpusArtifactsSeeded's).
+  const evalDeckRef = useRef(evalDeck);
+  const evalDeckDispatch = (event: DeckEvent) => {
+    const before = evalDeckRef.current;
+    const next = deckReduce(before, event);
+    evalDeckRef.current = next;
+    evalDeckDispatchRaw(event);
+    // Telemetry mirrors what the reducer ACTUALLY recorded, never what the caller asked for: a
+    // dispatch the reducer refuses (a card that already has a result — including a re-observation of
+    // the same snapshot under StrictMode — or a self-grade on a card that is not self-gradable) must
+    // emit nothing, or the export would carry trials the deck itself does not believe happened.
+    if (next.results.length > before.results.length) {
+      const r = next.results[next.results.length - 1];
+      const card = EVAL_DECK.find((c) => c.id === r.cardId);
+      // No fallback dimension is invented: the reducer already refuses unknown card ids, so a
+      // missing card here is impossible, and `?? ''` would quietly widen the corpus's vocabulary.
+      if (card) telemetry.evalCard(r.cardId, card.dimension, r.grade, r.graded);
+    }
+  };
+  // The baseline a card is dealt at: the telemetry stream's LENGTH at that moment. This is the
+  // deck's equivalent of missions' world snapshot (missions/defs.ts: predicates diff against the
+  // run baseline so a world already satisfying a step cannot auto-complete a fresh run) — here,
+  // anything recorded before the card was dealt is outside every predicate's window. `cardId` is
+  // carried alongside so the observe effect can refuse to grade a card against a window that
+  // belongs to a different one.
+  const evalCardBaselineRef = useRef<{ cardId: string | null; index: number }>({ cardId: null, index: 0 });
+  const dealEvalCard = (cardId: string | null) => {
+    evalCardBaselineRef.current = { cardId, index: telemetry.eventCount() };
+  };
+  // Bumped by a telemetry subscription — the deck's predicates read the event stream, which is not
+  // React state, so growth has to be turned into a render signal somewhere. The tick is the ONLY
+  // thing this state does; every value the effect reads comes from a ref or from telemetry itself.
+  const [telemetryTick, setTelemetryTick] = useState(0);
+  useEffect(() => telemetry.subscribe(() => setTelemetryTick((n) => n + 1)), []);
 
   const [whiteboard, whiteboardDispatch] = useReducer(wbReduce, undefined, initialWhiteboardState);
   const [whiteboardMode, setWhiteboardMode] = useState<'board' | 'overlay'>('board');
@@ -4583,6 +4639,41 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [missionTick, fullCorpus, artifactState, missionRun, missionDef, missionRuns]);
 
+  // Eval-deck observe loop (design spec §4b). Single subscription point over the telemetry stream,
+  // mirroring the mission advance effect above: it only REACTS, and only ever consults the card
+  // currently on screen (the deck's index is what makes a later card's predicate wait, the same job
+  // advanceMission's in-order rule does for mission steps).
+  //
+  // IDEMPOTENT AGAINST ONE SNAPSHOT, which is what makes StrictMode's double-invoke harmless: the
+  // "already has a result" guard reads `evalDeckRef.current`, written synchronously by the dispatch
+  // wrapper, so pass 2 of a double-invoked effect sees the result pass 1 recorded and returns. The
+  // reducer refuses a second result for the same card independently (deck.ts), and the telemetry
+  // emission is gated on the reducer having actually recorded one — three layers, because a
+  // double-graded trial is a silently wrong number rather than a visible crash.
+  useEffect(() => {
+    const s = evalDeckRef.current;
+    if (s.startedAt === null) return;
+    const card = EVAL_DECK[s.index];
+    if (!card) return;                                             // deck finished
+    if (s.results.some((r) => r.cardId === card.id)) return;        // never re-grade
+    const b = evalCardBaselineRef.current;
+    const count = telemetry.eventCount();
+    // Two ways the baseline can be wrong, both handled by re-baselining and grading NOTHING this
+    // pass: (1) it belongs to a different card (a deal was missed — grading against another card's
+    // window is worse than a one-tick delay); (2) the stream has SHRUNK below it, which happens for
+    // real — `telemetry.start()` wipes the events on any mid-session reconnect (a register, shell,
+    // backend or program change all reconnect), so a card dealt at index 40 would otherwise sit
+    // forever past the end of a stream that restarted at length 1.
+    if (b.cardId !== card.id || b.index > count) {
+      evalCardBaselineRef.current = { cardId: card.id, index: count };
+      return;
+    }
+    const grade = card.observe(telemetry.eventsSnapshot(), b.index);
+    if (!grade) return;                                            // can't tell yet — never 'done'
+    evalDeckDispatch({ type: 'observe', cardId: card.id, grade, at: Date.now() });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [telemetryTick, evalDeck]);
+
   // [CORPUS] hint: the model's standing view of what's combinable. Deduped via the change-gate.
   useEffect(() => {
     if (!isLive) return;
@@ -4796,6 +4887,48 @@ export default function App() {
     setMissionRun(null);
   };
 
+  // Eval deck (design spec §4b): every state change goes through `evalDeckDispatch` (which writes
+  // the ref synchronously and emits the telemetry record) and every card transition re-deals the
+  // baseline. Both are done HERE, in the handlers, rather than in an effect watching `evalDeck` —
+  // a mirror effect is the exact shape that has broken this file seven times.
+  const startEvalDeck = () => {
+    evalDeckDispatch({ type: 'start', at: Date.now() });
+    dealEvalCard(EVAL_DECK[0]?.id ?? null);
+  };
+  const selfGradeEvalCard = (grade: ObservedGrade) => {
+    const card = EVAL_DECK[evalDeckRef.current.index];
+    if (card) evalDeckDispatch({ type: 'selfGrade', cardId: card.id, grade, at: Date.now() });
+  };
+  const advanceEvalCard = () => {
+    evalDeckDispatch({ type: 'advance' });
+    const s = evalDeckRef.current;
+    dealEvalCard(EVAL_DECK[s.index]?.id ?? null);
+    if (!isDeckComplete(s)) return;
+    const t = deckTally(s);
+    // TASK 8 SEAM: the scorecard proper is a pure renderer over ArmAggregate + ledger rows (spec
+    // §4b's "human face of ArmAggregate, computed by the same derivation, no parallel math"). Until
+    // it lands, completion renders the one thing the DECK itself knows without doing any derivation
+    // of its own: counts of what was recorded. Counts only, each its own n, observed and self
+    // reported separately — no rates, because a rate computed here would be exactly the parallel
+    // math §4b forbids.
+    const line = `Eval deck — ${t.total} of ${EVAL_DECK.length} recorded · ${t.done} worked · ${t.failed} didn't · ${t.skipped} skipped · ${t.observed} observed, ${t.self} your call`;
+    addLog('event', line);
+    emitFeedback({ outcome: 'committed', verbClass: 'create', label: 'Eval deck — complete' });
+    railDispatchRef.current?.({ type: 'rail.set', rail: {
+      seq: `eval-deck-${s.startedAt}`,
+      cards: [{ t: 'answer', text: line, band: 'solid', state: 'done' }],
+      activeIndex: null, startedAt: Date.now(),
+    } });
+  };
+  const skipEvalCard = () => {
+    const card = EVAL_DECK[evalDeckRef.current.index];
+    if (!card) return;
+    // A skip is a recorded result, then the deck moves on — the one place recording and advancing
+    // are deliberately combined, because there is nothing left to look at on a skipped card.
+    evalDeckDispatch({ type: 'skip', cardId: card.id, at: Date.now() });
+    advanceEvalCard();
+  };
+
   // Undo the most recent committed document mutation (restore the memento).
   const handleUndo = () => {
     if (undoStack.length === 0) {
@@ -4947,6 +5080,7 @@ export default function App() {
               onRambleMode: () => { window.location.search = 'ramble=live'; },
               onSketchBoard: () => setBoardOpen((o) => !o),
               onMissions: () => setMissionOpen((v) => !v),
+              onEvalDeck: () => setEvalDeckOpen((v) => !v),
               onRegisterPill: () => setBandOpen(o => !o),
             }}
           />
@@ -5089,6 +5223,15 @@ export default function App() {
             </div>
           )}
           <MissionPicker missions={MISSIONS} runs={missionRuns} active={missionRun} activeDef={missionDef} open={missionOpen} onStart={startMissionRun} onAbandon={abandonMission} onClose={() => setMissionOpen(false)} />
+          {/* The eval deck reads `evalDeck` (render state), while every predicate reads
+              `evalDeckRef` (the synchronous source) — the two are the same pure reducer folded over
+              the same events from the same initial value, so they cannot disagree. */}
+          {/* `recording` is read straight from the recorder rather than mirrored into state: this
+              render is already subscribed to it (telemetryTick bumps on every push, session_start
+              included), so the value is never stale and there is no second copy to fall behind. */}
+          <EvalDeck open={evalDeckOpen} state={evalDeck} recording={telemetry.eventCount() > 0} onStart={startEvalDeck}
+                    onSelfGrade={selfGradeEvalCard} onSkip={skipEvalCard} onAdvance={advanceEvalCard}
+                    onClose={() => setEvalDeckOpen(false)} />
           {/* Highlight category legend — explains the colour ↔ category mapping while debug markings are on */}
           {dials.markings && (
             <div className="absolute top-3 right-3 z-50 pointer-events-none rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)]/90 backdrop-blur px-3 py-2 shadow-md">

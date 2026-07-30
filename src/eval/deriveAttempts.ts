@@ -462,7 +462,10 @@ export function deriveAttempts(events: TelemetryEvent[]): Attempt[] {
       default:
         break; // no grading signal in this module: deixis, grounding, map, fill, gap_question,
                // readback, stall, session_complete, error, guidance, mission_*, register_switch,
-               // shell_switch, pin, combine_tray.
+               // shell_switch, pin, combine_tray, eval_card. `eval_card` in particular is a
+               // deliberate no-op here: it records which TRIAL was run and how the deck graded it,
+               // which must never feed back into how this module grades the attempt — the deck
+               // reads deriveAttempts (via the scorecard), not the other way round.
     }
   }
 

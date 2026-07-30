@@ -254,3 +254,81 @@ describe('exportConfigString (the arm/shell/cfg segment of the download filename
     expect(exportConfigString(null)).toBe('session');
   });
 });
+
+// ==========================================================================================
+// The eval deck's two hooks into the recorder (src/eval/deck.ts): a growth subscription so the
+// deck's observe loop can re-grade when the stream moves, and the eval_card result event — the
+// only durable record of a deck run, whose own state is deliberately unjournaled.
+// ==========================================================================================
+describe('growth subscription (the eval deck observe loop)', () => {
+  beforeEach(() => telemetry.start(cfg));
+
+  it('notifies on every push, and the listener already sees the new event', () => {
+    const lengths: number[] = [];
+    const off = telemetry.subscribe(() => lengths.push(telemetry.eventCount()));
+    telemetry.action('edit_content', 'mutate', 'commit');
+    telemetry.correction();
+    off();
+    telemetry.stall();                       // after unsubscribe: no further notifications
+    expect(lengths).toEqual([2, 3]);         // session_start is event 0
+    expect(telemetry.eventCount()).toBe(4);
+  });
+
+  it('notifies on start too — a restart SHRINKS the stream, and index-based readers must hear it', () => {
+    let calls = 0;
+    const off = telemetry.subscribe(() => { calls += 1; });
+    telemetry.action('edit_content', 'mutate', 'commit');
+    expect(telemetry.eventCount()).toBe(2);
+    telemetry.start(cfg);
+    expect(calls).toBe(2);
+    expect(telemetry.eventCount()).toBe(1);  // wiped back to the fresh session_start
+    off();
+  });
+
+  it('eventsSnapshot is a COPY — a held snapshot never changes underneath its reader', () => {
+    const snap = telemetry.eventsSnapshot();
+    telemetry.action('edit_content', 'mutate', 'commit');
+    expect(snap.length).toBe(1);
+    expect(telemetry.eventsSnapshot().length).toBe(2);
+  });
+
+  it('a throwing subscriber cannot stop the recorder or the other subscribers', () => {
+    let good = 0;
+    const offBad = telemetry.subscribe(() => { throw new Error('boom'); });
+    const offGood = telemetry.subscribe(() => { good += 1; });
+    telemetry.action('edit_content', 'mutate', 'commit');
+    expect(good).toBe(1);
+    expect(telemetry.eventCount()).toBe(2);
+    offBad(); offGood();
+  });
+});
+
+describe('eval_card events', () => {
+  beforeEach(() => telemetry.start(cfg));
+
+  it('records the grade and HOW it was graded, verbatim', () => {
+    telemetry.evalCard('honest-refusal', 'honesty', 'done', 'observed');
+    telemetry.evalCard('robust-own-words', 'robustness', 'done', 'self');
+    telemetry.evalCard('material-pin', 'material', 'skipped', 'self');
+    const events = JSON.parse(telemetry.exportJSON()).events as any[];
+    expect(events.filter(e => e.type === 'eval_card')).toMatchObject([
+      { cardId: 'honest-refusal', dimension: 'honesty', grade: 'done', graded: 'observed' },
+      { cardId: 'robust-own-words', dimension: 'robustness', grade: 'done', graded: 'self' },
+      { cardId: 'material-pin', dimension: 'material', grade: 'skipped', graded: 'self' },
+    ]);
+  });
+
+  it('an eval_card event never moves any number in metrics() — deep-equal before/after', () => {
+    telemetry.action('edit_content', 'mutate', 'commit');
+    telemetry.action('edit_content', 'mutate', 'rejected');
+    telemetry.correction();
+    telemetry.error('boom');
+    telemetry.unspecifiedAsk('heading', true, true);
+    telemetry.deixis('this', 'Cell A1', 'Cell A1', 'high');
+    const before = telemetry.metrics();
+    telemetry.evalCard('honest-refusal', 'honesty', 'done', 'observed');
+    telemetry.evalCard('point-then-change', 'pointing', 'failed', 'self');
+    telemetry.evalCard('material-combine', 'material', 'skipped', 'self');
+    expect(telemetry.metrics()).toEqual(before);
+  });
+});

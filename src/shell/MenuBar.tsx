@@ -1,5 +1,5 @@
 import React from 'react';
-import { Sun, Moon, Settings2, AudioLines, PenLine, Target } from 'lucide-react';
+import { Sun, Moon, Settings2, AudioLines, PenLine, Target, ClipboardList } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Tip } from '../ui/Tooltip';
 import type { Traffic } from './traffic';
@@ -12,10 +12,15 @@ export interface MenuBarProps {
   isLive: boolean; isConnecting: boolean; isDarkMode: boolean; traffic: Traffic | null;
   registerLabel: string; registerGlyph: string;
   onToggleTheme: () => void; onToggleDrawer: () => void; onRambleMode: () => void; onSketchBoard: () => void; onMissions: () => void;
+  /** Opens the eval deck (src/eval/EvalDeck.tsx). Sits beside Missions because the two are the same
+   *  kind of thing from the user's side — a list of things to try — and because the design spec's
+   *  §4b protocol starts "open the app → open the Eval deck": if it were anywhere less obvious than
+   *  the top bar, running an evaluation would once again require knowing something. */
+  onEvalDeck: () => void;
   onRegisterPill: () => void;
 }
 
-export function MenuBar({ isLive, isConnecting, isDarkMode, traffic, registerLabel, registerGlyph, onToggleTheme, onToggleDrawer, onRambleMode, onSketchBoard, onMissions, onRegisterPill, lead, trail, frameClass, skinKey, skinLabel, skinGlyph }: MenuBarProps & {
+export function MenuBar({ isLive, isConnecting, isDarkMode, traffic, registerLabel, registerGlyph, onToggleTheme, onToggleDrawer, onRambleMode, onSketchBoard, onMissions, onEvalDeck, onRegisterPill, lead, trail, frameClass, skinKey, skinLabel, skinGlyph }: MenuBarProps & {
   /** Skin-specific left-hand content (menu brand, desk summary, session counts, …). */
   lead?: React.ReactNode;
   /** Skin-specific content immediately before the control cluster (the Familiar clock). */
@@ -56,6 +61,7 @@ export function MenuBar({ isLive, isConnecting, isDarkMode, traffic, registerLab
         <Tip label="Ramble mode (scribe)"><Button size="icon44" aria-label="Ramble mode" onClick={onRambleMode}><AudioLines size={16} /></Button></Tip>
         <Tip label="Sketch board"><Button size="icon44" aria-label="Sketch board" onClick={onSketchBoard}><PenLine size={16} /></Button></Tip>
         <Tip label="Missions"><Button size="icon44" aria-label="Missions" onClick={onMissions}><Target size={16} /></Button></Tip>
+        <Tip label="Eval deck"><Button size="icon44" aria-label="Eval deck" onClick={onEvalDeck}><ClipboardList size={16} /></Button></Tip>
         <Tip label="Toggle theme"><Button size="icon44" aria-label="Toggle theme" onClick={onToggleTheme}>{isDarkMode ? <Sun size={16} /> : <Moon size={16} />}</Button></Tip>
         <Tip label="Debug drawer"><Button size="icon44" aria-label="Debug drawer" onClick={onToggleDrawer}><Settings2 size={16} /></Button></Tip>
       </div>

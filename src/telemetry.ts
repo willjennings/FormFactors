@@ -75,7 +75,13 @@ export type TelemetryEvent =
       outcome: 'tool_call' | 'speech_only' | 'no_response' | 'transcription_lost';
       firstResponseMs: number | null; settledMs: number | null }
   | { t: number; type: 'pin'; cardType: string; artifactId?: string; error?: string }
-  | { t: number; type: 'combine_tray'; count: number; kind: string; ok: boolean };
+  | { t: number; type: 'combine_tray'; count: number; kind: string; ok: boolean }
+  // One per eval-deck card that reached a result (src/eval/deck.ts). The deck's own state is
+  // session-scoped React state and is deliberately not journaled, so this event is the ONLY durable
+  // record that a trial was run — including a skip, which the deck treats as a result and not an
+  // absence. `graded` is carried verbatim and never collapsed: a scorecard that counted a human's
+  // "it worked" alongside an observed commit would be measuring optimism.
+  | { t: number; type: 'eval_card'; cardId: string; dimension: string; grade: 'done' | 'failed' | 'skipped'; graded: 'observed' | 'self' };
 
 export function detectDevice(): DeviceInfo {
   const width = typeof window !== 'undefined' ? window.innerWidth : 0;
@@ -111,17 +117,48 @@ class Telemetry {
   private events: TelemetryEvent[] = [];
   private config: SessionConfig | null = null;
   private startedAt = 0;
+  // Growth subscribers. Exists for ONE consumer: the eval deck's observe loop, which grades a card
+  // by re-reading the stream whenever it grows (src/eval/deck.ts). A listener is called after the
+  // event is in the array, so a listener that immediately reads `eventsSnapshot()` sees it.
+  private listeners = new Set<() => void>();
 
   start(config: SessionConfig) {
     this.events = [];
     this.config = config;
     this.startedAt = Date.now();
     this.events.push({ t: 0, type: 'session_start', config });
+    this.notify(); // a restart SHRINKS the stream — every index-based reader must hear about it
   }
+
+  private notify() {
+    // Copy first: a listener that unsubscribes itself (React effect cleanup racing a push) must not
+    // mutate the set mid-iteration. A throwing listener must not swallow the event either — the
+    // stream is the record, and one bad subscriber cannot be allowed to stop the rest.
+    for (const fn of [...this.listeners]) {
+      try { fn(); } catch { /* a subscriber's failure is not the recorder's problem */ }
+    }
+  }
+
+  /** Subscribe to event growth (and to a session restart). Returns the unsubscribe. */
+  subscribe(fn: () => void): () => void {
+    this.listeners.add(fn);
+    return () => { this.listeners.delete(fn); };
+  }
+
+  /** A COPY of the stream, for readers that grade over it (the deck's run-baselined predicates
+   *  index into it). A copy rather than the live array because `push` mutates in place: a consumer
+   *  holding the live reference would see its own "snapshot" change underneath it, which is exactly
+   *  the kind of thing that makes a StrictMode double-invoke non-idempotent. */
+  eventsSnapshot(): TelemetryEvent[] { return [...this.events]; }
+
+  /** The current stream length — the baseline index an eval-deck card is dealt at. Read
+   *  synchronously at the moment a card is dealt; never derived from a React render. */
+  eventCount(): number { return this.events.length; }
 
   private push(ev: DistributiveOmit<TelemetryEvent, 't'>) {
     if (!this.config) return; // only record within a started session
     this.events.push({ t: Date.now() - this.startedAt, ...ev } as TelemetryEvent);
+    this.notify();
   }
 
   deixis(keyword: string, resolved: string | null, target: string | null, confidence: 'high' | 'low', modality: InputModality = 'voice') {
@@ -169,6 +206,11 @@ class Telemetry {
   }
   pin(cardType: string, artifactId?: string, error?: string) { this.push({ type: 'pin', cardType, artifactId, error }); }
   combineTray(count: number, kind: string, ok: boolean) { this.push({ type: 'combine_tray', count, kind, ok }); }
+  /** One call per eval-deck card result — the durable half of an unjournaled deck run. Takes
+   *  primitives rather than the deck's `CardResult` so this file keeps no dependency on src/eval. */
+  evalCard(cardId: string, dimension: string, grade: 'done' | 'failed' | 'skipped', graded: 'observed' | 'self') {
+    this.push({ type: 'eval_card', cardId, dimension, grade, graded });
+  }
 
   /** Aggregated, human-readable summary for the live readout + export. */
   metrics() {
