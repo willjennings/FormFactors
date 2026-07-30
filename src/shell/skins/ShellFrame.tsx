@@ -13,7 +13,7 @@ import { DeskIcons } from './parts/DeskIcons';
 import { WindowChip, type ShellBarItem } from './parts/WindowChip';
 // The furniture's own measurements live in one pure module, shared with `projectDesk` — see its
 // header for why they are not declared here any more.
-import { BOTTOM_INSET, COLUMN_W, TOP_BAR_H } from './furniture';
+import { BOTTOM_INSET, COLUMN_CSS_LEFT, COLUMN_CSS_W, TOP_BAR_H } from './furniture';
 
 type Slots = ShellSkin['slots'];
 
@@ -36,11 +36,17 @@ const FALLBACK_SLOTS: Slots = {
  *
  *  Uses `left: calc(50% - …)` rather than the usual `left-1/2 -translate-x-1/2`: a transform makes
  *  the wrapper a containing block for `position: fixed` descendants too, which would drag the
- *  activity ledger (`fixed right-2 top-14 bottom-24`) into the column with it. */
+ *  activity ledger (`fixed right-2 top-14 bottom-24`) into the column with it.
+ *
+ *  The column's WIDTH is plane-relative and comes from `furniture.ts` as CSS built from the same
+ *  constants `conversationColumnW` evaluates in numbers — `projectDesk` pushes Conversation's
+ *  windows out from this exact column, and a width typed twice would let the drawn column and the
+ *  reserved corridor disagree. This box is absolutely positioned against the plane, so the `100%`
+ *  inside those expressions is the plane's width. */
 export function surfaceBox(skin: ShellSkin | null): React.CSSProperties {
   const slots = skin?.slots ?? FALLBACK_SLOTS;
   return slots.surfaces === 'column'
-    ? { top: TOP_BAR_H, bottom: BOTTOM_INSET[slots.bottomBar], left: `calc(50% - ${COLUMN_W / 2}px)`, width: COLUMN_W }
+    ? { top: TOP_BAR_H, bottom: BOTTOM_INSET[slots.bottomBar], left: COLUMN_CSS_LEFT, width: COLUMN_CSS_W }
     : planeBox(skin);
 }
 
@@ -131,8 +137,9 @@ export function ShellFrame({ skin, items, launchers, summary, activity, menu, on
             centre column. This is the surface the registry's invariant test names; without it a
             minimize in this skin would be a journaled trap with no route back. */}
         {slots.restoreVia === 'column' && (
-          // I2: the strip is a bare CONTAINER, not a surface — it has no background, spans 680px
-          // across the top-centre of the plane, and sits over the default program window's title
+          // I2: the strip is a bare CONTAINER, not a surface — it has no background, spans the
+          // column's own width across the top-centre of the plane (`box`, so it narrows with the
+          // column on a laptop plane), and sits over the default program window's title
           // bar. Every other skin's bar is a visibly opaque full-width thing, so "furniture
           // swallows pointers" reads honestly there; here it would be an invisible pointer sink
           // (elementFromPoint past the last chip returned this div, whose stopPropagation killed

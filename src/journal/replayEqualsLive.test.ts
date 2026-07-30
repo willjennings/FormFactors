@@ -93,6 +93,17 @@ describe('replay equals live', () => {
     drive({ type: 'window.open', id: artifactWindowId('a1'), kind: 'artifact', refId: 'a1',
       rect: { x: 560, y: 80, w: 380, h: 300 }, origin: 'agent', at: 1000 });
     drive({ type: 'window.move', id: programWindowId(DEFAULT_PROGRAM), rect: { x: 120, y: 90, w: 680, h: 620 } });
+    // A USER drag of the artifact — `byUser: true`, the touch-promote settle. This is the one
+    // event on the desk that sets a bit rather than a rect (`placed`, sticky), and `placed` is
+    // what every skin's projection checks FIRST: a replay that dropped it would restore a desk
+    // where the model's layout quietly re-owns a window the user had put somewhere. The reducer's
+    // own tests pin the bit; this pins that it survives the journal round-trip, which nothing
+    // else did.
+    drive({ type: 'window.move', id: artifactWindowId('a1'), rect: { x: 200, y: 260, w: 380, h: 300 }, byUser: true });
+    // Snapshotted here because a1 is CLOSED at the end of this run: the final `toEqual` below
+    // could not see the flag on a window that no longer exists.
+    const journalAtPlacement = [...j];
+    const liveAtPlacement = live;
     drive({ type: 'window.minimize', id: programWindowId(DEFAULT_PROGRAM) });
     drive({ type: 'desk.skin', skin: 'provenance' });
     drive({ type: 'window.focus', id: programWindowId(DEFAULT_PROGRAM) });   // raises z AND un-minimizes
@@ -100,6 +111,14 @@ describe('replay equals live', () => {
     // An event naming an unknown id no-ops identically on both sides (spec §1).
     drive({ type: 'window.minimize', id: artifactWindowId('ghost') });
     vi.setSystemTime(EPOCH + SEPARATION_MS);
+    // `placed` survives the round trip, and only for the window whose move carried `byUser` — the
+    // boot-fit style move above (no `byUser`) must NOT come back placed, or every fitted desk
+    // would replay as one the user had hand-arranged and no skin would ever project it again.
+    const replayedAtPlacement = (replay(journalAtPlacement, JOURNAL_REGISTRY) as any).desk;
+    const placedOf = (s: any, id: string) => s.windows.find((w: any) => w.id === id)!.placed;
+    expect(placedOf(replayedAtPlacement, artifactWindowId('a1'))).toBe(true);
+    expect(placedOf(replayedAtPlacement, programWindowId(DEFAULT_PROGRAM))).toBeFalsy();
+    expect(replayedAtPlacement).toEqual(liveAtPlacement);
     expect((replay(j, JOURNAL_REGISTRY) as any).desk).toEqual(live);
   });
 

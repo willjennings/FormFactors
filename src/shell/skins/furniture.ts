@@ -13,9 +13,23 @@
 // Nothing here reads the DOM. These are the constants the components' own class names are
 // written from; each is named against the file and class it mirrors, and any change to one of
 // those class names is a change to the number here.
+//
+// One entry runs the other way: the Conversation column's width is DERIVED here (it is
+// plane-relative, so no fixed class could express it) and `ShellFrame` draws it from the CSS this
+// module generates. Same rule, same direction of truth — the number is decided in one place — but
+// worth saying out loud, because it is the one measurement a reader cannot check by opening the
+// component and reading a class name.
 import type { ShellSkin } from './types';
+import { MIN_W } from '../windowState';
 
 type Slots = ShellSkin['slots'];
+
+/** The breathing gap the skins lay out with — between a window and the furniture beside it, and
+ *  between two windows in the same band. Declared here rather than in `projectDesk` because the
+ *  Conversation column's width (below) is computed FROM it: if the two drifted, the width the
+ *  column is drawn at and the width the projection reserved for it would disagree, which is the
+ *  one thing this module exists to prevent. `projectDesk` imports it. */
+export const GAP = 24;
 
 /** How much room each bottom bar takes, in px, including the gap the omnibox wants above it.
  *  App applies this as the bottom edge of the surfaces region so the omnibox and the response
@@ -28,10 +42,61 @@ export const BOTTOM_INSET: Record<Slots['bottomBar'], number> = {
   taskbar: 52, shelf: 76, timeline: 140, none: 8,
 };
 
-/** The width of skin D's centre column. Shared with `projectDesk` (Conversation pushes windows
- *  out from this same column), so the width the furniture draws and the width the projection
- *  reasons about can never drift apart. */
-export const COLUMN_W = 680;
+/** Skin D's centre column at its designed width, on a plane wide enough to hold it: the cap the
+ *  formula below may never exceed. */
+export const COLUMN_MAX_W = 680;
+
+/** What the column has to leave on EACH side of itself for one orbiting window: a gap to the
+ *  plane's own edge, the narrowest a window may legibly be, and the gap between that window and
+ *  the column. 24 + 320 + 24 = 368. */
+export const COLUMN_SIDE_RESERVE = GAP + MIN_W + GAP;
+
+/** The width of skin D's centre column ON THIS PLANE — the ONE formula, consumed by both
+ *  `projectDesk`'s Conversation arithmetic (which pushes windows out from the column) and
+ *  `ShellFrame`'s `surfaceBox` (which draws it). Two independently written widths would put the
+ *  lie back one layer down: the projection would reserve a corridor the furniture does not
+ *  actually occupy, or vice versa.
+ *
+ *  The derivation. Conversation's claim is that every window orbits OUTSIDE the column. Laid out
+ *  across the plane's width that reads, edge to edge:
+ *
+ *      GAP | orbit window | GAP | COLUMN | GAP | orbit window | GAP
+ *
+ *  and an orbit window is never narrower than `MIN_W` (`conversationRect` floors it there, so a
+ *  cramped plane shrinks the column rather than producing an illegible window). Solving for the
+ *  column: `plane.width − 2·(GAP + MIN_W + GAP)`, capped at the designed 680. The cap binds at
+ *  and above 1416px, so a 1600×1000 desk still gets exactly the 680px column it always had; a
+ *  1200×800 laptop gets 464 and a 1024×620 one gets 288.
+ *
+ *  Why the column is what gives, rather than the orbit: a column narrower than its designed width
+ *  still holds the conversation (the omnibox inside it is `min(640px, 90vw)` and is centred on
+ *  the plane either way, so it does not move), whereas an orbit window below `MIN_W` is not a
+ *  window you can read. The old fixed 680 gave neither: at 1200×800 and 1024×620 the arithmetic
+ *  `columnLeft − rw − GAP` went NEGATIVE, every orbiting window clamped to x=0, and the drive
+ *  measured 60–148px of window sitting under the column's own chip strip — geometry claiming an
+ *  orbit that was not there, on the whole 1366×768 laptop class.
+ *
+ *  Clearance holds at every plane this can be asked about, not just the two pinned in the tests:
+ *  below the cap the reserve is 368 per side against an orbit of 320+24=344 (24px to spare); above
+ *  it, `(w − 680)/2 ≥ max(MIN_W, 0.22w) + GAP` reduces to w ≥ 1368 for the floored branch and
+ *  w ≥ 1300 for the fraction branch, both under the 1416 where the cap starts binding. */
+export function conversationColumnW(planeWidth: number): number {
+  return Math.max(0, Math.min(COLUMN_MAX_W, planeWidth - 2 * COLUMN_SIDE_RESERVE));
+}
+
+/** The same formula, as CSS, for the one consumer that has no plane number to hand: `surfaceBox`
+ *  returns a style, not a rect, and the box it styles is absolutely positioned against the plane,
+ *  so `100%` here IS `plane.width`. Built from the same two constants as `conversationColumnW`
+ *  above — the strings are generated, never typed out, so the drawn column and the reserved one
+ *  are the same arithmetic evaluated by two engines.
+ *
+ *  `left` is the centring: half the width, subtracted from the plane's midpoint. Deliberately not
+ *  `left-1/2 -translate-x-1/2` — a transform would make the wrapper a containing block for the
+ *  `position: fixed` activity ledger inside it (see `surfaceBox`). A math function's negative
+ *  result is clamped to zero by `width`, so a plane narrower than 736px degrades to no column
+ *  rather than to an invalid declaration; that is below the 1024 device gate either way. */
+export const COLUMN_CSS_W = `min(${COLUMN_MAX_W}px, calc(100% - ${2 * COLUMN_SIDE_RESERVE}px))`;
+export const COLUMN_CSS_LEFT = `calc(50% - min(${COLUMN_MAX_W / 2}px, calc(50% - ${COLUMN_SIDE_RESERVE}px)))`;
 
 /** The top bar's height. `MenuBar.tsx` renders `absolute top-0 left-0 right-0 z-30 … h-12` in
  *  EVERY skin — the four `TopBar` variants change the bar's surface and its left-hand reading,
@@ -46,9 +111,18 @@ export const TOP_BAR_H = 48;
  *
  *  164 = that 12px offset plus the 152px the column occupies at rest, measured in a headless
  *  Chrome drive at all three of 1600×1000, 1200×800 and 1024×620 (it does not vary with the
- *  plane): the first-run hint line (17), the suggestion-chip row (46), the input form (66) and
- *  the 8px gaps between them. Reserving only the form — the first cut of this constant, at 80 —
- *  left an artifact field drawn under the chip row at 1024×620 and unpointable, which is the
+ *  plane). Itemised against the real children, re-counted in the 2026-07-30 fix wave because the
+ *  sentence that used to stand here summed to 145 and called it 152: the `above` slot's wrapper
+ *  (0px — it renders empty at rest, but it is still a flex CHILD and still costs a gap), the
+ *  first-run hint line (16.5), the suggestion-chip row (46), the input form (66), and THREE 8px
+ *  gaps, not two, because of that empty first child: 0 + 16.5 + 46 + 66 + 24 = 152.5.
+ *
+ *  Which makes this constant half a pixel SHORT of the resting column rather than over it —
+ *  stated rather than rounded away. It is not worth a geometry change on its own (nothing can be
+ *  drawn in half a pixel of a row, and the transient stack below is a far larger unreserved
+ *  amount), but it is not the conservative direction either. Reserving only the form — the first
+ *  cut of this constant, at 80 — left an artifact field drawn under the chip row at 1024×620 and
+ *  unpointable, which is the
  *  exact defect the inset exists to prevent; the drive caught it.
  *
  *  It is still NOT the worst case: a witness card, the combine tray or the working indicator

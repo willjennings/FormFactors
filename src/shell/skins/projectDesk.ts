@@ -14,11 +14,9 @@
 import type { ShellSkin } from './types';
 import type { DeskState, DeskWindow } from '../desk/types';
 import { clampWindow, MIN_W, MIN_H, type WindowRect } from '../windowState';
-import { COLUMN_W, freeArea } from './furniture';
+import { GAP, conversationColumnW, freeArea } from './furniture';
 
 export interface ProjectedRect { id: string; rect: WindowRect }
-
-const GAP = 24;
 
 // --- The free area ---------------------------------------------------------------------------
 // Every skin computing geometry below lays out inside `freeArea(skin.slots, plane)` (furniture.ts)
@@ -174,9 +172,10 @@ function materialArtifactRect(index: number, count: number, free: { x: number; y
 // Conversation's ethos: "The agent holds the centre; windows orbit the talk." Its probe asks
 // whether centring conversation reduces pointing — every window (program or artifact alike,
 // the skin draws no distinction) is pushed outward from the shared centre column and shrunk, so
-// the column stays the visual centre of gravity. `COLUMN_W` is shared with the furniture that
-// paints the column (furniture.ts) rather than re-typed, so the two can never disagree on its
-// width.
+// the column stays the visual centre of gravity. The column's width comes from
+// `conversationColumnW` (furniture.ts) — the same formula `surfaceBox` paints it with, never
+// re-typed here — so the corridor this arithmetic reserves and the column the user actually sees
+// are the same number on every plane.
 const CONVERSATION_W_FRAC = 0.22;
 const CONVERSATION_H_FRAC = 0.28;
 const CONVERSATION_TOP_FRAC = 0.1; // where the first orbiting window on a side starts, into the free area
@@ -189,20 +188,25 @@ const CONVERSATION_TOP_FRAC = 0.1; // where the first orbiting window on a side 
 // its (now further-left) rect and still finds it left of centre, so the side never flips under
 // repeated projection either.
 //
-// The column is centred on the PLANE (`surfaceBox` positions it at `calc(50% - 340px)` of the
-// whole `<main>`), while the orbit's vertical extent belongs to the free area. Skin D declares
-// `sideRail: 'none'`, so the free area spans the full width and the two agree — `free.x` is 0
-// and `free.width` is `plane.width` — which is why the column arithmetic can read `free` without
-// having to say which of the two it means.
+// The column is centred on the PLANE (`surfaceBox` positions it at `calc(50% - half)` of the
+// whole `<main>`), while the orbit's vertical extent belongs to the free area — so the column
+// arithmetic below is written against `plane` and the vertical against `free`, deliberately, each
+// against the thing its own CSS resolves against. Skin D declares `sideRail: 'none'`, so for this
+// skin the two happen to agree horizontally (`free.x` is 0 and `free.width` is `plane.width`);
+// naming `plane` anyway means the day a D-shaped skin grows a side rail, the column does not
+// silently start being drawn somewhere other than where it was reserved.
 //
 // Beyond what fits, the same rule as Material's grid: the windows on a side keep their legible
 // size and their pitch tightens into an overlapping stack, rather than the whole skin reverting
 // to a hidden authored layout.
-function conversationRect(w: DeskWindow, sameSideIndex: number, sameSideCount: number, free: { x: number; y: number; width: number; height: number }): WindowRect {
+function conversationRect(w: DeskWindow, sameSideIndex: number, sameSideCount: number, free: { x: number; y: number; width: number; height: number }, plane: { width: number; height: number }): WindowRect {
+  // `MIN_W` is the floor the column's own width formula is derived against (furniture.ts): the
+  // column shrinks so that a window this wide still fits beside it with a GAP on either hand.
   const rw = Math.max(MIN_W, free.width * CONVERSATION_W_FRAC);
   const rh = Math.max(MIN_H, free.height * CONVERSATION_H_FRAC);
-  const columnLeft = free.x + (free.width - COLUMN_W) / 2;
-  const columnRight = columnLeft + COLUMN_W;
+  const columnW = conversationColumnW(plane.width);
+  const columnLeft = (plane.width - columnW) / 2;
+  const columnRight = columnLeft + columnW;
   const center = w.rect.x + w.rect.w / 2;
   const left = center < free.x + free.width / 2;
   const x = left ? columnLeft - rw - GAP : columnRight + GAP;
@@ -216,9 +220,22 @@ function conversationRect(w: DeskWindow, sameSideIndex: number, sameSideCount: n
 
 function projectOne(skin: ShellSkin, w: DeskWindow, desk: DeskState, plane: { width: number; height: number }): WindowRect {
   // Touch promotes (design spec §3): a window the user has placed is drawn exactly where they
-  // put it, in EVERY skin — never re-walked, and never re-clamped, since a settled drag already
-  // journals a clamped rect (windowState.ts). This is the first tested property and it is
-  // checked before any skin-specific arithmetic runs.
+  // put it, in EVERY skin — never re-walked, and never re-clamped. This is the first tested
+  // property and it is checked before any skin-specific arithmetic runs.
+  //
+  // What "never re-clamped" depends on, stated honestly. It is NOT that a settled drag journals a
+  // clamped rect: that clamp held against the plane the drag happened on, and says nothing about
+  // a NARROWER plane the same authored rect can later be handed (reload at a smaller window size,
+  // a resize, a second monitor). The rect returned here can be off-plane as far as this function
+  // is concerned. What keeps it off the screen's edge is OUTSIDE this contract: App's `fitWindows`
+  // boot/resize effect (App.tsx's mount effect that calls `fit()` and then re-runs it on a
+  // debounced `resize`; `fitWindows` lives in shell/desk/selectors.ts) clamps EVERY window —
+  // placed ones included — and journals a corrective `window.move` (no `byUser`, so `placed`
+  // survives) before the projection is ever asked to draw. Verified empirically in the
+  // 2026-07-30 drive's PG-9 extension: dragged to the plane's edge at 1600×1000, reloaded at
+  // 1024×620, every sample from the first frame on read {488,60,536,560} — on-plane, still
+  // placed. If that effect is ever removed or made conditional, this early return becomes a real
+  // off-plane hole, and the fix belongs there or here — not in the journal.
   if (w.placed) return w.rect;
 
   // A minimized window is not drawn — App renders neither an `ArtifactWindow` nor a
@@ -261,7 +278,7 @@ function projectOne(skin: ShellSkin, w: DeskWindow, desk: DeskState, plane: { wi
         return (oc < free.x + free.width / 2) === (wc < free.x + free.width / 2);
       });
       const sameSideIndex = sameSide.findIndex(o => o.id === w.id);
-      candidate = conversationRect(w, sameSideIndex, sameSide.length, free);
+      candidate = conversationRect(w, sameSideIndex, sameSide.length, free, plane);
       break;
     }
     default: { const _exhaustive: never = skin.key; candidate = w.rect; void _exhaustive; }

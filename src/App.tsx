@@ -1236,9 +1236,12 @@ export default function App() {
     // more dangerous one — a window can be saved entirely below the fold) unprotected, and a
     // clamp applied here would be invisible to replay. `{ ...DEFAULT_DESK_RECT }` is a defensive
     // copy so THIS desk never aliases the shared constant. The replay path still does —
-    // journal/registry.ts:112 hands the same object to initialDeskState raw — which is safe only
-    // because no rect is ever mutated in place: deskStore.ts:55 replaces the rect object
-    // wholesale and ProgramWindow.tsx:72 builds a fresh one per drag frame.
+    // `JOURNAL_REGISTRY.desk.initial` (journal/registry.ts) hands the same object to
+    // `initialDeskState` raw — which is safe only because no rect is ever mutated in place:
+    // `deskReduce`'s `window.move` case (shell/desk/deskStore.ts) replaces the rect object
+    // wholesale, and ProgramWindow's drag `move` builds a fresh one per frame via `clampWindow`.
+    // Cited by symbol, not by line: the line number this sentence used to carry was re-resolved
+    // during SH2 and landed on the wrong line, which is the exact rot the comment rule names.
     ?? initialDeskState(bootProgram, { ...DEFAULT_DESK_RECT }));
   // The desk mirrored into a ref, written SYNCHRONOUSLY by every dispatch below. This file's
   // signature failure is clearing state and forgetting the ref (the pendingAction round), so the

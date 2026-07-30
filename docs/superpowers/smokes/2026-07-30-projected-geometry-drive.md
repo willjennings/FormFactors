@@ -40,7 +40,7 @@ review's binding additions to the plan's own PG-1…PG-10 row list.
 | # | Row | Result | Evidence actually observed |
 | --- | --- | --- | --- |
 | PG-1 | Material foregrounds artifacts — largest object on screen is an artifact, not Word | **PASS at n≤2, FAIL by rendered pixels at n=6** (geometry itself correct; see below) | At 1600×1000, n=2 (`?artifacts=1`): program dock `370×242=89,701px²`; artifacts `78,125px²` and **`185,017px²`** — artifact clearly largest. Same shape at 1200×800 (dock `76,800` vs artifact `81,921`) and 1024×620 (dock `76,800` vs artifact `115,995`). At n=6 (`?corpus=wide`), the **allotted** slot (359×315≈113,135px²) is still bigger than the dock (89,701px²) — the projection is honoring its own contract — but `ArtifactWindow` renders with `maxHeight`, not `height`, so short-content cards **shrink to content** and the largest MEASURED artifact box was `51,043px²` (1600×1000) / `53,439px²` (1200×800) / `75,666px²` (1024×620) — all **smaller** than the docked program window in that same run. Screenshots `pg1-*.png` |
-| PG-2 | Conversation windows sit outward from the column and are smaller than in Familiar | **PASS** (size); **overlap defect confirmed at laptop widths, see IMPORTANT-1 below** | At every plane, Conversation's program window area is smaller than Familiar's identical-corpus baseline (e.g. 1600×1000: Familiar program `536×560=300,160px²` vs Conversation `352×240=84,480px²`). At 1600×1000 no window overlaps the 680px centre column (`columnLeft=460, columnRight=1140`). At 1200×800 and 1024×620 the program window clamps to `x=0` and DOES overlap the column (measured below) |
+| PG-2 | Conversation windows sit outward from the column and are smaller than in Familiar | **PASS** (size); **overlap defect confirmed at laptop widths, see IMPORTANT-1 below — FIXED and re-measured in the fix wave, numbers appended there** | At every plane, Conversation's program window area is smaller than Familiar's identical-corpus baseline (e.g. 1600×1000: Familiar program `536×560=300,160px²` vs Conversation `352×240=84,480px²`). At 1600×1000 no window overlaps the 680px centre column (`columnLeft=460, columnRight=1140`). At 1200×800 and 1024×620 the program window clamps to `x=0` and DOES overlap the column (measured below) |
 | PG-3 | Drag a projected window, cycle all four skins, return — rect byte-identical, not re-projected | **PASS** | Material dock at `{56, 282.95, 370.55, 242.08}` dragged by exactly `(180, 90)` → `{236, 372.95, 370.55, 242.08}` (pixel-exact delta). Journal: one `window.move` with `byUser:true`, rect matching. Cycled Provenance → Conversation → Familiar → Material: rect **identical at every step**, `identicalToPromoted: true` all four times. Shots `pg3-cycle-*.png` |
 | PG-4 | An unplaced window IS re-projected on skin switch; authored rect in journal never changed | **PASS** | Artifact `a1`'s authored `window.open` rect: `{600,80,344,300}` (fixed for the whole test). Measured DOM rect across Familiar→Material→Conversation→Provenance→Familiar: `{600,80,w:344,h:111.5}` → `{588.7,76.5,w:849.2,h:92}` → `{84,357,w:352,h:111.5}` → `{600,80,w:344,h:111.5}` → `{600,80,w:344,h:111.5}` — visibly different per skin, returns to the SAME Familiar value. Journal after all four switches: **zero** `window.move` entries for `artifact:a1`, one `window.open` only |
 | PG-5 | Pointing resolves a projected artifact correctly in every skin (pill text per skin) | **PASS** | Hovering the CONTENT region's centre (not the whole card — see finding below) resolved correctly in all four skins: `Paragraph 1 — "Q3 Status Brief"` (Familiar/Material/Conversation/Provenance) and `MERI — "Status Board"` (all four) — 8/8 hits. Finding: hovering the geometric centre of the whole visual CARD (title bar + provenance line + content) missed in several skins at compact heights — e.g. Familiar `h=111.5` card has only `55px` of pointable content below `56.5px` of chrome, so "point at the middle of what you see" is not reliable for small projected cards. Pre-existing chrome cost, not a projection defect, but now hit routinely at Material's/Conversation's smaller drawn sizes |
@@ -129,6 +129,36 @@ both artifacts) clamps to `x=0` — sitting UNDER the column's own chip strip
 Status Brief / Status Board" chip row). Same class of defect as Task 4's Material-dock finding one
 skin over: disclosed there as an acceptable-at-this-phase deviation, not a regression introduced by
 this task. Confirms the ledger's own description exactly ("column wants plane-relative").
+
+### Re-measured after the fix wave (2026-07-30, `fix(skins): conversation column goes plane-relative`)
+
+The table above is the record of the defect and stays exactly as it was measured. This is the same
+scenario re-driven against the fixed build (same server, same `?shell=conversation&artifacts=1`
+corpus, same fresh-boot procedure; script `/tmp/ff-t6/pg2-refix.mjs`, shots `fixwave-*.png`). The
+column is now read OUT OF THE DOM (the `surfaceBox` wrapper's own client rect, cross-checked
+against the `aria-label="Open windows"` strip, which agreed to the pixel at all three planes)
+rather than assumed to be 680 — the point of the fix being that the drawn column and the corridor
+the projection reserves are one number.
+
+| Plane | Column drawn (`left`/`right`/`w`) | Conversation program rect | Artifact rects | Clear of column? |
+| --- | --- | --- | --- | --- |
+| 1600×1000 | 460 / 1140 / **680** (unchanged) | `{84,126,352,240}` (unchanged) | `{84,357,352,111.5}`, `{84,588,352,217.9}` | Yes / Yes / Yes |
+| 1200×800 | 368 / 832 / **464** | `{24,106,320,240}` | `{856,106,320,111.5}`, `{856,370,320,217.9}` | Yes / Yes / Yes |
+| 1024×620 | 368 / 656 / **288** | `{24,88,320,240}` | `{680,88,320,111.5}`, `{680,208,320,217.9}` | Yes / Yes / Yes |
+
+Every rect on all three planes is fully on-plane, and the gaps are exactly the derivation's: 24px
+from the plane edge to the window, 24px from the window to the column, on both sides. 1600×1000 is
+byte-identical to the pre-fix row — the cap still binds at and above 1416px, so nothing about the
+desk-class plane changed. No console errors in any of the three boots.
+
+What the fix costs, measured rather than promised: the centre column is genuinely narrower on a
+laptop, and everything positioned against it narrows with it. At 1024×620 the inventory chip strip
+is 288px and clips its third chip into a horizontal scroll (`fixwave-1024x620-conversation.png`;
+the pre-fix shot shows all three chips). The omnibox itself does NOT move or shrink — it is
+`min(640px, 90vw)` centred on the plane either way — so at 1024 it is 640px wide inside a 288px
+column and overhangs it symmetrically. That reads as "the conversation is wider than its column",
+which is a cosmetic oddity; a window drawn under the column's chip strip was a false claim about
+where the window is. PG-S2 in the sitting doc is the human judgment on the trade.
 
 ## IMPORTANT-2 evidence (Task 5 review, ruling wanted — identity skins under furniture at 1024×620)
 

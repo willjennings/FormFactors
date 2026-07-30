@@ -3,7 +3,7 @@ import { projectDesk } from './projectDesk';
 import { resolveSkin } from './registry';
 import { deskReduce, initialDeskState, artifactWindowId, programWindowId } from '../desk/deskStore';
 import { MIN_W, MIN_H } from '../windowState';
-import { BOTTOM_INSET, OMNIBOX_H, SOURCE_RAIL_W, TOP_BAR_H } from './furniture';
+import { BOTTOM_INSET, COLUMN_CSS_LEFT, COLUMN_CSS_W, COLUMN_MAX_W, OMNIBOX_H, SOURCE_RAIL_W, TOP_BAR_H, conversationColumnW } from './furniture';
 
 const PLANE = { width: 1600, height: 1000 };
 const skin = (k: string) => resolveSkin(k)!;
@@ -90,8 +90,9 @@ describe('projectDesk', () => {
     const p = projectDesk(skin('material'), d, floor);
     const prog = p.find(x => x.id === programWindowId('word'))!.rect;
     const art = p.find(x => x.id === artifactWindowId('a1'))!.rect;
-    // Projected, not fallen back: the authored program rect is DEFAULT_DESK_RECT-shaped, the
-    // docked one is neither that nor anything MIN_W would have had to stretch.
+    // Projected, not fallen back: the dock is not the authored rect this fixture opened Word at
+    // ({48,48,680,620} — the pre-SH2 default, kept here because these tests pin the arithmetic,
+    // not the current default), nor anything MIN_W would have had to stretch.
     expect(prog).not.toEqual(d.windows.find(w => w.id === programWindowId('word'))!.rect);
     expect(prog.w).toBeGreaterThanOrEqual(MIN_W);
     expect(prog.h).toBeGreaterThanOrEqual(MIN_H);
@@ -150,6 +151,77 @@ describe('projectDesk', () => {
     }
     // And the put-away window itself is projected to nothing at all — it comes back where it was.
     expect(withA3Away.find(x => x.id === artifactWindowId('a3'))!.rect).toEqual({ x: 616, y: 104, w: 344, h: 300 });
+  });
+
+  // IMPORTANT-1 (Task 5 review, confirmed by the 2026-07-30 drive at both laptop planes).
+  // Conversation's whole claim is "the agent holds the centre; windows orbit the talk" — so a
+  // window drawn ON the centre column is not a smaller version of that claim, it is the opposite
+  // of it, and the drive measured exactly that: with the column fixed at 680, `columnLeft − rw −
+  // GAP` went negative at 1200×800 and 1024×620, every orbiting window clamped to x=0, and 60–148px
+  // of window sat under the column's own chip strip. That is the whole 1366×768 laptop class, i.e.
+  // the class D's spatial probe would have been run on. The column is plane-relative now
+  // (`conversationColumnW`), and this is the interval assertion that says so: every projected
+  // window ends before the column starts or starts after it ends.
+  it('conversation orbits clear the centre column at 1200x800 and at 1024x620', () => {
+    const d = withTwoArtifacts();
+    for (const plane of [{ width: 1200, height: 800 }, { width: 1024, height: 620 }]) {
+      const colW = conversationColumnW(plane.width);
+      const columnLeft = (plane.width - colW) / 2;
+      const columnRight = columnLeft + colW;
+      // The column is genuinely there to clear — a formula that "solved" this by collapsing the
+      // column to nothing would pass an interval test and draw no column at all.
+      expect(colW).toBeGreaterThan(0);
+      const p = projectDesk(skin('conversation'), d, plane);
+      expect(p.length).toBe(3);
+      let leftSide = 0, rightSide = 0;
+      for (const { id, rect } of p) {
+        const clearsLeft = rect.x + rect.w <= columnLeft;
+        const clearsRight = rect.x >= columnRight;
+        expect(clearsLeft || clearsRight,
+          `${id} @ ${plane.width}x${plane.height}: ${JSON.stringify(rect)} overlaps the column ${columnLeft}..${columnRight}`).toBe(true);
+        if (clearsLeft) leftSide++; else rightSide++;
+        // …and still on the plane, which is the other half of "outward" meaning anything.
+        expect(rect.x).toBeGreaterThanOrEqual(0);
+        expect(rect.x + rect.w).toBeLessThanOrEqual(plane.width);
+      }
+      // Both sides in use: a projection that pushed everything to one side would clear the column
+      // and still not be an orbit.
+      expect(leftSide).toBeGreaterThan(0);
+      expect(rightSide).toBeGreaterThan(0);
+    }
+  });
+
+  // The cap has to still bind on a desk-class plane: this fix narrows the column where it must,
+  // and nowhere else. 1416 is where `width − 2·368` reaches 680 (furniture.ts's derivation).
+  it('the conversation column keeps its designed 680 on a desk-class plane', () => {
+    expect(conversationColumnW(PLANE.width)).toBe(COLUMN_MAX_W);
+    expect(conversationColumnW(1416)).toBe(COLUMN_MAX_W);
+    expect(conversationColumnW(1415)).toBeLessThan(COLUMN_MAX_W);
+    // And the two laptop planes get exactly what the derivation says they get.
+    expect(conversationColumnW(1200)).toBe(464);
+    expect(conversationColumnW(1024)).toBe(288);
+  });
+
+  // The formula has two renderings — the number `projectDesk` reserves and the CSS `surfaceBox`
+  // draws — because `surfaceBox` returns a style and has no plane number to hand. This evaluates
+  // the CSS's own arithmetic (parsed back out of the strings, so a hand-edit to either side is
+  // caught here rather than by a person noticing a window under the column) against the function,
+  // at the three planes the browser drive measured. The drive's own numbers are the cross-check:
+  // it read the rendered column at left=460/w=680, left=368/w=464 and left=368/w=288.
+  it('the column CSS and the reserved column width are the same formula', () => {
+    const w = COLUMN_CSS_W.match(/^min\((\d+)px, calc\(100% - (\d+)px\)\)$/);
+    const l = COLUMN_CSS_LEFT.match(/^calc\(50% - min\((\d+)px, calc\(50% - (\d+)px\)\)\)$/);
+    expect(w, `unparsed width CSS: ${COLUMN_CSS_W}`).toBeTruthy();
+    expect(l, `unparsed left CSS: ${COLUMN_CSS_LEFT}`).toBeTruthy();
+    const [cap, twiceReserve] = [Number(w![1]), Number(w![2])];
+    const [half, reserve] = [Number(l![1]), Number(l![2])];
+    expect(half * 2).toBe(cap);
+    expect(reserve * 2).toBe(twiceReserve);
+    for (const planeW of [1600, 1200, 1024]) {
+      // What a browser computes for `width` and `left` on this box.
+      expect(Math.min(cap, planeW - twiceReserve)).toBe(conversationColumnW(planeW));
+      expect(planeW / 2 - Math.min(half, planeW / 2 - reserve)).toBe((planeW - conversationColumnW(planeW)) / 2);
+    }
   });
 
   it('projection is stable — projecting a projection changes nothing', () => {
