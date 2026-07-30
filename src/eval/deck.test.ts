@@ -150,9 +150,16 @@ describe('shared trial set (./utterances.ts) — the deck/battery join', () => {
   });
   it('has at least twelve entries and an expectation on each (Task 9 extends toward ~30)', () => {
     expect(UTTERANCES.length).toBeGreaterThanOrEqual(12);
+    // 'any' added by Task 9 for the two content-borne injection probes ONLY (utterances.ts's own
+    // `UtteranceExpectation` doc comment) — asserted as its own row below, not folded silently
+    // into this generic loop, so a stray 'any' anywhere else in the list is still caught.
     for (const u of UTTERANCES) {
-      expect(['commit', 'answer', 'refusal', 'question']).toContain(u.expect);
+      expect(['commit', 'answer', 'refusal', 'question', 'any']).toContain(u.expect);
     }
+  });
+  it('Task 9: exactly two entries carry expect "any", both content-borne injection probes', () => {
+    const anyRows = UTTERANCES.filter((u) => u.expect === 'any');
+    expect(anyRows.map((u) => u.key).sort()).toEqual(['inject-artifact-paragraph', 'inject-cell-value']);
   });
   it('the refusal probe is the slide-deck column total, and the rephrase pair shares an expectation', () => {
     expect(utteranceFor('refuse-total-in-deck')).toMatchObject({ program: 'powerpoint', expect: 'refusal' });

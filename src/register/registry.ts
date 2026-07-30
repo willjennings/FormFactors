@@ -159,6 +159,18 @@ export function resolveDials(key: string): DialValues {
   return { ...r.dials };
 }
 
+/** The `?register=` boot param's resolver (Task 9, battery brief decision 1) — mirrors
+ *  `shell/skins/registry.ts`'s `resolveSkin` exactly: an unknown key returns `null`, never a
+ *  guessed default (the `getProgram` anti-pattern in scenarios.ts, where an unknown program id
+ *  silently becomes Microsoft Word, is exactly what a boot param must never do — a typo in a URL
+ *  must never silently redecorate the session under some OTHER register than the one asked for).
+ *  Pure and unit-testable without a DOM, unlike `resolveSkin`'s caller in App.tsx (no App test
+ *  harness exists — see App.tsx's own `?register=` boot effect, which is the only thing this
+ *  function is for). */
+export function resolveRegister(key: string): RegisterDef | null {
+  return REGISTERS.find(r => r.key === key) ?? null;
+}
+
 const DIAL_KEYS = Object.keys(DEFAULT_DIALS) as (keyof DialValues)[];
 
 export function matchRegister(dials: DialValues): string | null {

@@ -8,3 +8,7 @@ coverage/
 !.env.example
 .superpowers/
 .claude/
+# scripts/battery/run.mjs's own output: session exports (verbatim utterances + telemetry) and the
+# manifest summarize.mjs grades. Spec §5's ruling 2 (verbatim storage: "yes, local-only") — these
+# never leave a machine, dry or live; regenerable by re-running the harness either way.
+scripts/battery/out/

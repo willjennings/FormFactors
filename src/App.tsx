@@ -43,7 +43,7 @@ import {
   ACT_TOOL,
 } from './scenarios';
 import type { ProgramId, ElementCategory, MockDoc, Program } from './scenarios';
-import { DEFAULT_DIALS, REGISTERS, BAND_NOTCH_COUNT, resolveDials, matchRegister, diffDials, registerSection } from './register/registry';
+import { DEFAULT_DIALS, REGISTERS, BAND_NOTCH_COUNT, resolveDials, matchRegister, diffDials, registerSection, resolveRegister } from './register/registry';
 import type { DialValues } from './register/types';
 import { visibleSuggestions } from './register/gates';
 import { bandKeyAction } from './register/bandKeys';
@@ -401,6 +401,16 @@ const bootRegisterKeyBaseline = bootStates?.dials ? bootStates.dials.registerKey
 // module-scoped boolean: pass 1 sees it false, acts, sets it true; pass 2 sees it true and
 // returns. (Verified in the fix round's dev-mode observation, not just reasoned through.)
 let failureNoticeShown = false;
+// `?register=` boot param (Task 9, battery brief decision 1) — same "act once, then suppress"
+// polarity as `failureNoticeShown` immediately above, for the same reason: the effect that reads
+// this calls `applyRegister`, which is not idempotent-by-value the way the `?shell=` effect's
+// `deskDispatchJ` write is (that one compares `deskRef.current.skin` against the target and no-ops
+// when they already match, because `deskRef` is written SYNCHRONOUSLY — see its own comment at the
+// `?shell=` effect below). `registerKeyRef` is mirrored by a plain `useEffect([registerKey])`
+// instead, which does NOT settle synchronously within one StrictMode pass, so a by-value guard
+// read from the ref cannot be trusted not to fire twice. A module-scoped "ran once" boolean sidesteps
+// the question entirely.
+let registerBootApplied = false;
 
 export default function App() {
   // --- Active program (Word / Excel / PowerPoint) — single source of truth for content ---
@@ -1210,6 +1220,28 @@ export default function App() {
     // dials effect's boot-baseline comparison.
     if (!bootSkin || deskRef.current.skin === bootSkin.key) return;
     deskDispatchJ({ type: 'desk.skin', skin: bootSkin.key });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // ?register= boot param (Task 9, battery brief decision 1 — the battery drives fixed arms via
+  // the URL, the same way `?shell=` already does). resolveRegister mirrors resolveSkin: an unknown
+  // key returns null and is IGNORED — a typo must never silently pick a register (same discipline
+  // as the `?shell=` comment above). Routed through `applyRegister` (defined above, already the
+  // one function that resolves a register's dials, stamps `registerKey`, and logs the switch as a
+  // witnessed activity row) rather than duplicating its body here — this boot param is otherwise
+  // indistinguishable from a user selecting the register from the band, and should read as one in
+  // the trace. Guarded by the module-scoped `registerBootApplied` (see its own comment) rather than
+  // a by-value check: unlike `bootSkin`'s reducer-backed desk (whose ref is written synchronously,
+  // so re-reading it after a dispatch is safe), `registerKey`/`dials` are plain `useState`, and
+  // `registerKeyRef` only catches up on a LATER render's effect — a by-value guard here could not
+  // tell StrictMode's second pass apart from a real second boot param.
+  useEffect(() => {
+    if (registerBootApplied) return;
+    registerBootApplied = true;
+    const key = typeof window !== 'undefined'
+      ? new URLSearchParams(window.location.search).get('register') ?? ''
+      : '';
+    const reg = resolveRegister(key);
+    if (reg && registerKeyRef.current !== reg.key) applyRegister(reg.key);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   // The live skin. A null here is NOT the boot-param case: it can only mean a journal from a

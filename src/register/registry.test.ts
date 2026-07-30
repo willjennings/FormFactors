@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { DEFAULT_DIALS, REGISTERS, resolveDials, matchRegister, diffDials, registerSection } from './registry';
+import { DEFAULT_DIALS, REGISTERS, resolveDials, matchRegister, diffDials, registerSection, resolveRegister } from './registry';
 import type { ArmAggregate } from '../eval/armAggregate';
 import { UNDERPOWERED_N } from '../eval/armAggregate';
 
@@ -213,5 +213,15 @@ describe('winsWhen', () => {
       expect(v.because).toContain('0.30');
       expect(v.because.toLowerCase()).toContain('run-1 unaided');
     });
+  });
+});
+
+describe('resolveRegister — the ?register= boot param resolver (Task 9)', () => {
+  it('resolves every real register key to its own def', () => {
+    for (const r of REGISTERS) expect(resolveRegister(r.key)).toEqual(r);
+  });
+  it('returns null for an unknown key — no silent fallback (mirrors resolveSkin)', () => {
+    expect(resolveRegister('windows95')).toBeNull();
+    expect(resolveRegister('')).toBeNull();
   });
 });
