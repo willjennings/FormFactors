@@ -180,6 +180,55 @@ session whose prompt and tool list belonged to the program the user had just lef
 that one change reverted: window on screen **PowerPoint**, prompt "The user is working in
 **Microsoft Excel**", Excel's tool list. Fixed, it reads PowerPoint with PowerPoint's tools.
 
+## Part 10 — Projected geometry (owed from the 2026-07-29 plan, Task 6)
+
+Task 6's browser drive covered PG-1…PG-10 **keylessly** at 1600×1000, 1200×800 and 1024×620 against
+a stub-env dev server (real Azure wire protocol, stubbed socket, for the ask-card + hint-count
+rows) — full write-up in
+`docs/superpowers/smokes/2026-07-30-projected-geometry-drive.md`. Material now measurably
+foregrounds made pieces (n=2 case) and docks the program window off the source rail; Conversation
+now measurably pushes every window outward from the centre column and shrinks it; touch-promote,
+re-projection, pointing-resolves-the-drawn-rect, minimize/restore, the ask card, reload, the
+1024×620 floor and the update-layout hint count were all confirmed against the real DOM.
+
+**This is the condition Phase 5 existed to lift: B (Material) and D (Conversation)'s spatial
+probes were previously unmeasurable because the two skins didn't reposition geometry at all — any
+human-smoke row judging "does foregrounding made material change what people make" or "does
+centring conversation reduce pointing" would have been judging inert furniture. From this branch
+forward, B/D spatial results are ADMISSIBLE: the geometry a person sees and points at in those two
+skins is the geometry the plan claims.**
+
+The rows below are the part a stub cannot stand in for — a real model choosing what to make, and a
+real person's eye on density/legibility judgments the keyless drive could only measure in pixels.
+
+| # | Test | Verifies | Result |
+| --- | --- | --- | --- |
+| PG-S1 | Material, live (any backend): ask the model to draft two short pieces from a source, watch where they land | Whether a real person reads Material's desk as "what I made is the desk" now that the artifacts are genuinely the largest objects on screen at low density (n=1-2) — PG-1's keyless finding was a clean PASS at n=2 but a measured pixel-level FAIL at n=6 (short-content cards shrink below the docked program window via `maxHeight`, even though their ALLOTTED slot is larger) — does a real person notice or care at ordinary (n≤3) density | pending |
+| PG-S2 | Conversation, live, by voice, at a 1366×768-class laptop width | The keyless drive's IMPORTANT-1 evidence (routed from Task 5): at 1200×800 and 1024×620 the fixed 680px column doesn't scale down, so orbiting windows clamp to the plane edge and 40-148px of window sits UNDER the column — does that read as "broken" to a real person, or as acceptable crowding | pending |
+| PG-S3 | Any identity skin (Familiar/Provenance), live, at 1024×620 | The keyless drive's IMPORTANT-2 evidence (Task 5 review, ruling wanted): identity skins draw up to ~292px of program content and ~88px of artifact content UNDER the omnibox/shelf furniture at this floor — is that legible/pointable enough in practice, or does it need a ruling to change | pending |
+| PG-S4 | Material, live: reach n=5-6 artifacts in one session (the density the keyless drive drove synthetically via `?corpus=wide`) | Whether the pile-of-paper degradation (rows down to 13px-visible strips at 1024×620, n=6) reads as an honest "desk got crowded" to a real person, or as the skin failing | pending |
+| PG-S5 | Conversation, live: open a witness card or the combine tray while windows are orbiting | The keyless drive flagged (Task 5 concern 4) that `OMNIBOX_H`'s furniture inset reserves only the RESTING column height — a witness card or tray stacks higher transiently. Does a live turn ever show a card drawn over an orbiting window, or over the omnibox itself | pending |
+| PG-S6 | Any skin, live: drag a window mid-session (touch-promote), then let the MODEL open a new artifact | PG-3/PG-4 confirm the mechanics keylessly (byte-identical placed rect, unplaced windows re-project, authored rect never rewritten by a skin switch); this is whether a real model-driven `artifact.create` mid-session ever visually collides with a window the user just placed | pending |
+
+**Not owed further — closed by this drive's PG-9 extension.** The Task-2 PARKED tension (does a
+`placed` window's early return in `projectDesk` — which skips the function's own final
+`clampWindow` — ever reach the screen off-plane) is now **resolved empirically, not just by
+argument**: promoting a window at 1600×1000 then reloading at 1024×620 never renders an off-plane
+frame at any sampled point (50ms–6s after load, in every skin). App's `fitWindows` boot-fit effect
+(`App.tsx:1367-1379`) re-clamps the AUTHORED rect of every window — placed or not — against the
+CURRENT plane on mount and on settled resize, and does so BEFORE `projectDesk` is ever asked to
+draw it; `placed` survives the correction (sticky rule), so the window is still drawn identically
+in every skin afterward, just at the corrected rect. One minor, dev-server-only wrinkle found while
+confirming this: in this StrictMode dev build, the correction's OWN journal entry (`label: "fit to
+this screen"`) can sit in `journalRef` unsaved until a LATER dispatch happens to re-arm the save
+debounce — StrictMode's mount→cleanup→remount cancels the first save timer via the (unrelated)
+"clear the save timer on unmount" cleanup effect, and the second effect pass finds nothing left to
+correct, so no new timer gets armed. The RENDER and the IN-MEMORY state are correct throughout; only
+that one journal entry's durability to disk is deferred (confirmed: a trivial follow-up action
+flushes both the original move and the deferred "fit to this screen" entry together). Not
+reproduced as a user-visible defect — no fix made, per this task's no-src-changes constraint;
+flagged for whoever next touches the journal-save debounce.
+
 ## Log
 
 ### Part 1 — Register system (keyless), 2026-07-24, HEAD ac5238e
