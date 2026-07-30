@@ -119,6 +119,8 @@ import type { InputModality } from './telemetry';
 import { buildInstructions } from './prompt/instructions';
 import { withTrafficCount } from './shell/traffic';
 import type { Traffic } from './shell/traffic';
+import { openTurn, noteFirstResponse, updateRequest, closeTurn,
+  type OpenTurn, type ClosedTurn } from './eval/turns';
 import { idleExceeded } from './shell/idle';
 import { seedCorpus } from './artifacts/seeds';
 import { saveAndLoad } from './artifacts/corpus';
@@ -541,6 +543,16 @@ export default function App() {
     });
   };
   const [traffic, setTraffic] = useState<Traffic | null>(null);
+  // …and in a ref, because the session-end record reads it from onClose — a connect-time closure,
+  // where the `traffic` state variable is frozen at whatever the render that STARTED the session
+  // captured: null on a first session, the previous session's final count on a later one, never
+  // this session's totals. Written SYNCHRONOUSLY by noteTraffic below rather than by a useEffect
+  // mirror, which StrictMode's second mount pass rolls back.
+  const trafficRef = useRef<Traffic>({ frames: 0, hints: 0 });
+  /** The one writer of the traffic meter: the header's live counter and the ref the export reads
+   *  can never disagree, because both move here. Passed to withTrafficCount in place of the bare
+   *  setter. */
+  const noteTraffic = (t: Traffic) => { trafficRef.current = t; setTraffic(t); };
   // Detect running inside an embedded preview iframe — such frames usually don't delegate
   // microphone access, so we surface an "open in a new tab" escape hatch.
   const [isEmbedded, setIsEmbedded] = useState(false);
@@ -791,11 +803,97 @@ export default function App() {
   const runAccumRef = useRef<RunAccum>(EMPTY_RUN_ACCUM);
   /** End the current run: clear both accumulators and bump the run id, always together. Apart, an
    *  accumulator restarts with the same identity and a later utterance looks like a continuation
-   *  of the one that answered the question. */
+   *  of the one that answered the question.
+   *
+   *  NO TURN CLOSES HERE, deliberately. A turn only ever opens on non-empty cleaned text
+   *  (processInputTranscript), so "the run ended before its turn had a request" is not a state
+   *  this app can reach — the `transcription_lost` close belongs to the one seam where a real
+   *  transcript genuinely arrives unusable, which is that same function's empty-cleaned branch.
+   *  And a run that ends with a turn still OPEN is not lost: the model still owes it an answer, so
+   *  it closes as speech_only/no_response when the next utterance supersedes it or the session
+   *  ends — closing it here would report silence as a transcription failure. */
   const endTranscriptRun = () => {
     lastProcessedTranscriptionRef.current = "";
     runAccumRef.current = EMPTY_RUN_ACCUM;
     transcriptRunRef.current += 1;
+  };
+
+  // ── TURNS (src/eval/turns.ts): every user utterance gets an outcome ─────────────────────────
+  // A turn opens on each utterance/submit and closes on what actually happened — tool call,
+  // speech only, silence, or an unusable transcript. speech_only and no_response are rows that
+  // exist in no other event, so before this any completion rate was survivorship-biased: a
+  // request the model answered with nothing at all was invisible rather than counted as a miss.
+  // The decisions all live in the pure machine; this file only feeds it the seams (transcript
+  // arrival, response start, tool ack, session end).
+  //
+  // ONE ref holding the open turn WITH the transcript run it belongs to — the two are never
+  // independently true, because a spoken run is ONE turn and the run id is what distinguishes a
+  // later delta of the same utterance from a genuinely new one. Every reader is a stale-closure
+  // context (the provider callbacks are bound at connect time), so it is written SYNCHRONOUSLY at
+  // every site; a useEffect mirror would be rolled back by StrictMode's second mount pass.
+  const openTurnRef = useRef<{ open: OpenTurn; run: number } | null>(null);
+  const turnSeqRef = useRef(0);
+  const nextTurnId = () => `turn-${(turnSeqRef.current += 1)}`;
+  // The clock for turn timestamps. The pure layer only ever SUBTRACTS these values from each
+  // other (firstResponseMs and settledMs are both measured from the turn's own open time), so
+  // what matters is that one turn's stamps share an origin — not which origin it is. Date.now()
+  // rather than a session-relative offset because a typed command opens a turn BEFORE the session
+  // exists (sendTypedInput queues the text and starts the connect), and an origin that moved at
+  // onOpen would land mid-turn and skew that turn's latencies. `ClosedTurn.t` is therefore
+  // absolute epoch ms here, and nothing reads it: telemetry.turn() takes no `t` — the exported
+  // event's session-relative `t` is stamped by telemetry's own clock.
+  const turnClock = () => Date.now();
+  /** One telemetry row per ClosedTurn — the single place a turn becomes an event. Silently records
+   *  nothing before a session has started (telemetry.push ignores everything outside one), which
+   *  is right: a turn opened and superseded while the connect was still in flight belongs to no
+   *  session's stream. */
+  const pushTurn = (c: ClosedTurn) => {
+    telemetry.turn(c.id, c.modality, c.request, c.outcome, c.firstResponseMs, c.settledMs);
+  };
+  /** Close whatever turn is open with the outcome its own history implies — the same rule openTurn
+   *  applies when a new utterance supersedes an unfinished one (turns.ts): the model had said
+   *  something (speech_only) or never did (no_response). No ack happened, so there is no
+   *  settlement time. */
+  const flushOpenTurn = () => {
+    const cur = openTurnRef.current;
+    if (!cur) return;
+    openTurnRef.current = null;
+    // `cur.open.t` — the CLOSING turn's own open time, never the current clock. Passing "now"
+    // here is the wiring mistake turns.ts's comments warn about: it makes every latency come out
+    // negative, and nothing at this layer would notice.
+    pushTurn(closeTurn(cur.open, cur.open.t,
+      { kind: cur.open.firstResponseAt !== null ? 'speech_only' : 'no_response' }, null));
+  };
+  // When this session's telemetry clock started (set beside telemetry.start in onOpen), and
+  // whether its end has been recorded. Initialised as ALREADY recorded: before the first onOpen
+  // there is no session, so there is nothing to record and no end event to invent.
+  const sessionStartedAtRef = useRef(0);
+  const sessionEndRecordedRef = useRef(true);
+  /** The session's closing telemetry: the turn still in flight gets its honest outcome, and the
+   *  traffic meter's totals reach the export so cost is data rather than pixels.
+   *
+   *  Idempotent per session — both the provider's onClose (deaths we did not ask for) and
+   *  closeLiveSession (the ones we did) call it, and on gemini/azure both happen. A dial/backend/
+   *  program reconnect also lands here via its close; the record it writes is then cleared by the
+   *  next telemetry.start(), which resets the event stream. */
+  const recordSessionEnd = () => {
+    if (sessionEndRecordedRef.current) return;
+    sessionEndRecordedRef.current = true;
+    flushOpenTurn();
+    const t = trafficRef.current;
+    // slotsFilled/inferredCount are the ramble scribe's fields and are genuinely 0 on this desk —
+    // it has no slot model. The event is emitted here for its DURATION and TRAFFIC: without it
+    // the frames and hints the header meter counts never reach the export, and no register arm
+    // can be compared on what it cost to run.
+    telemetry.sessionComplete(Date.now() - sessionStartedAtRef.current, 0, 0, t.frames, t.hints);
+  };
+  /** An APP-INITIATED end of the session: record its final telemetry, then close. This exists
+   *  instead of relying on onClose alone because openai.ts suppresses that callback for a close we
+   *  asked for (its `closed` flag — openai.ts:111, :121, set in close() at :244), so on that
+   *  backend the flush and the traffic totals would simply never happen. */
+  const closeLiveSession = () => {
+    recordSessionEnd();
+    providerRef.current?.close();
   };
 
   const [sendFrequency, setSendFrequency] = useState(150); // Increased frequency for better AI responsiveness
@@ -2007,6 +2105,19 @@ export default function App() {
         traceActivity({ kind: 'done', callId: fc.id, text: `${fc.name}${targetSummary}` });
       }
       providerRef.current?.sendToolResponse(fc.id, fc.name, result);
+      // THE TURN SETTLED. Every outcome of a tool call leaves through this one wrapper — commit,
+      // refusal, gate ask, duplicate — so the ack is the honest settlement moment whatever the
+      // verdict was, and `tool_call` names what happened (not whether it succeeded; the `action`
+      // event carries that). The FIRST ack of a chain closes the turn and the rest find nothing
+      // open: the user's request settled when the app first answered it, and the calls that
+      // follow answer no new utterance of theirs.
+      const settling = openTurnRef.current;
+      if (settling) {
+        openTurnRef.current = null;
+        // `settling.open.t` — the closing turn's OWN open time (turns.ts closeTurn); the clock
+        // belongs in the settledAt argument only. Swapped, every latency comes out negative.
+        pushTurn(closeTurn(settling.open, settling.open.t, { kind: 'tool_call' }, turnClock()));
+      }
     };
     if (fc.name !== 'respond' && callDeduperRef.current.seen(fc.name, dedupeKey, Date.now())) {
       addLog('info', `Duplicate tool call skipped: ${fc.name}`);
@@ -2685,17 +2796,40 @@ export default function App() {
     lastTranscriptionTimeRef.current = Date.now();
 
     // Clean transcription: remove <noise>, [noise], (noise), *noise*, etc.
-    const cleanedText = text
+    // Split into two steps (the chain is otherwise byte-identical to the single one it replaces)
+    // because the two ways this can end up empty mean opposite things — see the branch below.
+    const markerless = text
       .replace(/<[^>]*>/g, '')
       .replace(/\[[^\]]*\]/g, '')
       .replace(/\([^)]*\)/g, '')
-      .replace(/\*[^*]*\*/g, '')
+      .replace(/\*[^*]*\*/g, '');
+    const cleanedText = markerless
       // Only allow English letters, numbers, spaces, and standard punctuation
       .replace(/[^a-zA-Z0-9\s.,?!'":;-]/g, '')
       .replace(/\s+/g, ' ')
       .trim();
 
-    if (!cleanedText) return;
+    if (!cleanedText) {
+      // A TRANSCRIPT THAT ARRIVED UNUSABLE — the one place `transcription_lost` is real. A bare
+      // provider marker ("<noise>", "[silence]") is not an utterance and is still recorded as
+      // nothing at all; but text the CHARACTER FILTER emptied is speech this app threw away,
+      // because that filter keeps only ASCII letters, digits and basic punctuation. The letter
+      // test is what separates the two: an utterance in a non-Latin script still holds letters
+      // once the markers are gone, while noise markers and punctuation-or-symbol-only deltas
+      // ("♪♪") hold none. That turn has no gradeable request, so it opens and closes on the spot
+      // as ungradeable rather than vanishing from the denominator — and, being a real utterance,
+      // it supersedes any turn still open. `request` keeps the RAW text: it is the only diagnosis
+      // there is of what was lost.
+      if (/\p{L}/u.test(markerless)) {
+        const { open, closedPrev } = openTurn(openTurnRef.current?.open ?? null, nextTurnId(),
+          turnClock(), lastInputModalityRef.current, text.trim());
+        if (closedPrev) pushTurn(closedPrev);
+        openTurnRef.current = null;
+        // `open.t` — this turn's own open time (turns.ts closeTurn), not the current clock.
+        pushTurn(closeTurn(open, open.t, { kind: 'transcription_lost' }, null));
+      }
+      return;
+    }
 
     // G9 REPAIR GRAMMAR: handle conversational corrections app-side. "undo that" → undo;
     // "cancel / never mind" → drop the pending action; "no, the other one" → swap to the
@@ -2793,6 +2927,31 @@ export default function App() {
       askOpen: !!askRef.current,
       accumulated: runUtterance(runAccumRef.current),
     });
+
+    // ONE TURN PER UTTERANCE, run-scoped for exactly the reason the held answer above is. A spoken
+    // utterance arrives as several deltas, so a later delta of the SAME run GROWS the open turn's
+    // request — against the run accumulator, never the display accumulation, which is not one (see
+    // runAccumRef). A new run is a new turn, and so is every typed submit: typed text arrives
+    // complete, so two submits inside one 3-second run are two turns, the same distinction
+    // reviseHeldAnswer draws about the same two modalities. (Limit, stated rather than papered
+    // over: a spoken turn opened mid-run right after a typed one grows against an accumulator that
+    // folded the typed text in too — reviseHeldAnswer's own comment notes the same about this
+    // shared seam. The verbatim request can carry that prefix; the turn identity cannot.)
+    //
+    // Opening over an unfinished turn CLOSES it — speech_only if the model had said anything,
+    // no_response if it never did (turns.ts openTurn). That close is the row this whole event
+    // exists for, so it is pushed here, not dropped.
+    const voiceTurn = lastInputModalityRef.current === 'voice';
+    const liveTurn = openTurnRef.current;
+    if (liveTurn && voiceTurn && liveTurn.open.modality === 'voice'
+        && liveTurn.run === transcriptRunRef.current) {
+      openTurnRef.current = { ...liveTurn, open: updateRequest(liveTurn.open, runUtterance(runAccumRef.current)) };
+    } else {
+      const { open, closedPrev } = openTurn(liveTurn?.open ?? null, nextTurnId(), turnClock(),
+        lastInputModalityRef.current, cleanedText);
+      openTurnRef.current = { open, run: transcriptRunRef.current };
+      if (closedPrev) pushTurn(closedPrev);
+    }
 
     const detectedKeywords: string[] = [];
     let tempText = lowerText;
@@ -3029,6 +3188,10 @@ export default function App() {
     lastInputModalityRef.current = 'typed';
     addLog('event', `⌨ ${text}`);
     setLiveTranscription(text);
+    // The turn opens INSIDE this call — one seam, both modalities, and the modality ref is already
+    // stamped 'typed' above so it opens as typed. Deliberately not opened here as well: this
+    // reaches processInputTranscript synchronously, so a second open would record two turns for
+    // one submission (and the quick-fire digit path, which routes through here, two per keypress).
     processInputTranscript(text);
     if (providerRef.current && isLive) {
       if (hint) providerRef.current.sendTextHint(hint);
@@ -3224,10 +3387,10 @@ export default function App() {
           : backend === 'openai'
             ? createOpenAIRealtimeProvider()
             : createGeminiProvider(apiKey!, (s) => { sessionRef.current = s; }),
-        setTraffic,
+        noteTraffic,
       );
       const voice = backend === 'gemini' ? 'Zephyr' : backend === 'azure' ? 'alloy' : 'marin';
-      setTraffic({ frames: 0, hints: 0 });
+      noteTraffic({ frames: 0, hints: 0 });
       // Stale-callback guard: both backends' sockets fire onclose unconditionally (gemini.ts:137,
       // azure.ts's ws.onclose), so a delayed close event from a REPLACED session must not touch
       // the current one's state.
@@ -3286,6 +3449,13 @@ export default function App() {
                 shell: deskRef.current.skin,
               },
             });
+            // Read beside telemetry.start so the two clocks agree: this is what the session's
+            // duration is measured from, and recordSessionEnd is now armed for this session. A
+            // turn opened before this point (a typed command that queued its text and started the
+            // connect) is deliberately LEFT OPEN — it is this session's first turn, and the flush
+            // below is where its text actually reaches the model.
+            sessionStartedAtRef.current = Date.now();
+            sessionEndRecordedRef.current = false;
             setIsConnecting(false);
             connectInFlightRef.current = false;
             // R1 #1: deliver the stashed type-time deixis hint before the queued text so
@@ -3315,6 +3485,12 @@ export default function App() {
           },
           onClose: () => {
             if (providerRef.current !== thisProvider) return; // stale close from a replaced session
+            // The session is over: whatever turn was still in flight gets its honest outcome (the
+            // model will never answer it now) and the traffic totals go into the export. Reached
+            // for every death the provider reports — server drop, idle guard, reconnect, the user
+            // ending it on gemini/azure; the app-initiated sites call the same function themselves
+            // because openai suppresses this callback for a close we asked for. Idempotent.
+            recordSessionEnd();
             // R2: a session that dies WITHOUT ever opening (e.g. the server drops the socket
             // before onOpen fires) never reaches onError or abortPendingTyped either — the
             // genuine onOpen flush is the only other place that clears pendingTrayRef, and it
@@ -3348,11 +3524,25 @@ export default function App() {
           onToolCall: (call) => {
             if (showRotateOverlayRef.current || showMobileOverlayRef.current) return;
             if (lastTranscriptionTimeRef.current === 0) { addLog('info', 'Ignoring tool call before first transcription'); return; }
+            // A tool call IS model output, and on Gemini it can be the FIRST one: gemini.ts
+            // dispatches msg.toolCall itself and only fires onResponseStart for a message carrying
+            // serverContent.modelTurn, so a silent tool call would otherwise leave this turn's
+            // firstResponseMs null — the very latency the evaluation is for. noteFirstResponse is
+            // idempotent, so on azure/openai (response.created → onResponseStart, which precedes
+            // every call) this changes nothing.
+            const answering = openTurnRef.current;
+            if (answering) openTurnRef.current = { ...answering, open: noteFirstResponse(answering.open, turnClock()) };
             handleVoiceToolCall(call);
           },
           onResponseStart: () => {
             if (showRotateOverlayRef.current || showMobileOverlayRef.current) return;
             if (lastTranscriptionTimeRef.current === 0) { addLog('info', 'Ignoring model turn before first transcription'); return; }
+            // Time to first model output, for the turn that asked for it. Idempotent in the pure
+            // layer — the first output wins, so the later chunks of one answer cannot overwrite
+            // it, and a response that arrives with no turn open (the model speaking unprompted)
+            // records nothing.
+            const answering = openTurnRef.current;
+            if (answering) openTurnRef.current = { ...answering, open: noteFirstResponse(answering.open, turnClock()) };
             setModelBusy(true);
             setPersistentPaths([]);
             setLiveTranscription("");
@@ -3698,7 +3888,7 @@ export default function App() {
     lastActivityRef.current = Date.now();
     const t = setInterval(() => {
       if (idleExceeded(Date.now(), lastActivityRef.current)) {
-        providerRef.current?.close();
+        closeLiveSession();
         setLastError('Session ended after 5 idle minutes (token guard) — tap the mic to reconnect.');
       }
     }, 30_000);
@@ -5082,7 +5272,7 @@ export default function App() {
               }
               setGrounding([]);
             }}
-            onMicToggle={() => { setFirstRunHint(false); isLive ? providerRef.current?.close() : startLiveSession(); }}
+            onMicToggle={() => { setFirstRunHint(false); isLive ? closeLiveSession() : startLiveSession(); }}
             onChipTap={(s) => setFocusTitle(TASKS.find(t => t.key === s.key)?.targetElement)}
           />
 
@@ -5158,7 +5348,7 @@ export default function App() {
             worldState={serializeMockDoc(mockDoc)}
             undoCount={undoStack.length}
             onUndo={handleUndo}
-            onEndSession={() => providerRef.current?.close()}
+            onEndSession={() => closeLiveSession()}
             onReset={handleReset}
             onNewDesk={handleNewDesk}
             isLive={isLive}
