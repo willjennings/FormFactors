@@ -12,6 +12,7 @@ import type { FeedbackMode } from '../feedback';
 import { FEEDBACK_OPTIONS } from '../feedback';
 import { EARCON_KINDS, playEarcon } from '../feedback/earcons';
 import { telemetry, detectDevice } from '../telemetry';
+import { ScorecardMini } from '../eval/ScorecardView';
 import { Switch } from '../ui/Switch';
 import { Select } from '../ui/Select';
 import { Slider } from '../ui/Slider';
@@ -54,6 +55,10 @@ export function DebugDrawer(props: DrawerProps) {
   const device = detectDevice();
   const tm = telemetry.metrics();
   const cal = tm.deixis.calibration;
+  // `snapshot()` (not `metrics()`) is the one call that carries the whole-sitting `scorecard` —
+  // computed by the SAME derivation the completion card uses (src/eval/scorecard.ts), never a
+  // second readout invented for the drawer. `null` until a session has started.
+  const scorecardModel = telemetry.snapshot().scorecard;
 
   return (
     <div className="flex flex-col gap-4">
@@ -152,6 +157,14 @@ export function DebugDrawer(props: DrawerProps) {
           Export session JSON
         </Button>
       </div>
+
+      {/* 6b. Scorecard — live compact version (design spec §4b's own closing line: "the drawer's
+          eval panel becomes a live miniature of it rather than a separate design"). */}
+      {scorecardModel && (
+        <div className="w-full px-4 py-3 rounded-2xl border bg-[var(--inner-box-bg)] border-[var(--card-border)]">
+          <ScorecardMini model={scorecardModel} />
+        </div>
+      )}
 
       {/* 7. Refresh-rate slider */}
       <div className="flex flex-col gap-1">

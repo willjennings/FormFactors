@@ -13,6 +13,20 @@ type DistributiveOmit<T, K extends keyof any> = T extends any ? Omit<T, K> : nev
 
 import type { DialValues } from './register/types';
 import type { SkinKey } from './shell/skins/types';
+// DELIBERATE EXCEPTION to every other method on this class (see `turn()`/`evalCard()`'s own
+// comments: they take primitives specifically so this file has NO dependency on `src/eval`).
+// `snapshot()` is the one place that trade is worth breaking: it is the export/report seam, and
+// the task-8 brief orders it to ship `attempts`/`ledger`/`scorecard` alongside the raw events —
+// computed by the SAME derivation every other consumer uses (deriveAttempts -> armAggregate /
+// capabilityLedger -> scorecard), not re-implemented here. Safe against import cycles: every
+// `src/eval/*` module this file now imports takes `TelemetryEvent`/`Arm` only as `import type`
+// (erased at compile time), so there is no runtime cycle back into this module — confirmed by
+// grep across src/eval, src/register, src/shell/skins before adding these.
+import { deriveAttempts } from './eval/deriveAttempts';
+import { capabilityLedger } from './eval/capabilityLedger';
+import { armAggregate } from './eval/armAggregate';
+import { scorecard, guidedControlFromSitting } from './eval/scorecard';
+import type { CardResult } from './eval/deck';
 
 export type FormFactor = 'mobile' | 'tablet' | 'desktop';
 export type InputModality = 'voice' | 'typed' | 'direct';
@@ -392,7 +406,27 @@ class Telemetry {
    *  `runs` is the bridge: it says how many `session_start` boundaries `events` contains, so nobody
    *  has to guess whether `metrics` covers all of it. */
   snapshot() {
-    return { config: this.config, metrics: this.metrics(), runs: this.runCount(), events: this.eventsSnapshot() };
+    const events = this.eventsSnapshot();
+    // Same derivation every other consumer of this stream uses — deriveAttempts is the ONE place
+    // an `Attempt` is ever produced from `TelemetryEvent[]` (see its own file header).
+    const attempts = deriveAttempts(events);
+    const ledger = capabilityLedger(events, attempts);
+    const arm = this.config?.arm;
+    let scorecardModel = null;
+    if (arm) {
+      const agg = armAggregate(attempts);
+      const control = guidedControlFromSitting(attempts, arm.register);
+      // Reconstructed from the SAME `eval_card` events the export itself carries (telemetry holds
+      // no DeckState of its own — the deck's React state is deliberately unjournaled, deck.ts's
+      // own header). A result recorded while the recorder was off (EvalDeck.tsx's `unrecorded`)
+      // is, honestly, not in this stream either — this is exactly what the exported JSON has, not
+      // a richer reconstruction only the live App's own DeckState could supply.
+      const deck: CardResult[] = events
+        .filter((e): e is Extract<TelemetryEvent, { type: 'eval_card' }> => e.type === 'eval_card')
+        .map((e) => ({ cardId: e.cardId, grade: e.grade, graded: e.graded, at: e.t }));
+      scorecardModel = scorecard(agg, ledger, deck, arm, { events, control, backend: this.config?.backend });
+    }
+    return { config: this.config, metrics: this.metrics(), runs: this.runCount(), events, attempts, ledger, scorecard: scorecardModel };
   }
 
   /** Download the session as JSON for offline analysis / A/B aggregation. */

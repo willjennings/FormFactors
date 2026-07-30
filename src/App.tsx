@@ -148,7 +148,10 @@ import { startMission, advanceMission } from './missions/runStore';
 import { loadRuns, saveRuns } from './missions/persistence';
 import type { MissionRun, MissionObservables } from './missions/types';
 import { EvalDeck } from './eval/EvalDeck';
-import { EVAL_DECK, deckReduce, initialDeckState, isDeckComplete, deckTally, type DeckEvent, type ObservedGrade } from './eval/deck';
+import { EVAL_DECK, deckReduce, initialDeckState, isDeckComplete, type DeckEvent, type ObservedGrade } from './eval/deck';
+import { armAggregate } from './eval/armAggregate';
+import { scorecard, guidedControlFromSitting, type ScorecardModel } from './eval/scorecard';
+import { Scorecard } from './eval/ScorecardView';
 import { bootJournal, resetBootMemo } from './journal/boot';
 import { appendEntry, compact, type JournalEntry } from './journal/journal';
 import {
@@ -1487,6 +1490,10 @@ export default function App() {
   // record is the `eval_card` telemetry event, emitted below from what the reducer actually did.
   const [evalDeckOpen, setEvalDeckOpen] = useState(false);
   const [evalDeck, evalDeckDispatchRaw] = useReducer(deckReduce, undefined, initialDeckState);
+  // TASK 8: the deck-completion scorecard (spec §4b — "the human face of ArmAggregate, computed
+  // by the same derivation, no parallel math"). Set once, at completion, by advanceEvalCard below;
+  // cleared on close. Session-scoped like `evalDeck` itself — not journaled.
+  const [scorecardModel, setScorecardModel] = useState<ScorecardModel | null>(null);
   // Written SYNCHRONOUSLY by the wrapper below — the deskRef contract, for the same reason: the
   // observe effect is a stale-closure context (it reacts to telemetry growth, not to a render), so
   // it must read the ref. There is DELIBERATELY no `useEffect(() => { evalDeckRef.current = evalDeck })`
@@ -4936,21 +4943,35 @@ export default function App() {
     const s = evalDeckRef.current;
     dealEvalCard(EVAL_DECK[s.index]?.id ?? null);
     if (!isDeckComplete(s)) return;
-    const t = deckTally(s);
-    // TASK 8 SEAM: the scorecard proper is a pure renderer over ArmAggregate + ledger rows (spec
-    // §4b's "human face of ArmAggregate, computed by the same derivation, no parallel math"). Until
-    // it lands, completion renders the one thing the DECK itself knows without doing any derivation
-    // of its own: counts of what was recorded. Counts only, each its own n, observed and self
-    // reported separately — no rates, because a rate computed here would be exactly the parallel
-    // math §4b forbids.
-    const line = `Eval deck — ${t.total} of ${EVAL_DECK.length} recorded · ${t.done} worked · ${t.failed} didn't · ${t.skipped} skipped · ${t.observed} observed, ${t.self} your call`;
-    addLog('event', line);
-    emitFeedback({ outcome: 'committed', verbClass: 'create', label: 'Eval deck — complete' });
-    railDispatchRef.current?.({ type: 'rail.set', rail: {
-      seq: `eval-deck-${s.startedAt}`,
-      cards: [{ t: 'answer', text: line, band: 'solid', state: 'done' }],
-      activeIndex: null, startedAt: Date.now(),
-    } });
+    // TASK 8 SEAM, LANDED: the scorecard — one card, computed by the SAME derivation everything
+    // else in src/eval/ uses (spec §4b: "the human face of ArmAggregate ... no parallel math").
+    // `s.results` (the deck's own live CardResult[]) is passed directly rather than reconstructed
+    // from telemetry's `eval_card` events (which is what `telemetry.snapshot()`'s own scorecard
+    // does): a result recorded while the recorder was off (`evalUnrecorded`) exists here and
+    // nowhere in the event stream, and reconstructing from events alone would silently drop
+    // exactly the gap `unrecorded` exists to name.
+    const snap = telemetry.snapshot();
+    const arm = snap.config?.arm;
+    if (arm) {
+      const agg = armAggregate(snap.attempts);
+      const control = guidedControlFromSitting(snap.attempts, arm.register);
+      const model = scorecard(agg, snap.ledger, s.results, arm, {
+        events: snap.events, control, backend: snap.config?.backend, unrecorded: evalUnrecorded,
+      });
+      setScorecardModel(model);
+      addLog('event', `Eval deck — ${model.headline}`);
+      emitFeedback({ outcome: 'committed', verbClass: 'create', label: 'Eval deck — complete' });
+      railDispatchRef.current?.({ type: 'rail.set', rail: {
+        seq: `eval-deck-${s.startedAt}`,
+        cards: [{ t: 'answer', text: `${model.headline} — ${model.comparison}`, band: 'solid', state: 'done' }],
+        activeIndex: null, startedAt: Date.now(),
+      } });
+    } else {
+      // No session ever started (unreachable in practice — EvalDeck disables Start until
+      // `recording`, spec §4b's own I7 fix — but the deck's own reducer is otherwise unaware of
+      // recording state, so this is a defensive, honest fallback rather than a crash).
+      addLog('event', 'Eval deck — complete (no session recorded, nothing to score)');
+    }
   };
   const skipEvalCard = () => {
     const card = EVAL_DECK[evalDeckRef.current.index];
@@ -5275,6 +5296,18 @@ export default function App() {
                     unrecorded={evalUnrecorded} onStart={startEvalDeck}
                     onSelfGrade={selfGradeEvalCard} onSkip={skipEvalCard} onAdvance={advanceEvalCard}
                     onClose={() => setEvalDeckOpen(false)} />
+          {/* TASK 8: the scorecard — set once, at deck completion (advanceEvalCard above), cleared
+              on close. `Scorecard.tsx` is a thin map over the model; no computation happens here. */}
+          {scorecardModel && (
+            <div className="absolute top-10 right-[21.5rem] z-40 w-80 max-h-[80vh] overflow-y-auto pointer-events-auto"
+                 role="dialog" aria-label="Scorecard" data-shell>
+              <div className="flex items-center justify-end mb-1">
+                <button aria-label="Close scorecard" onClick={() => setScorecardModel(null)}
+                        className="hit-24 text-[var(--text-secondary)] hover:text-[var(--text-primary)] bg-[var(--card-bg)] rounded-full border border-[var(--card-border)]"><X size={12} /></button>
+              </div>
+              <Scorecard model={scorecardModel} />
+            </div>
+          )}
           {/* Highlight category legend — explains the colour ↔ category mapping while debug markings are on */}
           {dials.markings && (
             <div className="absolute top-3 right-3 z-50 pointer-events-none rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)]/90 backdrop-blur px-3 py-2 shadow-md">
