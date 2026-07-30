@@ -56,10 +56,14 @@ export interface EvalCard {
    *  in the file header), except where a card explicitly needs the PRIOR stream to know what it is
    *  asking for a variation OF — see `either-input`, which is documented at its own predicate. */
   observe: (events: TelemetryEvent[], baseline: number) => ObservedGrade | null;
-  /** May the human record a verdict when `observe` came back null? False for the cards whose
-   *  gesture the app records unconditionally (pin, combine, undo): there, a null observation means
-   *  the gesture did not happen, so a self-grade would be inventing a result rather than supplying
-   *  one the instruments could not see. */
+  /** May the human record a verdict when `observe` came back null? False only where the predicate is
+   *  TOTAL — pin and undo, whose events the app emits on every attempt (a pin records its refusal; an
+   *  applied undo always records a correction). There a null observation means the gesture did not
+   *  happen, so a self-grade would be inventing a result rather than supplying one the instruments
+   *  could not see. Everywhere the predicate can go quiet on a real attempt — including card 11,
+   *  where a spoken-only answer to a combine emits nothing (D3, round 2) — the fallback is offered.
+   *  The test suite pins the exact membership of this set, because the claim "not self-gradable"
+   *  asserts something about the INSTRUMENTS, and it has twice outlived the predicate it described. */
   selfGradable: boolean;
 }
 
@@ -217,12 +221,22 @@ export const EVAL_DECK: EvalCard[] = [
     id: 'point-by-number',
     dimension: 'pointing',
     // C2 (fix round 1): the copy has to say WHAT is numbered. Nothing on the surface draws a number
-    // badge, and the ordinals index the program's own control list — so "number two" is the second
-    // control on the ribbon (in Excel: the SUM button). A participant cannot infer that, so the card
-    // says it. It also says "out loud or typed" because the keyboard route is genuinely unavailable:
-    // digits 1-9 are claimed by the quick-fire chips before the ordinal listener sees them
-    // (shell/quickFire.ts `digitSelectsTarget`), so only the spoken/typed phrasing reaches this path.
-    instruction: 'Without pointing at anything, say or type "the second one" — the second control on the ribbon. Then tell it to use that.',
+    // badge, and the ordinals index the program's own element list — whose FIRST item is the program
+    // chrome itself (Excel: [Excel Ribbon, SUM function, AVERAGE function, Spreadsheet grid]), so
+    // "the second one" resolves to SUM. D2 (round 2): the gloss used to call that "the second control
+    // on the ribbon", which is wrong by one — SUM is the first control; item 1 is the ribbon. A
+    // participant counting controls would expect AVERAGE and watch SUM light up. The copy now names
+    // the counting rule instead of a position, so it cannot be off by one again.
+    //
+    // D1 (round 2, comment-only — the grading was never wrong): this used to claim the keyboard route
+    // was "genuinely unavailable" because the quick-fire chips claim digits 1-9. PROBED FALSE. A chip
+    // claims a digit only when a chip OCCUPIES that index (shell/quickFire.ts `quickFireIndex` returns
+    // null for `i >= chipCount`), so a digit press reaches `selectTargetByNumber` with the 'ordinal'
+    // origin whenever the row is short or empty — the row is empty under Terminal (`chipDensity:
+    // 'none'`) and under 'grounded' before anything is grounded. So the keyboard IS a real third route
+    // here, and it grades: a digit press is pointer-free deixis, which is exactly what this card is
+    // about. Unavailable only WHILE a quick-fire chip claims that digit.
+    instruction: 'Without pointing at anything, say or type "the second one" — the app counts from the ribbon itself. Then tell it to use that.',
     utteranceKey: 'point-by-number',
     // Keyword 'number' is now ONLY the ordinal-by-words path: App's selectTargetByNumber records
     // 'click' when the same function is reached by clicking an element (fix round 1, I2 — before
@@ -267,7 +281,11 @@ export const EVAL_DECK: EvalCard[] = [
     // certain, which measures nothing. Re-pointed at an ask the product actually gates: an
     // authorial field with no content is exactly what opens a real `unspecified_ask`, so both
     // verdicts are now reachable. "Make it pop" survives in ./utterances.ts as a battery-only probe.
-    instruction: 'Ask it to add a heading to the document — without saying what the heading should say. A question back about the wording is the right answer.',
+    // "Back in the document" because card 4 sends the participant to the slide deck and this card's
+    // utterance is filed under Word (./utterances.ts). The old copy said "the document" while they
+    // were standing in PowerPoint — it graded either way (slideTitle is an askable field too), but it
+    // named the wrong place, and this card is also the participant's script.
+    instruction: 'Back in the document, ask it to add a heading — without saying what the heading should say. A question back about the wording is the right answer.',
     utteranceKey: 'ask-add-a-heading',
     // PRE-REGISTERED grading rule, stated before any run: a question is right, a refusal is honest,
     // and inventing the heading is a guess. NOTE on reachability of null: `unspecified_ask` is
@@ -408,7 +426,14 @@ export const EVAL_DECK: EvalCard[] = [
       if (!a || a.type !== 'artifact_created') return null;
       return a.error ? 'failed' : 'done';
     },
-    selfGradable: false,
+    // D3 (round 2): SELF-GRADABLE, unlike the other two material/gesture cards. It was false while the
+    // predicate keyed on `combine_tray`, which fires on every tray fire and so was TOTAL — a null
+    // meant the participant had not done it, and a self-grade would have invented a result. Keying on
+    // `artifact_created` (I5) made the predicate partial: a model that answers the combine request in
+    // SPEECH emits nothing here, so the card sits null forever with Skip as the only exit — the exact
+    // instrument gap the two-tap fallback exists for, and the same unbacked claim this round repaired
+    // on card 8. A participant can see perfectly well whether a brief appeared on the desk.
+    selfGradable: true,
   },
   {
     id: 'either-input',

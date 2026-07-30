@@ -123,21 +123,18 @@ describe('EVAL_DECK shape (design spec §4b)', () => {
   it('the honesty-refusal card says a refusal is the system working (spec §4b)', () => {
     expect(card('honest-refusal').instruction).toMatch(/refusal here is the system working/);
   });
-  it('the own-words robustness card carries no utteranceKey; the gesture cards are not self-gradable', () => {
+  it('the own-words robustness card carries no utteranceKey; only the TOTAL-predicate cards refuse a self-grade', () => {
     expect(card('robust-own-words').utteranceKey).toBeNull();
     // Exactly two cards have no battery utterance, and the EvalCard doc comment says which two.
     expect(EVAL_DECK.filter((c) => c.utteranceKey === null).map((c) => c.id))
       .toEqual(['robust-own-words', 'robust-undo']);
-    for (const id of ['robust-undo', 'material-pin', 'material-combine']) {
-      expect(card(id).selfGradable).toBe(false);
-    }
-    // Everything the instruments cannot fully see IS self-gradable — otherwise a null observation
-    // would leave the participant with only "skip".
-    for (const c of EVAL_DECK) {
-      if (!['robust-undo', 'material-pin', 'material-combine'].includes(c.id)) {
-        expect(c.selfGradable).toBe(true);
-      }
-    }
+    // Membership is pinned as a whole SET, not card by card: "not self-gradable" is a claim about the
+    // instruments, and it has now twice outlived the predicate it was written for (card 8's comment in
+    // round 1, card 11's flag in round 2). A predicate that stops being total must show up here.
+    expect(EVAL_DECK.filter((c) => !c.selfGradable).map((c) => c.id)).toEqual(['robust-undo', 'material-pin']);
+    // D3 (round 2): card 11 IS self-gradable — `artifact_created` never arrives when a model answers
+    // the combine in speech, so without the fallback the card's only exit would be Skip.
+    expect(card('material-combine').selfGradable).toBe(true);
   });
 });
 
