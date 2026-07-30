@@ -38,6 +38,12 @@ type DrawerProps = {
   onEndSession: () => void; onReset: () => void; onNewDesk: () => void; isLive: boolean;
   logs: { time: string; type: string; message: string }[];
   isEmbedded: boolean;
+  /** M5 (fix round 2, reviewer-ruled): how many eval-deck results were recorded while the recorder
+   *  was off (App.tsx's `evalUnrecorded`) — threaded through so `ScorecardMini`'s Watch bucket can
+   *  carry the same partial-recording marker the completion card's scorecard does. Telemetry itself
+   *  can never know this count (a result recorded off-recorder is, by definition, invisible to it);
+   *  this is the one prop's worth of plumbing that gets it there anyway. */
+  evalUnrecorded: number;
 };
 
 export function DebugDrawer(props: DrawerProps) {
@@ -65,8 +71,24 @@ export function DebugDrawer(props: DrawerProps) {
   // second whether or not anything changed is needless work; `telemetry.eventCount()` is a cheap
   // read that only actually changes when new events land, so memoising on it turns "every second"
   // into "only when the sitting actually grew".
+  //
+  // N15 (fix round 2, reviewer-ruled): `eventCount()` alone has one narrow stale window —
+  // `telemetry.reset()` zeroes the count, and a subsequent `start()` pushes it back to 1; if the
+  // drawer never rendered in between (reset and start can both happen inside one handler, with no
+  // render between them), the dependency array reads 1 -> 1 across the reset and the memo skips
+  // recomputing, so the mini would still show the PREVIOUS sitting's model. Pairing `runCount()`
+  // (also zeroed by `reset()`, also bumped by `start()`) narrows the window rather than closing it
+  // outright — both would still have to coincidentally match their pre-reset values for the memo
+  // to skip a genuinely new sitting, which needs the same event count AND the same prior-run count
+  // on both sides of the reset. That residual case is not pinned; it was judged rare enough that
+  // the alternative (`tick` as a dependency) — which would recompute the whole chain every second
+  // again, undoing the reason this memo exists — was not worth it for a debug-only readout.
   const eventCount = telemetry.eventCount();
-  const scorecardModel = useMemo(() => telemetry.snapshot().scorecard, [eventCount]);
+  const runCount = telemetry.runCount();
+  const scorecardModel = useMemo(
+    () => telemetry.snapshot({ unrecorded: props.evalUnrecorded }).scorecard,
+    [eventCount, runCount, props.evalUnrecorded],
+  );
 
   return (
     <div className="flex flex-col gap-4">
@@ -168,15 +190,18 @@ export function DebugDrawer(props: DrawerProps) {
 
       {/* 6b. Scorecard — live compact version (design spec §4b's own closing line: "the drawer's
           eval panel becomes a live miniature of it rather than a separate design").
-          M5 (fix round 1, disclosed, NOT fixed this round): this mini and the completion card
-          (App.tsx's showEvalScorecard) read the deck from two different sources — this one from
-          `telemetry.snapshot()`'s reconstruction off `eval_card` EVENTS (no `unrecorded`, since
-          telemetry has no access to that UI-only counter), the completion card from the deck's
-          live `DeckState.results` PLUS `unrecorded`. Both still call the same `scorecard()`, so no
-          math forks — but the drawer's Watch can omit the partial-recording marker exactly when it
-          applies. Unifying them would mean threading `evalUnrecorded` (App-local React state) into
-          the telemetry singleton, which is out of scope for this fix round; left as a known,
-          disclosed gap rather than silently accepted. */}
+          M5 (fix round 1, disclosed; fix round 2, reviewer-ruled the justification was wrong and
+          the marker fixable — REWORDED + the marker fixed, the results gap genuinely left open):
+          this mini and the completion card (App.tsx's `showEvalScorecard`) still read the DECK
+          from two different sources — this one from `telemetry.snapshot()`'s reconstruction off
+          `eval_card` EVENTS, the completion card from the live `DeckState.results`. THAT part is
+          structural: a result recorded while the recorder was off exists in no event, so this
+          mini's deck (and its `deckSummary`/dimension lines) cannot include it — no prop threads
+          around an event that was never written. The `unrecorded` COUNT itself is different: it is
+          plain App-local state (`evalUnrecorded`), one prop away, and is now passed through
+          (`evalUnrecorded` above) so this Watch bucket carries the same partial-recording marker
+          the completion card's does. Both still call the same `scorecard()`, so no math forks
+          either way. */}
       {scorecardModel && (
         <div className="w-full px-4 py-3 rounded-2xl border bg-[var(--inner-box-bg)] border-[var(--card-border)]">
           <ScorecardMini model={scorecardModel} />

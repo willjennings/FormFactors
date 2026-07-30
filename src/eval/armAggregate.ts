@@ -40,7 +40,10 @@
 //
 // completion/corrected/wrong/refusal/ask/abandoned/ungradeable are mutually exclusive by
 // construction — every `Attempt` has exactly one `outcome` — so all seven numerators now partition
-// `n` exactly (their seven `value`s sum to 1 for any non-empty `attempts`, modulo floating point).
+// `n` exactly (their seven `value`s sum to 1 for any non-empty `attempts`, modulo floating point;
+// their seven `count`s, added M2 fix round 1, sum to `n` EXACTLY — integers, no floating point
+// involved at all, which is the whole reason `count` exists rather than reconstructing it from
+// `value` — see the field's own doc comment below).
 
 import type { Attempt } from './types';
 

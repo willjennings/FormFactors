@@ -58,7 +58,8 @@
 // grow. `examples` within a row follow the same discipline: pushed only while `< 5`, in encounter
 // order, never re-ordered or replaced by a "better" example later.
 
-import type { TelemetryEvent } from '../telemetry';
+import type { Arm, TelemetryEvent } from '../telemetry';
+import { sameArm } from './types';
 import type { Attempt } from './types';
 
 export interface LedgerRow {
@@ -81,7 +82,14 @@ function bump(rows: Map<string, LedgerRow>, kind: LedgerRow['kind'], key: string
   if (row.examples.length < EXAMPLE_CAP) row.examples.push(example);
 }
 
-export function capabilityLedger(events: TelemetryEvent[], attempts: Attempt[]): LedgerRow[] {
+// N1 (fix round 2, reviewer-ruled): `arm`, optional and additive — when supplied, pass 2 (the
+// signal-derived rows: deixis-miss/grounding-disagree) only bumps a row while the session it is
+// reading currently belongs to THAT arm. Before this, a caller scoping `attempts` to one arm (via
+// scorecard.ts's `attemptsForArm`) still got a whole-sitting ledger back, because pass 2 reads raw
+// `events` directly and never consulted `attempts` at all — the arm-scoping fix landed on `agg`
+// only, and the ledger stayed whole-sitting underneath it. Omitted (existing callers, tests):
+// unscoped, exactly the prior behaviour — nobody who was not asking for scoping loses anything.
+export function capabilityLedger(events: TelemetryEvent[], attempts: Attempt[], arm?: Arm): LedgerRow[] {
   const rows = new Map<string, LedgerRow>();
 
   // Pass 1: attempt-derived rows. `attempts` already knows each attempt's `program`/`verb`/
@@ -115,16 +123,19 @@ export function capabilityLedger(events: TelemetryEvent[], attempts: Attempt[]):
 
   // Pass 2: raw-event rows. `deixis`/`grounding` are graded per-signal and never reach `Attempt` —
   // there is no field on `Attempt` for "the referent resolved wrong" or "the app and model
-  // disagreed about the referent". Track the active program the same way deriveAttempts does (the
-  // most recent `session_start`), since these events carry no program of their own.
+  // disagreed about the referent". Track the active program AND arm the same way deriveAttempts
+  // tracks program (off the most recent `session_start`), since these events carry neither of
+  // their own.
   let program: string = 'unknown';
+  let currentArm: Arm | undefined;
   for (const ev of events) {
     if (ev.type === 'session_start') {
       program = ev.config.program;
+      currentArm = ev.config.arm;
     } else if (ev.type === 'deixis') {
       // `correct === null` is UNGRADED (no ground truth for this keyword), never wrong — must
       // never produce a row (binding, per the task-4 brief).
-      if (ev.correct === false) {
+      if (ev.correct === false && (!arm || sameArm(currentArm, arm))) {
         // No verbatim user utterance is exported alongside deixis grading (the event carries only
         // `keyword`/`resolved`/`target`/`confidence`/`modality`) — `keyword` is the closest
         // truthful substitute for "the phrase that failed", so the example text says what actually
@@ -135,7 +146,7 @@ export function capabilityLedger(events: TelemetryEvent[], attempts: Attempt[]):
     } else if (ev.type === 'grounding') {
       // Same rule as deixis: `agree === null` means ungraded (no resolvable app referent to check
       // against), not disagreement.
-      if (ev.agree === false) {
+      if (ev.agree === false && (!arm || sameArm(currentArm, arm))) {
         bump(rows, 'grounding-disagree', `${ev.appReferent ?? 'unknown'}/${program}`,
           `app said "${ev.appReferent ?? '?'}", model said "${ev.modelTarget ?? '?'}"`);
       }

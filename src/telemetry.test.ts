@@ -402,3 +402,41 @@ describe('reversesAgent — which undo counts as reversing the AGENT (the anti-f
     expect(corrections).toMatchObject([{ overAgent: true }, { overAgent: false }]);
   });
 });
+
+// ==========================================================================================
+// N16 (fix round 2, reviewer-ruled): neither production call site of the C1/N1 fixes was pinned
+// end-to-end through the REAL singleton — this drives `telemetry.start()` twice (a register
+// switch, the exact shape Task 6 ships) and asserts on `snapshot().scorecard` directly, which is
+// exactly the test that would have caught the reviewer's `(3/1)`-fraction / cross-arm-latency bugs
+// (N1/N5) had it existed before them.
+// ==========================================================================================
+describe('N16 — snapshot().scorecard is arm-scoped end-to-end across a real register switch', () => {
+  const dials = { honest: false, autonomy: 'confirm' as const, feedback: 'earcon' as const, confirmGoals: false, markings: false, chipDensity: 'full' as const, traceView: 'hidden' as const, teaching: 'off' as const, proactivity: 'never' as const };
+  const device = { width: 1280, height: 800, touch: false, pointer: 'fine', formFactor: 'desktop' as const, ua: 'test' };
+
+  it('Guided abandons three speech-only turns, then a register switch to Terminal/Material completes one attempt — the scorecard is Terminal\'s alone', () => {
+    telemetry.reset();
+    telemetry.start({ backend: 'gemini', autonomy: 'auto-safe', feedback: 'earcon', program: 'word', honest: false, device,
+      arm: { register: 'guided', dials, shell: 'familiar' } });
+    telemetry.turn('g1', 'voice', 'make this pop', 'speech_only', 300, null);
+    telemetry.turn('g2', 'voice', 'make this pop', 'speech_only', 310, null);
+    telemetry.turn('g3', 'voice', 'make this pop', 'speech_only', 320, null);
+
+    telemetry.start({ backend: 'gemini', autonomy: 'auto-safe', feedback: 'earcon', program: 'word', honest: false, device,
+      arm: { register: 'terminal', dials, shell: 'material' } });
+    telemetry.turn('t1', 'typed', 'sum this column', 'tool_call', 90, 900);
+    telemetry.action('column_total', 'mutate', 'commit');
+
+    const model = telemetry.snapshot().scorecard;
+    expect(model).not.toBeNull();
+    // Headline names Terminal's own 1 trial, not the sitting's 4.
+    expect(model!.headline).toBe('Terminal · Material · Gemini · 1 trial');
+    // N1: Guided's no-op-turn ledger row ("make this pop" x3) must not appear on Terminal's card at
+    // all — not as a `(3/1)` fraction, not at any denominator. It belongs to a different arm.
+    expect(model!.watch.some((l) => l.includes('make this pop'))).toBe(false);
+    // N5: latency/cost must be Terminal's own session, not Guided's (whose 3 speech-only turns are
+    // `abandoned`, never timed anyway, but whose SESSION must not be counted either).
+    expect(model!.latency.sessionCount).toBe(1);
+    expect(model!.cost.sessionCount).toBe(1);
+  });
+});

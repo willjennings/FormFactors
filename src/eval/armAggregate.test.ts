@@ -176,6 +176,29 @@ describe('ungradeable — visible as its own rate, not an inferred remainder', (
       + agg.ask.value + agg.abandoned.value + agg.ungradeable.value;
     expect(sum).toBeCloseTo(1, 10);
   });
+
+  // N9 (fix round 2, reviewer-ruled): the `value`-sums-to-1 test above pins the FLOAT partition;
+  // nothing pinned the INTEGER one `Rate.count` exists to make exact (M2, fix round 1) — a
+  // regression that made `count` drift from `value * n` (e.g. a copy-paste that filled `count`
+  // from the wrong outcome) would not fail anything without this.
+  it("all seven rates' counts sum to n EXACTLY — integers, no floating-point tolerance needed", () => {
+    const attempts = [
+      outcomeAttempt('completed'),
+      outcomeAttempt('completed'),
+      outcomeAttempt('corrected'),
+      outcomeAttempt('wrong'),
+      outcomeAttempt('refused-honestly'),
+      outcomeAttempt('asked-and-answered'),
+      outcomeAttempt('asked-and-dropped'),
+      outcomeAttempt('abandoned'),
+      outcomeAttempt('ungradeable', { ungradeableReason: 'ambiguous-boundary' }),
+    ];
+    const agg = armAggregate(attempts);
+    const countSum = agg.completion.count + agg.corrected.count + agg.wrong.count + agg.refusal.count
+      + agg.ask.count + agg.abandoned.count + agg.ungradeable.count;
+    expect(countSum).toBe(agg.n);
+    expect(countSum).toBe(9);
+  });
 });
 
 // ==========================================================================================

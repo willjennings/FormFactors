@@ -89,7 +89,14 @@ export type DeckEvent =
   | { type: 'observe'; cardId: string; grade: ObservedGrade; at: number }
   | { type: 'selfGrade'; cardId: string; grade: ObservedGrade; at: number }
   | { type: 'skip'; cardId: string; at: number }
-  | { type: 'advance' };
+  | { type: 'advance' }
+  // N3 (fix round 2, reviewer-ruled): before this event existed, closing the deck mid-run changed
+  // NO reducer state — the observe effect (App.tsx, gated on `startedAt`/`index`, not on whether
+  // the panel is open) kept grading the card on screen from whatever the participant said next,
+  // `evalDeckDispatch` kept emitting `eval_card` telemetry for it, and reopening the panel resumed
+  // a "closed" run mid-card. `abandon` is App.tsx's `closeEvalDeck` making that stop be a real,
+  // recorded transition rather than a UI-only summary drawn over a run that kept going underneath.
+  | { type: 'abandon'; at: number };
 
 export function initialDeckState(): DeckState {
   return { index: 0, results: [], startedAt: null };
@@ -513,6 +520,17 @@ export function deckReduce(s: DeckState, e: DeckEvent): DeckState {
     case 'advance':
       if (s.startedAt === null) return s;
       return { ...s, index: Math.min(s.index + 1, EVAL_DECK.length) };
+
+    case 'abandon':
+      // N3 (fix round 2, reviewer-ruled): actually STOPS the run, rather than only announcing a
+      // summary over one that keeps going. Idempotent-by-value like 'start': a deck never started
+      // has nothing to abandon; a deck already at the end is unaffected (advancing past the last
+      // card already does this). Jumping `index` to `EVAL_DECK.length` mirrors what 'advance' does
+      // at the natural finish — `currentCard` returns null, so App's observe effect's own `if
+      // (!card) return` guard stops grading, and `isDeckComplete` becomes true, so reopening the
+      // panel shows the (already-summarised) complete state instead of resuming a live card.
+      // `results` are untouched: nothing already recorded is discarded by abandoning.
+      return s.startedAt === null ? s : { ...s, index: EVAL_DECK.length };
   }
 }
 
@@ -532,12 +550,25 @@ export const isDeckComplete = (s: DeckState): boolean =>
  *  finished goes through the completion path (App.tsx's `advanceEvalCard`) instead of this one, so
  *  this predicate is true for exactly the "closed mid-run" case. Pure and exported so the abandon
  *  DECISION is testable on its own, without driving telemetry, React, or a browser (spec's own
- *  preference for pinning at the layer the decision actually lives). */
+ *  preference for pinning at the layer the decision actually lives).
+ *
+ *  N14 (fix round 2, disclosed judgment call): TRUE even for a deck started and closed with ZERO
+ *  results (Start, then immediately Esc) — `s.results.length` plays no part in this predicate.
+ *  Considered and decided, not an oversight: a participant who started the protocol and quit
+ *  before recording anything is itself a real, if minimal, data point (spec §5.6's "abandonment is
+ *  data, not absence" doesn't carve out an exception for "not much data"), and the resulting card
+ *  is honest about it (`deckSummary`: "no eval-deck cards played this session"). The alternative —
+ *  suppressing the summary below some results threshold — would be an unstated threshold exactly
+ *  like the ones §5 exists to force into the open; nobody has proposed one, so none is invented
+ *  here. */
 export const isAbandoned = (s: DeckState): boolean => s.startedAt !== null && !isDeckComplete(s);
 
-/** Counts for the completion line and the Task 8 scorecard seam. Every number carries its own n by
- *  construction (they are counts, not rates) — the eval spec's §5 rule, which is why this returns
- *  no percentages at all. `observed`/`self` are reported separately for the same reason. */
+/** Counts for the completion line and the Task 8 scorecard seam — used by BOTH `deckTally` (a real
+ *  `DeckState`, e.g. `EvalDeck.tsx`'s own live panel) and `deckTallyOf` (fix round 1, M7: a bare
+ *  `CardResult[]`, for callers like `scorecard.ts` that never had a `DeckState` to begin with and
+ *  used to fake one). Every number carries its own n by construction (they are counts, not rates)
+ *  — the eval spec's §5 rule, which is why this returns no percentages at all. `observed`/`self`
+ *  are reported separately for the same reason. */
 function tallyOf(results: CardResult[]): {
   total: number; done: number; failed: number; skipped: number; observed: number; self: number;
 } {
@@ -550,6 +581,8 @@ function tallyOf(results: CardResult[]): {
   };
 }
 
+/** The `DeckState`-shaped entry point — `EvalDeck.tsx`'s live "Deck complete." panel reads a real
+ *  reducer state, so it calls this. */
 export function deckTally(s: DeckState) {
   return tallyOf(s.results);
 }
@@ -557,8 +590,10 @@ export function deckTally(s: DeckState) {
 /** Same tally, for callers that only ever have a `CardResult[]` and no real `DeckState` (fix round
  *  1, M7). scorecard.ts used to synthesise a fake `DeckState` (`{ index: 0, results: deck,
  *  startedAt: deck.length ? 0 : null }`) purely to satisfy `deckTally`'s signature — harmless while
- *  `deckTally` reads only `results`, silently wrong the day it reads `index`/`startedAt` too. This
- *  overload removes the fiction: it takes the results it actually has. */
+ *  `deckTally` reads only `results`, silently wrong the day it reads `index`/`startedAt` too. N12
+ *  (fix round 2, corrected): this is a separate exported function, not a TypeScript overload of
+ *  `deckTally` (no shared name, no dispatch on argument shape) — it just takes the results it
+ *  actually has, via the same private `tallyOf`. */
 export function deckTallyOf(results: CardResult[]) {
   return tallyOf(results);
 }

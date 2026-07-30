@@ -526,6 +526,45 @@ describe('deckReduce', () => {
     expect(currentCard(initialDeckState())).toBeNull();
     expect(isDeckComplete(initialDeckState())).toBe(false);
   });
+
+  // N3 (fix round 2, reviewer-ruled): before the 'abandon' event existed, closing the deck changed
+  // no reducer state, so the observe effect (App.tsx) kept grading the card on screen from
+  // whatever the participant said next. These pin what 'abandon' actually does: mirrors 'advance'
+  // at the natural finish (index -> EVAL_DECK.length), so `currentCard` goes null and
+  // `isDeckComplete` flips true — the two levers App's observe effect and `isAbandoned` both read.
+  describe("'abandon' — actually stops the run (N3)", () => {
+    it('a started, in-progress deck: index jumps to the end, results are untouched, currentCard goes null', () => {
+      let s = started();
+      s = deckReduce(s, { type: 'observe', cardId: 'point-what-is-this', grade: 'done', at: 1 });
+      expect(s.index).toBe(0);
+      s = deckReduce(s, { type: 'abandon', at: 2 });
+      expect(s.index).toBe(EVAL_DECK.length);
+      expect(s.results).toHaveLength(1);        // nothing recorded is discarded by abandoning
+      expect(currentCard(s)).toBeNull();          // the observe effect's own `if (!card) return` guard now fires
+      expect(isDeckComplete(s)).toBe(true);
+      expect(isAbandoned(s)).toBe(false);         // no longer "in progress" — it just stopped
+    });
+    it('a deck never started: abandon is a no-op, same discipline as every other event', () => {
+      const s = deckReduce(initialDeckState(), { type: 'abandon', at: 1 });
+      expect(s).toEqual(initialDeckState());
+    });
+    it('an already-complete deck: abandon changes nothing further', () => {
+      let s = started();
+      for (let i = 0; i < EVAL_DECK.length; i++) s = deckReduce(s, { type: 'advance' });
+      expect(isDeckComplete(s)).toBe(true);
+      const before = s;
+      s = deckReduce(s, { type: 'abandon', at: 1 });
+      expect(s.index).toBe(before.index);
+      expect(s.results).toEqual(before.results);
+    });
+    it('reopening after abandon shows the complete state, not a resumed live card (App.tsx cannot re-grade)', () => {
+      let s = started();
+      s = deckReduce(s, { type: 'abandon', at: 1 });
+      // What App's observe effect actually branches on: `EVAL_DECK[s.index]` is undefined once
+      // abandoned, so its `if (!card) return` guard is what makes grading stop — pinned directly.
+      expect(EVAL_DECK[s.index]).toBeUndefined();
+    });
+  });
   it('results and index move independently — grading does not advance', () => {
     const s = deckReduce(started(), { type: 'observe', cardId: 'point-what-is-this', grade: 'done', at: 1100 });
     expect(s.index).toBe(0);

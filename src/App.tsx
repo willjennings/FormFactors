@@ -150,6 +150,7 @@ import type { MissionRun, MissionObservables } from './missions/types';
 import { EvalDeck } from './eval/EvalDeck';
 import { EVAL_DECK, deckReduce, initialDeckState, isDeckComplete, isAbandoned, type DeckEvent, type ObservedGrade, type CardResult } from './eval/deck';
 import { armAggregate } from './eval/armAggregate';
+import { capabilityLedger } from './eval/capabilityLedger';
 import { scorecard, guidedControlFromSitting, attemptsForArm, type ScorecardModel } from './eval/scorecard';
 import { Scorecard } from './eval/ScorecardView';
 import { bootJournal, resetBootMemo } from './journal/boot';
@@ -1491,8 +1492,10 @@ export default function App() {
   const [evalDeckOpen, setEvalDeckOpen] = useState(false);
   const [evalDeck, evalDeckDispatchRaw] = useReducer(deckReduce, undefined, initialDeckState);
   // TASK 8: the deck-completion scorecard (spec §4b — "the human face of ArmAggregate, computed
-  // by the same derivation, no parallel math"). Set once, at completion, by advanceEvalCard below;
-  // cleared on close. Session-scoped like `evalDeck` itself — not journaled.
+  // by the same derivation, no parallel math"). N10 (fix round 2, corrected — this comment was
+  // stale): set by `showEvalScorecard` below, at completion (`advanceEvalCard`) OR abandonment
+  // (`closeEvalDeck`), not completion alone; cleared by its own × AND by `toggleEvalDeck` opening
+  // the deck panel again (N4). Session-scoped like `evalDeck` itself — not journaled.
   const [scorecardModel, setScorecardModel] = useState<ScorecardModel | null>(null);
   // Written SYNCHRONOUSLY by the wrapper below — the deskRef contract, for the same reason: the
   // observe effect is a stale-closure context (it reacts to telemetry growth, not to a render), so
@@ -4948,14 +4951,18 @@ export default function App() {
   // reconstructing from events alone would silently drop exactly the gap `unrecorded` exists to
   // name.
   //
-  // I1 (fix round 1, reviewer-ruled): this also closes the deck panel. The deck panel and the
-  // scorecard overlay used to share identical Tailwind coordinates (`absolute top-10
-  // right-[21.5rem] z-40 w-80`), so the scorecard painted directly over the still-open deck
-  // panel's own Close button. The fix is structural, not a new set of coordinates: the two panels
-  // are now mutually exclusive by construction (both flip in this SAME function), so there is
-  // never a render where both are mounted to overlap in the first place — which is also a more
-  // literal reading of spec §4b's "renders ONE card-grammar summary" than two panels stacked.
-  const showEvalScorecard = (results: CardResult[], startedAt: number | null) => {
+  // I1 (fix round 1): this also closes the deck panel in the same update that opens the scorecard.
+  // N4 (fix round 2, reviewer-ruled): that only covers ONE direction — the menu-bar toggle
+  // (`toggleEvalDeck`, below) can still reopen the deck while `scorecardModel` is still set,
+  // restoring the exact overlap this was meant to close. "Mutually exclusive by construction"
+  // means BOTH toggles clear the other panel, not just this one; see `toggleEvalDeck`.
+  //
+  // N2 (fix round 2, reviewer-ruled): `abandoned` is not a display nicety — spec §5.6 ("abandonment
+  // is data, not absence") applies to how the run is ANNOUNCED, not just how the ledger's rows are
+  // classified. Before this parameter, every call here hardcoded the completion wording/earcon/rail
+  // state, so pressing Esc on card 3 of 12 produced a toast, log line and rail card reading
+  // "complete" — indistinguishable from finishing all twelve.
+  const showEvalScorecard = (results: CardResult[], startedAt: number | null, abandoned: boolean) => {
     const snap = telemetry.snapshot();
     const arm = snap.config?.arm;
     if (!arm) {
@@ -4973,18 +4980,42 @@ export default function App() {
     // aggregating, or the card silently attributes every prior arm's trials to whichever arm is
     // current when the card is drawn (reproduced by the reviewer as a Guided×2+Terminal×1 stream
     // reading `Terminal · Material · Gemini · 3 trials`).
-    const agg = armAggregate(attemptsForArm(snap.attempts, arm));
+    const scopedAttempts = attemptsForArm(snap.attempts, arm);
+    const agg = armAggregate(scopedAttempts);
     const control = guidedControlFromSitting(snap.attempts, arm.register);
-    const model = scorecard(agg, snap.ledger, results, arm, {
-      events: snap.events, control, backend: snap.config?.backend, unrecorded: evalUnrecorded,
+    // N1 (fix round 2, reviewer-ruled — the residual Critical finding): round 1 scoped `agg` and
+    // stopped — `snap.ledger` is telemetry's WHOLE-SITTING capability ledger (correctly so for the
+    // export; see telemetry.ts's own comment), and handing it here unscoped meant scorecard.ts's
+    // Watch loop divided an unscoped row count by the now-scoped `agg.n`, printing fractions like
+    // `(3/1)`. A second, arm-scoped ledger is computed here just for the card, same pattern as
+    // telemetry.ts's `snapshot()` uses for its own internal scorecard.
+    const scopedLedger = capabilityLedger(snap.events, scopedAttempts, arm);
+    const model = scorecard(agg, scopedLedger, results, arm, {
+      events: snap.events, control, backend: snap.config?.backend, unrecorded: evalUnrecorded, abandoned,
     });
     setScorecardModel(model);
     setEvalDeckOpen(false); // one card-grammar summary, not the deck panel underneath it (I1)
-    addLog('event', `Eval deck — ${model.headline}`);
-    emitFeedback({ outcome: 'committed', verbClass: 'create', label: 'Eval deck — complete' });
+    const label = abandoned ? 'Eval deck — abandoned' : 'Eval deck — complete';
+    addLog('event', `${label} — ${model.headline}`);
+    // N2: abandonment must not play the same success earcon as completion (`emitFeedbackAudio`'s
+    // 'committed'+'create' maps to the positive "create" sound, feedback/index.ts). 'undo' is the
+    // closest of the four fixed `FeedbackEvent` outcomes to "the run stopped, nothing further was
+    // recorded" — a disclosed, not-perfect choice; adding a fifth outcome to that union is out of
+    // scope for this fix.
+    emitFeedback(abandoned
+      ? { outcome: 'undo', label }
+      : { outcome: 'committed', verbClass: 'create', label });
     railDispatchRef.current?.({ type: 'rail.set', rail: {
       seq: `eval-deck-${startedAt}`,
-      cards: [{ t: 'answer', text: `${model.headline} — ${model.comparison}`, band: 'solid', state: 'done' }],
+      cards: [{
+        t: 'answer', band: 'solid',
+        text: `${label} — ${model.comparison}`,
+        // N2: 'done' reads as success in this rail's own vocabulary (railStore.ts). Of the four
+        // `CardState`s, 'failed' is the only one that isn't a WIP state and isn't 'done' — an
+        // imperfect fit (abandonment is not a failure, spec §5.6's own point), but strictly less
+        // misleading than reusing the success state, and the text above already says "abandoned".
+        state: abandoned ? 'failed' : 'done',
+      }],
       activeIndex: null, startedAt: Date.now(),
     } });
   };
@@ -4993,7 +5024,7 @@ export default function App() {
     const s = evalDeckRef.current;
     dealEvalCard(EVAL_DECK[s.index]?.id ?? null);
     if (!isDeckComplete(s)) return;
-    showEvalScorecard(s.results, s.startedAt);
+    showEvalScorecard(s.results, s.startedAt, false);
   };
   const skipEvalCard = () => {
     const card = EVAL_DECK[evalDeckRef.current.index];
@@ -5010,8 +5041,29 @@ export default function App() {
   // itself closes the panel), both just close with nothing further to render.
   const closeEvalDeck = () => {
     const s = evalDeckRef.current;
-    if (isAbandoned(s)) { showEvalScorecard(s.results, s.startedAt); return; }
+    if (isAbandoned(s)) {
+      showEvalScorecard(s.results, s.startedAt, true);
+      // N3 (fix round 2, reviewer-ruled): actually STOP the run — dispatched AFTER reading `s` and
+      // rendering the summary above (`s` is a local snapshot of the ref, unaffected by this
+      // dispatch), so the abandon transition can't lose anything the summary already captured. See
+      // deck.ts's 'abandon' case for what this changes and why that's what makes grading stop.
+      evalDeckDispatch({ type: 'abandon', at: Date.now() });
+      return;
+    }
     setEvalDeckOpen(false);
+  };
+  // N4 (fix round 2, reviewer-ruled): the OTHER direction of I1's exclusivity. `showEvalScorecard`
+  // clears the deck panel when the scorecard opens; this clears the scorecard when the deck panel
+  // opens (the menu-bar "Eval deck" toggle, MenuBar.tsx) — without it, finishing/abandoning a run
+  // then reopening the deck from the menu bar re-mounts `EvalDeck` at the scorecard's own
+  // coordinate (`absolute top-10 right-[21.5rem] z-40 w-80`) while the scorecard is still up,
+  // restoring the I1 overlap one click away from "fixed". Reads `evalDeckOpen` directly rather
+  // than a functional updater: this fires once per discrete menu-bar click, not from a rapid-fire
+  // dispatch context, so the render-scope value is exactly the one the click acted on.
+  const toggleEvalDeck = () => {
+    const opening = !evalDeckOpen;
+    if (opening) setScorecardModel(null);
+    setEvalDeckOpen(opening);
   };
 
   // Undo the most recent committed document mutation (restore the memento).
@@ -5175,7 +5227,7 @@ export default function App() {
               onRambleMode: () => { window.location.search = 'ramble=live'; },
               onSketchBoard: () => setBoardOpen((o) => !o),
               onMissions: () => setMissionOpen((v) => !v),
-              onEvalDeck: () => setEvalDeckOpen((v) => !v),
+              onEvalDeck: toggleEvalDeck,
               onRegisterPill: () => setBandOpen(o => !o),
             }}
           />
@@ -5333,11 +5385,17 @@ export default function App() {
                     onSelfGrade={selfGradeEvalCard} onSkip={skipEvalCard} onAdvance={advanceEvalCard}
                     onClose={closeEvalDeck} />
           {/* TASK 8: the scorecard — set once, at deck completion or abandonment (showEvalScorecard
-              above), cleared on close. `ScorecardView.tsx` (named for the TS1149 casing collision
-              documented in its own header, NOT `Scorecard.tsx`) is a thin map over the model; no
-              computation happens here. I1 (fix round 1): `showEvalScorecard` closes the deck panel
-              in the SAME update that opens this one, so the two are mutually exclusive by
-              construction — they can no longer occupy this coordinate at the same time. */}
+              above), cleared by its own × OR by `toggleEvalDeck` reopening the deck. `ScorecardView.tsx`
+              (named for the TS1149 casing collision documented in its own header, NOT `Scorecard.tsx`)
+              is a thin map over the model; no computation happens here. I1 (fix round 1) + N4 (fix
+              round 2, reviewer-ruled): this panel and `EvalDeck` share the SAME coordinate
+              (`absolute top-10 right-[21.5rem] z-40 w-80`) on purpose — they are kept mutually
+              exclusive by BOTH directions clearing the other in the same update
+              (`showEvalScorecard` clears `evalDeckOpen`; `toggleEvalDeck` clears `scorecardModel`
+              when opening), rather than by giving them different coordinates. Round 1 only did the
+              first direction, which the menu-bar "Eval deck" button (MenuBar.tsx) could still
+              defeat by reopening the deck over an un-cleared scorecard — verified fixed by a CDP
+              re-probe (fix round 2). */}
           {scorecardModel && (
             <div className="absolute top-10 right-[21.5rem] z-40 w-80 max-h-[80vh] overflow-y-auto pointer-events-auto"
                  role="dialog" aria-label="Scorecard" data-shell>
@@ -5741,6 +5799,7 @@ export default function App() {
             isLive={isLive}
             logs={logs}
             isEmbedded={isEmbedded}
+            evalUnrecorded={evalUnrecorded}
           />
         </Sheet>
 

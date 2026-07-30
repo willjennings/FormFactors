@@ -11,15 +11,14 @@
 //
 // FILE NAME: the task-8 brief names this `src/eval/Scorecard.tsx` (matching `./scorecard.ts`'s
 // casing exactly, as `EvalDeck.tsx`/`deck.ts` do). macOS's case-insensitive-but-case-preserving
-// filesystem makes that pair genuinely ambiguous here — NOT because the program can't tolerate
-// both files existing (it can; `git status` shows both, `ls` shows both) but because of the way
-// TypeScript resolves an IMPORT SPECIFIER against that filesystem (fix round 1, M6, corrected):
-// `from './Scorecard'` resolves case-insensitively to `scorecard.ts` first, and the compiler then
-// reports TS2724 ("has no exported member named 'Scorecard'. Did you mean 'scorecard'?") plus
-// TS1149 ("File name '.../Scorecard.ts' differs from ... 'scorecard.ts' only in casing") the
-// moment any file actually imports from the differently-cased path. So this file is
-// `ScorecardView.tsx` instead. Exported names are unchanged (`Scorecard`, `ScorecardMini`); only
-// the file on disk is renamed.
+// filesystem makes that pair genuinely ambiguous to TypeScript's IMPORT SPECIFIER resolution (fix
+// round 1, M6; fix round 2, N13, present-tense claim about a predecessor's temporary experiment
+// removed): `from './Scorecard'` resolves case-insensitively to `scorecard.ts` first, and the
+// compiler then reports TS2724 ("has no exported member named 'Scorecard'. Did you mean
+// 'scorecard'?") plus TS1149 ("File name '.../Scorecard.ts' differs from ... 'scorecard.ts' only
+// in casing") the moment any file actually imports from the differently-cased path. So this file
+// is `ScorecardView.tsx` instead. Exported names are unchanged (`Scorecard`, `ScorecardMini`);
+// only the file on disk is renamed.
 
 import React from 'react';
 import type { ScorecardModel } from './scorecard';
@@ -45,6 +44,15 @@ export function Scorecard({ model }: { model: ScorecardModel }) {
   return (
     <div className="flex flex-col gap-3 p-3 rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)]" role="region" aria-label="Scorecard">
       <p className="text-sm font-medium text-[var(--text-primary)]">{model.headline}</p>
+      {model.abandoned && (
+        // N2 (fix round 2, reviewer-ruled): the toast/rail/log already announce abandonment
+        // distinctly at the moment it happens, but this panel can be read later (or reopened) —
+        // spec §5.6's "abandonment is data, not absence" belongs on the persistent card too, not
+        // only the transient feedback around it.
+        <p className="text-[10px] font-mono uppercase tracking-widest text-amber-600 dark:text-amber-400">
+          Abandoned — closed before the deck finished
+        </p>
+      )}
 
       <Bucket label="Good at" lines={model.goodAt} />
       <Bucket label="Shaky" lines={model.shaky} />
@@ -63,7 +71,9 @@ export function Scorecard({ model }: { model: ScorecardModel }) {
           // never dropped either. Named explicitly as a MEDIAN OF SESSIONS (I3): it is not one
           // connect's time, it is the lower median across `coldStartN` sessions' own row-1.
           <p className="text-[11px] text-[var(--text-secondary)]">
-            cold start (session connect): {fmtMs(model.latency.coldStartMs)}, median of {model.latency.coldStartN} session{model.latency.coldStartN === 1 ? '' : 's'}' first turns — excluded from the median above
+            {/* N11 (fix round 2): possessive apostrophe, not a pluralised-noun apostrophe —
+                "1 session's" not "1 session'". */}
+            cold start (session connect): {fmtMs(model.latency.coldStartMs)}, median of {model.latency.coldStartN} session{model.latency.coldStartN === 1 ? "'s" : "s'"} first turns — excluded from the median above
           </p>
         )}
         {model.latency.sessionCount > 1 && (
@@ -100,7 +110,7 @@ export function ScorecardMini({ model }: { model: ScorecardModel }) {
   return (
     <div className="flex flex-col gap-1" aria-label="Scorecard (live)">
       <span className="text-[10px] font-mono uppercase tracking-wide text-[var(--text-secondary)]">Scorecard</span>
-      <p className="text-[11px] text-[var(--text-primary)]">{model.headline}</p>
+      <p className="text-[11px] text-[var(--text-primary)]">{model.headline}{model.abandoned && ' (abandoned)'}</p>
       {model.watch.length > 0 && (
         // M3 (fix round 1, reviewer-ruled): Watch is the ONE bucket the spec says must never be
         // dropped — a live miniature that silently truncated rows 2..n to fit three lines would be

@@ -20,6 +20,17 @@ function mkAgg(n: number, opts: Partial<{
   completion: number; corrected: number; wrong: number; refusal: number; ask: number;
   abandoned: number; ungradeable: number; medianTurns: number | null; medianDurationMs: number | null;
 }> = {}): ArmAggregate {
+  // N9 (fix round 2, reviewer-ruled, disclosed rather than fixed): `count: Math.round(v * n)`
+  // reintroduces, in THIS fixture helper only, the exact float round-trip M2 (fix round 1) removed
+  // from production (armAggregate.ts's real `rate()` computes `count` as a true integer, never
+  // derives it from `value`). A stricter version of this helper that REJECTED a `v` not equal to an
+  // exact `count/n` was tried and reverted: many `winsWhen`/threshold fixtures across this file and
+  // its siblings (register/registry.test.ts, shell/skins/registry.test.ts) deliberately use `v`
+  // values like 0.6, 0.58 that were never meant to be exact fractions of `n` — those tests assert
+  // on `.value` only and never read `.count` at all, so rejecting them would fail real, correct
+  // tests over a field they don't use. `count`'s own cross-field consistency is pinned where it
+  // matters — armAggregate.test.ts's "counts sum to n EXACTLY" test — against the real production
+  // path, not these hand-built fixtures.
   const rate = (v = 0) => ({ value: v, n, count: Math.round(v * n) });
   return {
     n,
@@ -109,15 +120,20 @@ describe('speech_only no-ops render under Watch and never vanish', () => {
 // deck's own dimension line claimed "pointing (2/2)" under Good at. All three now render under
 // Watch, each with its own n and verbatim example, same discipline as no-op-turn. 'refusal' rows
 // are deliberately still excluded — they are already Good at, via `agg.refusal`.
+//
+// N1 (fix round 2, reviewer-ruled): deixis-miss/grounding-disagree count SIGNALS, not attempts —
+// a single attempt can contain several — so they no longer use the `(n/agg.n)` fraction shape
+// (which could print `(3/1)`, a fraction greater than 1, for a signal count against an attempt
+// count). They state their count alone ("seen N×") instead; see scorecard.ts's Watch-loop comment.
 // ==========================================================================================
 describe('I2 — every non-refusal ledger kind surfaces under Watch, not just no-op-turn', () => {
-  it('a deixis-miss row is rendered under Watch, with its own n and the wrong-referent text', () => {
+  it('a deixis-miss row is rendered under Watch, with its own count and the wrong-referent text', () => {
     const agg = mkAgg(UNDERPOWERED_N, { completion: 1 });
     const ledger: LedgerRow[] = [
       { kind: 'deixis-miss', key: 'that/word', n: 3, examples: ['"that" -> resolved "B2" (wanted "C4")'] },
     ];
     const model = scorecard(agg, ledger, [], ARM, opts([]));
-    expect(model.watch.some((l) => l.includes('wrong referent') && l.includes('B2') && l.includes('(3/8)'))).toBe(true);
+    expect(model.watch.some((l) => l.includes('wrong referent') && l.includes('B2') && l.includes('seen 3×'))).toBe(true);
   });
 
   it('an asked-and-dropped row is rendered under Watch', () => {
@@ -129,13 +145,13 @@ describe('I2 — every non-refusal ledger kind surfaces under Watch, not just no
     expect(model.watch.some((l) => l.includes('what should the heading say?') && l.includes('never answered'))).toBe(true);
   });
 
-  it('a grounding-disagree row is rendered under Watch', () => {
+  it('a grounding-disagree row is rendered under Watch, count stated alone (not a fraction)', () => {
     const agg = mkAgg(UNDERPOWERED_N, { completion: 1 });
     const ledger: LedgerRow[] = [
       { kind: 'grounding-disagree', key: 'B2/word', n: 1, examples: ['app said "B2", model said "C4"'] },
     ];
     const model = scorecard(agg, ledger, [], ARM, opts([]));
-    expect(model.watch.some((l) => l.includes('app/model disagreed') && l.includes('B2'))).toBe(true);
+    expect(model.watch.some((l) => l.includes('app/model disagreed') && l.includes('B2') && l.includes('seen 1×'))).toBe(true);
   });
 
   it('a refusal ledger row is NOT duplicated under Watch — it is already Good at', () => {
@@ -146,6 +162,18 @@ describe('I2 — every non-refusal ledger kind surfaces under Watch, not just no
     const model = scorecard(agg, ledger, [], ARM, opts([]));
     expect(model.watch.some((l) => l.includes('add a chart'))).toBe(false);
     expect(model.goodAt.some((l) => l.includes('honest refusals'))).toBe(true);
+  });
+
+  // N1 (fix round 2): the exact failure mode the reviewer reproduced — several deixis-miss SIGNALS
+  // inside effectively one arm's aggregate must never render as a fraction that exceeds 1.
+  it('three deixis-miss signals against agg.n=1 never prints a fraction greater than 1 (the reproduced bug)', () => {
+    const agg = mkAgg(1, { completion: 1 });
+    const ledger: LedgerRow[] = [
+      { kind: 'deixis-miss', key: 'that/word', n: 3, examples: ['"that" -> resolved "B2" (wanted "C4")'] },
+    ];
+    const model = scorecard(agg, ledger, [], ARM, opts([]));
+    expect(model.watch.some((l) => /\(\d+\/1\)/.test(l) && l.includes('wrong referent'))).toBe(false);
+    expect(model.watch.some((l) => l.includes('seen 3×'))).toBe(true);
   });
 });
 
@@ -282,6 +310,24 @@ describe('C1 — attemptsForArm partitions a mixed-arm stream disjointly', () =>
     // Terminal's own winsWhen names both n's — pinned to 8 vs 8, never 16 vs 16 (which is what a
     // caller merging both arms into one aggregate before calling scorecard() would have produced).
     expect(model.comparison).toContain('n=8 vs 8');
+  });
+
+  // N7 (fix round 2, reviewer-ruled): every C1 test above uses `shell: 'familiar'` on BOTH arms —
+  // a register-only implementation of `attemptsForArm` (shell dropped from the comparison) passes
+  // every one of them. This is the missing half: two arms that differ ONLY in shell, same register.
+  it('two arms differing ONLY in shell (same register) are scoped disjointly — the shell half of the identity rule', () => {
+    const familiarArm: Arm = { register: 'guided', dials: DEFAULT_DIALS, shell: 'familiar' };
+    const materialArm: Arm = { register: 'guided', dials: DEFAULT_DIALS, shell: 'material' };
+    const attempts: Attempt[] = [
+      mkAttempt({ arm: familiarArm }),
+      mkAttempt({ arm: familiarArm }),
+      mkAttempt({ arm: materialArm }),
+    ];
+    const familiarAttempts = attemptsForArm(attempts, familiarArm);
+    const materialAttempts = attemptsForArm(attempts, materialArm);
+    expect(familiarAttempts.length).toBe(2);
+    expect(materialAttempts.length).toBe(1);   // a register-only rule would wrongly give this 3
+    expect(familiarAttempts.some((a) => materialAttempts.includes(a))).toBe(false);
   });
 });
 
@@ -476,5 +522,98 @@ describe('EVAL_DECK sanity — the dimension-routing test above uses real card i
     for (const id of ['point-what-is-this', 'point-then-change', 'robust-rephrase', 'robust-own-words']) {
       expect(ids.has(id)).toBe(true);
     }
+  });
+});
+
+// ==========================================================================================
+// N5 (fix round 2, reviewer-ruled): latency/cost were still whole-sitting/all-arm even after C1
+// scoped `agg`. Probe A reproduced a Terminal-headed card whose `medianMs`/`worst` were actually
+// Guided's turns. `eventsForArm` scopes `opts.events` to only the sessions matching `arm` before
+// either block reduces over it.
+// ==========================================================================================
+describe('N5 — latency and cost are scoped to the arm under test, not the whole sitting', () => {
+  const guidedArm: Arm = { register: 'guided', dials: DEFAULT_DIALS, shell: 'familiar' };
+  const terminalArm: Arm = { register: 'terminal', dials: DEFAULT_DIALS, shell: 'material' };
+
+  it("a Guided session's turns never appear in a Terminal-headed card's latency/cost", () => {
+    const events: TelemetryEvent[] = [
+      sessionStart(0, guidedArm),
+      turn(10, 'g1', 'guided opener', 'tool_call', 5000),   // Guided's cold row-1
+      turn(20, 'g2', 'guided warm', 'tool_call', 4900),      // would be "worst" if leaked in
+      sessionComplete(30, 40, 10),                           // Guided's traffic
+      sessionStart(40, terminalArm),
+      turn(50, 't1', 'terminal opener', 'tool_call', 90),    // Terminal's cold row-1
+      turn(60, 't2', 'terminal warm', 'tool_call', 100),
+      sessionComplete(70, 5, 1),                             // Terminal's own traffic
+    ];
+    const agg = mkAgg(1, { completion: 1 });
+    const model = scorecard(agg, [], [], terminalArm, opts(events));
+    // Terminal's own session only: one warm turn (100ms), one cold turn (90ms).
+    expect(model.latency.sessionCount).toBe(1);
+    expect(model.latency.medianMs).toBe(100);
+    expect(model.latency.worst).toEqual({ ms: 100, label: 'terminal warm' });
+    expect(model.latency.coldStartMs).toBe(90);
+    // Guided's 40 frames / 10 hints must not leak into Terminal's cost.
+    expect(model.cost).toEqual({ frames: 5, hints: 1, sessionCount: 1 });
+  });
+
+  it('the reverse arm (Guided) gets its OWN session, not the Terminal one', () => {
+    const events: TelemetryEvent[] = [
+      sessionStart(0, guidedArm),
+      turn(10, 'g1', 'guided opener', 'tool_call', 5000),
+      turn(20, 'g2', 'guided warm', 'tool_call', 4900),
+      sessionStart(40, terminalArm),
+      turn(50, 't1', 'terminal opener', 'tool_call', 90),
+      turn(60, 't2', 'terminal warm', 'tool_call', 100),
+    ];
+    const agg = mkAgg(1, { completion: 1 });
+    const model = scorecard(agg, [], [], guidedArm, opts(events));
+    expect(model.latency.sessionCount).toBe(1);
+    expect(model.latency.worst).toEqual({ ms: 4900, label: 'guided warm' });
+    expect(model.latency.coldStartMs).toBe(5000);
+  });
+});
+
+// ==========================================================================================
+// N8 (fix round 2, reviewer-ruled): M4's `completed (n/N)` line and M7's "Guided is the control
+// arm" message shipped in fix round 1 with no test naming them directly — both survived a mutation
+// deleting/altering them while `src/eval` stayed green. Pinned directly here.
+// ==========================================================================================
+describe('N8 — M4 and M7 lines are pinned directly', () => {
+  it('M4: a session with completions shows "completed (n/N)" under Good at', () => {
+    const agg = mkAgg(10, { completion: 0.7, refusal: 0.3 });
+    const model = scorecard(agg, [], [], ARM, opts([]));
+    expect(model.goodAt).toContain('completed (7/10)');
+  });
+
+  it('M4: zero completions renders NO "completed" line at all (not "completed (0/N)")', () => {
+    const agg = mkAgg(5, { refusal: 1 });
+    const model = scorecard(agg, [], [], ARM, opts([]));
+    expect(model.goodAt.some((l) => l.startsWith('completed ('))).toBe(false);
+  });
+
+  it('M7: Guided with no control gets the "IS the control arm" sentence, verbatim substring', () => {
+    const agg = mkAgg(UNDERPOWERED_N, { completion: 1 });
+    const model = scorecard(agg, [], [], ARM, opts([])); // ARM.register === 'guided', no control
+    expect(model.comparison).toBe(`Guided is the control arm — there is no non-tautological comparison to run against itself (n=${UNDERPOWERED_N})`);
+  });
+});
+
+// ==========================================================================================
+// N2 (fix round 2, reviewer-ruled): the scorecard model itself must be able to say a run was
+// abandoned, not just completed — spec §5.6, "abandonment is data, not absence" applied to the
+// card's own self-description, not only the ledger's rows.
+// ==========================================================================================
+describe('N2 — ScorecardModel.abandoned reflects opts.abandoned, defaulting to false', () => {
+  it('opts.abandoned omitted -> model.abandoned is false', () => {
+    const agg = mkAgg(3, { completion: 1 });
+    const model = scorecard(agg, [], [], ARM, opts([]));
+    expect(model.abandoned).toBe(false);
+  });
+
+  it('opts.abandoned: true -> model.abandoned is true', () => {
+    const agg = mkAgg(3, { completion: 1 });
+    const model = scorecard(agg, [], [], ARM, opts([], { abandoned: true }));
+    expect(model.abandoned).toBe(true);
   });
 });

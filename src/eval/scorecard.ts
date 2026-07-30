@@ -39,10 +39,19 @@
 // instead, so a sitting that switched register or shell mid-run (Task 6's own register-switch
 // feature; a shell change) produced a card that attributed every prior arm's trials to whichever
 // arm happened to be current when it was drawn — and fed `winsWhen` a `control` that was not
-// disjoint from the arm under test. `attemptsForArm` below closes that gap; both call sites now
-// scope BEFORE calling `armAggregate`, and this module no longer accepts an unscoped attempt list
-// silently — it takes an already-`ArmAggregate`d `agg`, as it always did, but the two production
-// callers can no longer get that wrong without an explicit filter call visibly missing.
+// disjoint from the arm under test. `attemptsForArm` below closes that gap.
+//
+// FIX ROUND 2 (reviewer-ruled, N1 — residual Critical): round 1 scoped `agg` alone and stopped.
+// `ledger`/`latency`/`cost` stayed whole-sitting, so the Watch loop below divided an UNSCOPED
+// population by the now-scoped `agg.n` — a mixed-arm sitting could print `(3/1)`, a fraction
+// greater than 1, on a card that is supposed to be one arm's own numbers. The CONTRACT this module
+// now expects from its callers, stated once here because it applies to two parameters at once:
+// `ledger` MUST be computed over the SAME arm-scoped population as `agg`
+// (`capabilityLedger(events, attemptsForArm(attempts, arm), arm)` — the ledger's own pass 2 needs
+// the `arm` argument too, since it reads raw events directly and was never touched by scoping
+// `attempts`). `opts.events` may still be the whole-sitting stream; `eventsForArm` below re-scopes
+// it internally for `latency`/`cost`, because turns carry no `arm` field of their own the way
+// `Attempt` does — only `session_start` boundaries do.
 
 import type { Arm, TelemetryEvent } from '../telemetry';
 import type { ArmAggregate } from './armAggregate';
@@ -51,11 +60,18 @@ import type { LedgerRow } from './capabilityLedger';
 import type { CardResult, EvalDimension } from './deck';
 import { deckTallyOf, EVAL_DECK } from './deck';
 import type { Attempt, ProbeVerdict } from './types';
+import { sameArm } from './types';
 import { REGISTERS } from '../register/registry';
 import { SHELL_SKINS } from '../shell/skins/registry';
 
 export interface ScorecardModel {
   headline: string;             // "Guided · Familiar · Gemini · 12 trials"
+  // N2 (fix round 2, reviewer-ruled): §5.6 — "abandonment is data, not absence" — applies to the
+  // CARD itself, not just the ledger's no-op-turn rows. Before this field, a deck closed on card 3
+  // of 12 produced a model indistinguishable from one that finished all twelve; the caller's own
+  // knowledge of which path it took (`isDeckComplete` vs `isAbandoned`, deck.ts) never reached the
+  // model it built. `false` for a normally-completed deck or a non-deck session summary.
+  abandoned: boolean;
   goodAt: string[];              // plain-language lines, each ending with (n/n)
   shaky: string[];
   watch: string[];
@@ -99,6 +115,11 @@ export interface ScorecardOpts {
   control?: ArmAggregate | null;
   backend?: string;              // SessionConfig.backend — `Arm` itself carries no backend field.
   unrecorded?: number;           // Task 7's off-recorder marker (EvalDeck.tsx's own `unrecorded`).
+  abandoned?: boolean;           // N2 (fix round 2) — see `ScorecardModel.abandoned`. Omitted/false
+                                  // means a normal completion; the caller states this, this module
+                                  // never infers it from `deck`'s length (a legitimately full deck
+                                  // and one closed exactly after its last card are indistinguishable
+                                  // from `deck` alone — the caller already knows which happened).
 }
 
 /** §5.7's "ungradeable share exceeds a stated threshold" gate, pre-registered here as the Task
@@ -145,6 +166,29 @@ function splitColdAndWarmTurns(events: TelemetryEvent[]): {
  *  what makes "across N sessions" honest rather than a guess. */
 const sessionCount = (events: TelemetryEvent[]): number =>
   events.filter((e) => e.type === 'session_start').length;
+
+/** N5 (fix round 2, reviewer-ruled): scopes the whole-sitting event stream down to only the
+ *  SESSIONS whose `session_start.config.arm` matches `arm` (`sameArm`, same register+shell rule
+ *  as `attemptsForArm`). `latency`/`cost` reduce directly over events, and a `turn`/`session_
+ *  complete` event carries no `arm` field of its own the way `Attempt` does — the only place arm
+ *  is recorded is on the `session_start` that opened the session the event belongs to. So scoping
+ *  means walking the stream and keeping whatever falls between a matching `session_start` and the
+ *  next one, rather than filtering by a field on the event itself. An event stream with no
+ *  `session_start` at all (a hand-authored fragment) matches nothing and returns `[]` — silence,
+ *  not a guess. */
+function eventsForArm(events: TelemetryEvent[], arm: Arm): TelemetryEvent[] {
+  const out: TelemetryEvent[] = [];
+  let inScope = false;
+  for (const e of events) {
+    if (e.type === 'session_start') {
+      inScope = sameArm(e.config.arm, arm);
+      if (inScope) out.push(e);
+      continue;
+    }
+    if (inScope) out.push(e);
+  }
+  return out;
+}
 
 function buildLatency(events: TelemetryEvent[]): ScorecardModel['latency'] {
   const { cold, warm } = splitColdAndWarmTurns(events);
@@ -216,12 +260,17 @@ function dimensionTallies(deck: CardResult[]): Map<EvalDimension, { done: number
  *  actually what the resulting `ArmAggregate` claims to be. This is the split `armAggregate.ts`'s
  *  own header says it deliberately does not do itself ("Tasks 5/8... own that split").
  *
- *  IDENTITY RULE: two attempts are the same arm iff `register` AND `shell` match. `dials` are
- *  EXCLUDED even though `Arm.dials` is the fully-resolved cohort definition — a `custom` twiddle
- *  mid-sitting is still meant to roll up with the register it was twiddled from for the purposes
- *  of this card (this module measures at register+shell granularity everywhere else too: the
- *  headline, `winsWhen`'s `control` argument, `guidedControlFromSitting` below). Finer-grained
- *  dial drift within one register+shell is out of scope for anything in this file.
+ *  IDENTITY RULE (`sameArm`, ./types.ts): two attempts are the same arm iff `register` AND `shell`
+ *  match. `dials` are EXCLUDED from the comparison — N6 (fix round 2, corrected): this is NOT
+ *  because a `custom` twiddle "rolls up with" the register it started from (it does not — App.tsx's
+ *  dials effect stamps `register: 'custom'` on a twiddle, `App.tsx:3658`, so `attemptsForArm`
+ *  already gives it its own bucket by register alone, with `base` recording where it started,
+ *  `telemetry.ts`). Excluding `dials` is simply INERT for every named register: a non-'custom'
+ *  register key already implies that register's preset dials, so comparing them too would never
+ *  change which bucket an attempt lands in. What excluding `dials` DOES do, and is not defended
+ *  further here: two 'custom' arms with genuinely different dial values are treated as the SAME
+ *  arm by this rule (both are just `register: 'custom'`) — a known, disclosed coarseness, not a
+ *  claim that finer-grained dial drift is being tracked.
  *
  *  An attempt whose `arm` is `undefined` (a stream fragment with no `session_start` — see
  *  eval/types.ts's DEVIATION 2) NEVER matches any named arm and is excluded. Before this fix that
@@ -229,7 +278,7 @@ function dimensionTallies(deck: CardResult[]): Map<EvalDimension, { done: number
  *  exactly the failure mode this function exists to close, so an unscoped attempt is dropped
  *  rather than guessed onto anything. */
 export function attemptsForArm(attempts: Attempt[], arm: Arm): Attempt[] {
-  return attempts.filter((a) => a.arm?.register === arm.register && a.arm?.shell === arm.shell);
+  return attempts.filter((a) => sameArm(a.arm, arm));
 }
 
 /** The one control aggregate a single sitting can honestly supply without a second export: the
@@ -241,10 +290,15 @@ export function attemptsForArm(attempts: Attempt[], arm: Arm): Attempt[] {
  *  App.tsx's eval-deck completion seam call this rather than re-deriving it independently.
  *
  *  Deliberately scoped by `register` ALONE, not `attemptsForArm`'s register+shell rule: Guided is
- *  the control for every OTHER register regardless of which shell was active while visiting it —
- *  the shell axis is measured independently (SHELL_SKINS' own `winsWhen`, called with this same
- *  control), so narrowing the control to one shell would silently drop Guided trials run under a
- *  different shell from the baseline this exists to supply. */
+ *  the control for every OTHER register regardless of which shell was active while visiting it, so
+ *  narrowing to one shell would silently drop Guided trials run under a different shell from the
+ *  baseline this exists to supply. N6 (fix round 2, corrected): this does NOT mean the shell axis
+ *  gets an independent, shell-scoped control — no shell-vs-shell comparison exists anywhere in this
+ *  code path. `buildComparison` below calls a shell skin's `winsWhen` with this SAME
+ *  register-pooled-across-shells `control`, so a Material verdict is checked against an aggregate
+ *  that differs from the arm under test in BOTH register and shell, and cannot be attributed to the
+ *  shell alone. That confound predates this function and is not fixed here — the sentence removed
+ *  from this comment previously claimed otherwise, which was not true. */
 export function guidedControlFromSitting(attempts: Attempt[], currentRegister: string): ArmAggregate | undefined {
   if (currentRegister === 'guided') return undefined;
   const guidedAttempts = attempts.filter((a) => a.arm?.register === 'guided');
@@ -289,8 +343,18 @@ export function scorecard(agg: ArmAggregate, ledger: LedgerRow[], deck: CardResu
   // 'no-op-turn') continue`), so `asked-and-dropped`, `deixis-miss` and `grounding-disagree` never
   // reached a human reading only this card — invisible even while the deck's own `pointing (2/2)`
   // line could sit under Good at in the same sitting the ledger recorded a wrong referent. Each
-  // kind gets its own honest phrasing; all four still carry their own n and a verbatim example,
-  // same discipline as the no-op-turn line that was already here.
+  // kind gets its own honest phrasing.
+  //
+  // N1 (fix round 2, reviewer-ruled — the residual Critical finding): `withN`'s "(n/total)" shape
+  // is only honest for kinds that are 1:1 with an ATTEMPT — `no-op-turn` (one abandoned attempt =
+  // one row bump) and `ask` (one asked-and-dropped attempt = one row bump), where `agg.n` (total
+  // attempts) is genuinely the population a row's count was drawn from. `deixis-miss` and
+  // `grounding-disagree` are built per SIGNAL in capabilityLedger.ts's pass 2 — a single attempt
+  // can contain several deixis events, so `row.n` can exceed `agg.n` and `withN(..., row.n, agg.n)`
+  // then prints a fraction greater than 1 (reproduced: one attempt, three deixis misses -> "(3/1)")
+  // even when `ledger` is correctly arm-scoped. There is no honest attempt-shaped denominator for a
+  // signal count, so these two kinds state the count alone rather than force it into a fraction
+  // that would misreport what was actually counted.
   for (const row of ledger) {
     const example = row.examples[0] ?? '(no verbatim recorded)';
     if (row.kind === 'no-op-turn') {
@@ -298,9 +362,9 @@ export function scorecard(agg: ArmAggregate, ledger: LedgerRow[], deck: CardResu
     } else if (row.kind === 'ask') {
       watch.push(withN(`"${example}" was asked and never answered`, row.n, agg.n));
     } else if (row.kind === 'deixis-miss') {
-      watch.push(withN(`wrong referent — ${example}`, row.n, agg.n));
+      watch.push(`wrong referent — ${example} (seen ${row.n}×)`);
     } else if (row.kind === 'grounding-disagree') {
-      watch.push(withN(`app/model disagreed on the referent — ${example}`, row.n, agg.n));
+      watch.push(`app/model disagreed on the referent — ${example} (seen ${row.n}×)`);
     }
     // 'refusal' rows: intentionally not rendered here — see the comment above the loop.
   }
@@ -329,8 +393,13 @@ export function scorecard(agg: ArmAggregate, ledger: LedgerRow[], deck: CardResu
     ));
   }
 
-  const latency = buildLatency(opts.events);
-  const cost = buildCost(opts.events);
+  // N5 (fix round 2, reviewer-ruled): `opts.events` is the whole-sitting stream; `eventsForArm`
+  // scopes it to this arm's own sessions before either block reduces over it, so a Terminal-headed
+  // card can no longer report a Guided session's latency/cost under a `Terminal · N trials`
+  // headline (reproduced: `medianMs`/`worst` were Guided's turns while `agg.n` was Terminal's 1).
+  const armEvents = eventsForArm(opts.events, arm);
+  const latency = buildLatency(armEvents);
+  const cost = buildCost(armEvents);
   const comparison = buildComparison(agg, arm, opts.control);
 
   // M7 (fix round 1): `deckTallyOf` takes the `CardResult[]` this module actually has, rather than
@@ -341,5 +410,5 @@ export function scorecard(agg: ArmAggregate, ledger: LedgerRow[], deck: CardResu
     ? 'no eval-deck cards played this session'
     : `${t.total} cards: ${t.done} worked, ${t.failed} didn't, ${t.skipped} skipped — ${t.observed} observed, ${t.self} your call`;
 
-  return { headline, goodAt, shaky, watch, latency, cost, comparison, deckSummary };
+  return { headline, abandoned: !!opts.abandoned, goodAt, shaky, watch, latency, cost, comparison, deckSummary };
 }

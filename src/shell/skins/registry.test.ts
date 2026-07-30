@@ -10,6 +10,10 @@ function mkAgg(n: number, opts: Partial<{
   completion: number; corrected: number; wrong: number; refusal: number; ask: number;
   abandoned: number; ungradeable: number; medianTurns: number | null; medianDurationMs: number | null;
 }> = {}): ArmAggregate {
+  // N9 (fix round 2, reviewer-ruled, disclosed rather than fixed): see the identical comment in
+  // eval/scorecard.test.ts's `mkAgg` — this file's own `v` values are deliberately not exact
+  // fractions of `n` in places, so a strict count-matches-value guard was tried here too and
+  // reverted for the same reason: these `winsWhen` fixtures read `.value` only.
   const rate = (v = 0) => ({ value: v, n, count: Math.round(v * n) });
   return {
     n,

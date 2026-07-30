@@ -25,12 +25,16 @@ import type { SkinKey } from './shell/skins/types';
 // reviewer-ruled, corrected): the claim above is true for `src/eval/*` itself, but is not the
 // WHOLE closure this file now pulls in at runtime — `eval/scorecard` VALUE-imports
 // `register/registry` and `shell/skins/registry` (for the register/shell labels and `winsWhen`),
-// which in turn pull in `eval/deck` and `eval/utterances`. Eight modules are reachable this way
-// (`eval/armAggregate`, `eval/capabilityLedger`, `eval/deck`, `eval/deriveAttempts`,
-// `eval/scorecard`, `eval/utterances`, `register/registry`, `shell/skins/registry`), and this
-// file is imported nearly everywhere — so the invariant future edits must not break is: nothing
-// in THAT closure may ever value-import `telemetry.ts` back. Verified with 0 cycles today; there
-// is no automated guard against a future one.
+// which in turn pull in `eval/deck` and `eval/utterances`. Fix round 2: `eval/capabilityLedger`
+// now also VALUE-imports `eval/types` (for `sameArm`, the shared arm-identity predicate — N1/N6),
+// where previously every `src/eval/*` module touched `Attempt`/`Arm` from `./types`/`../telemetry`
+// only via `import type`. Nine modules are reachable this way (`eval/armAggregate`,
+// `eval/capabilityLedger`, `eval/deck`, `eval/deriveAttempts`, `eval/scorecard`, `eval/types`,
+// `eval/utterances`, `register/registry`, `shell/skins/registry`), and this file is imported
+// nearly everywhere — so the invariant future edits must not break is: nothing in THAT closure may
+// ever value-import `telemetry.ts` back. Verified with 0 cycles today (`eval/types` itself only
+// `import type`s `Arm` from here, which is erased); there is no automated guard against a future
+// one.
 import { deriveAttempts } from './eval/deriveAttempts';
 import { capabilityLedger } from './eval/capabilityLedger';
 import { armAggregate } from './eval/armAggregate';
@@ -413,12 +417,27 @@ class Telemetry {
    *    `events`  — the WHOLE SITTING (see eventsSnapshot), because a grader that only saw the last
    *      run would mis-measure every sitting that changed program, which is most of them.
    *  `runs` is the bridge: it says how many `session_start` boundaries `events` contains, so nobody
-   *  has to guess whether `metrics` covers all of it. */
-  snapshot() {
+   *  has to guess whether `metrics` covers all of it.
+   *
+   *  `opts.unrecorded` (M5, fix round 2, reviewer-ruled): telemetry itself has no notion of a
+   *  result recorded while it was off — by definition, nothing reaches this class then. That
+   *  count lives in App.tsx's `evalUnrecorded` React state, UI-local and rightly so (this class
+   *  stays a plain event log, not a React store). What WAS wrong (not architectural, just unwired):
+   *  DebugDrawer's `ScorecardMini` called `snapshot()` with no way to hand that count in at all, so
+   *  its Watch bucket could never carry the partial-recording marker the completion card's own
+   *  scorecard does. This optional parameter is the one prop's worth of plumbing that closes it —
+   *  callers with nothing to report (the export, anywhere off-recorder results are structurally
+   *  impossible to have happened) simply omit it, unchanged from before. */
+  snapshot(opts?: { unrecorded?: number }) {
     const events = this.eventsSnapshot();
     // Same derivation every other consumer of this stream uses — deriveAttempts is the ONE place
     // an `Attempt` is ever produced from `TelemetryEvent[]` (see its own file header).
     const attempts = deriveAttempts(events);
+    // `ledger` here is the WHOLE-SITTING capability ledger — spec §3's own artifact, deliberately
+    // NOT arm-scoped: a capability failure is worth recording regardless of which arm produced it,
+    // and this is the field other consumers of `snapshot()` (the export, the drawer's testbed
+    // block) read expecting the full sitting. The scorecard below needs its OWN, arm-scoped copy —
+    // see the N1 comment at its call.
     const ledger = capabilityLedger(events, attempts);
     const arm = this.config?.arm;
     let scorecardModel = null;
@@ -427,8 +446,17 @@ class Telemetry {
       // register/shell this stream visited — Task 6's register-switch feature), so it must be
       // scoped to `arm` BEFORE `armAggregate` sees it, or the export's own scorecard would count
       // an earlier arm's trials as this one's — see scorecard.ts's `attemptsForArm` header.
-      const agg = armAggregate(attemptsForArm(attempts, arm));
+      const scopedAttempts = attemptsForArm(attempts, arm);
+      const agg = armAggregate(scopedAttempts);
       const control = guidedControlFromSitting(attempts, arm.register);
+      // N1 (fix round 2, reviewer-ruled): the WHOLE-SITTING `ledger` above must NOT be handed to
+      // `scorecard()` — its rows would still name arms other than `arm`, and scorecard.ts's Watch
+      // loop divides row counts by the now-scoped `agg.n`, printing fractions like `(3/1)` when
+      // the populations disagree. A second, arm-scoped ledger is computed here just for the card:
+      // pass 1 (attempt-derived rows) gets `scopedAttempts`; pass 2 (deixis/grounding, which reads
+      // raw events directly and never consulted `attempts` at all) gets `arm` itself so it can
+      // gate on which session's `config.arm` was active per signal.
+      const scopedLedger = capabilityLedger(events, scopedAttempts, arm);
       // Reconstructed from the SAME `eval_card` events the export itself carries (telemetry holds
       // no DeckState of its own — the deck's React state is deliberately unjournaled, deck.ts's
       // own header). A result recorded while the recorder was off (EvalDeck.tsx's `unrecorded`)
@@ -437,7 +465,9 @@ class Telemetry {
       const deck: CardResult[] = events
         .filter((e): e is Extract<TelemetryEvent, { type: 'eval_card' }> => e.type === 'eval_card')
         .map((e) => ({ cardId: e.cardId, grade: e.grade, graded: e.graded, at: e.t }));
-      scorecardModel = scorecard(agg, ledger, deck, arm, { events, control, backend: this.config?.backend });
+      scorecardModel = scorecard(agg, scopedLedger, deck, arm, {
+        events, control, backend: this.config?.backend, unrecorded: opts?.unrecorded,
+      });
     }
     return { config: this.config, metrics: this.metrics(), runs: this.runCount(), events, attempts, ledger, scorecard: scorecardModel };
   }

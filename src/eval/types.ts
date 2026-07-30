@@ -56,3 +56,21 @@ export interface Attempt {
 // skin's pre-registered `probe` against an `ArmAggregate`. `because` is not optional prose — every
 // verdict must name the actual numbers compared, or it is exactly the unearned flattery §5 forbids.
 export type ProbeVerdict = { verdict: 'met' | 'not-met' | 'underpowered'; because: string };
+
+/** Arm identity, shared (fix round 2, N1/N6): two arms are "the same" iff `register` AND `shell`
+ *  match — `dials` are excluded. This is scorecard.ts's `attemptsForArm` rule, factored out here
+ *  (rather than left there, or moved into capabilityLedger.ts) so BOTH modules can use the
+ *  identical predicate without an import cycle: scorecard.ts already value-imports
+ *  capabilityLedger.ts for `LedgerRow`, so capabilityLedger.ts cannot import scorecard.ts back.
+ *  `./types.ts` is a leaf both already sit downstream of.
+ *
+ *  What "dials excluded" actually buys: a hand-twiddled arm stamps `register: 'custom'`
+ *  (App.tsx's dials effect: `registerKeyRef.current ?? 'custom'`), so it already lands in its own
+ *  bucket by register alone — excluding dials from the comparison changes nothing for that case;
+ *  it is inert rather than load-bearing, because a non-'custom' register key already implies that
+ *  register's preset dials. Two 'custom' arms with genuinely different dials are (perhaps
+ *  surprisingly) treated as the SAME arm by this rule — a known, disclosed gap, not a claim that
+ *  they roll up "back to" a named register (they do not; 'custom' is not any named register). */
+export function sameArm(a: Arm | undefined, b: Arm): boolean {
+  return a?.register === b.register && a?.shell === b.shell;
+}

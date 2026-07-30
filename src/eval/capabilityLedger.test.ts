@@ -302,3 +302,49 @@ describe('ranked by n desc', () => {
     ]);
   });
 });
+
+// ==========================================================================================
+// N1 (fix round 2, reviewer-ruled): pass 2 (deixis-miss/grounding-disagree) reads raw `events`
+// directly and never consulted `attempts` at all — so scoping `attempts` to one arm (Task 8's
+// `attemptsForArm`) left these two row kinds whole-sitting regardless. The optional 3rd `arm`
+// parameter closes that: pass 2 now tracks the active session's `config.arm` the same way it
+// already tracked `program`, and only bumps a row while that arm matches.
+// ==========================================================================================
+describe('the optional `arm` parameter scopes pass 2 (deixis-miss/grounding-disagree) to one arm', () => {
+  const terminalArm: Arm = { register: 'terminal', dials: DEFAULT_DIALS, shell: 'material' };
+
+  it('a deixis-miss signal from a DIFFERENT arm is excluded when `arm` is supplied', () => {
+    const events: TelemetryEvent[] = [
+      sessionStart(0, 'word', ARM),                       // Guided
+      deixis(10, 'that', 'B2', 'C4', false),               // Guided's miss
+      sessionStart(20, 'word', terminalArm),                // switch to Terminal
+      deixis(30, 'this', 'A1', 'A2', false),                // Terminal's miss
+    ];
+    const guidedRows = capabilityLedger(events, [], ARM);
+    const terminalRows = capabilityLedger(events, [], terminalArm);
+    expect(guidedRows.filter((r) => r.kind === 'deixis-miss').map((r) => r.key)).toEqual(['that/word']);
+    expect(terminalRows.filter((r) => r.kind === 'deixis-miss').map((r) => r.key)).toEqual(['this/word']);
+  });
+
+  it('a grounding-disagree signal from a DIFFERENT arm is excluded when `arm` is supplied', () => {
+    const events: TelemetryEvent[] = [
+      sessionStart(0, 'word', ARM),
+      grounding(10, 'B2', 'C4', false),
+      sessionStart(20, 'word', terminalArm),
+      grounding(30, 'A1', 'A2', false),
+    ];
+    const terminalRows = capabilityLedger(events, [], terminalArm);
+    expect(terminalRows.filter((r) => r.kind === 'grounding-disagree').map((r) => r.key)).toEqual(['A1/word']);
+  });
+
+  it('omitting `arm` (existing callers/tests) stays whole-sitting — both misses appear', () => {
+    const events: TelemetryEvent[] = [
+      sessionStart(0, 'word', ARM),
+      deixis(10, 'that', 'B2', 'C4', false),
+      sessionStart(20, 'word', terminalArm),
+      deixis(30, 'this', 'A1', 'A2', false),
+    ];
+    const rows = capabilityLedger(events, []); // no arm — unscoped, prior behaviour
+    expect(rows.filter((r) => r.kind === 'deixis-miss').map((r) => r.key).sort()).toEqual(['that/word', 'this/word']);
+  });
+});
