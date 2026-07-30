@@ -145,13 +145,35 @@ function main() {
   // that field too — read honestly, not backfilled).
   const runCreatedAt = rawManifest.createdAt ? new Date(rawManifest.createdAt) : new Date();
   const date = runCreatedAt.toISOString().slice(0, 10);
+  // NEW-1 (settle-detector re-review, 2026-07-30): computed once, here, and used for BOTH the
+  // doc's title (below) and its filename (near the write, below) — one source of truth for "is
+  // this the dry gate's own doc" so the two can never disagree about which mode this run was.
+  const isDry = graded.mode === 'dry';
+  // NEW-2 (settle-detector re-review, 2026-07-30): the self-test utterance (run.mjs's
+  // `runDrySelfTest`) is EXCLUDED from the table below and from "every CORPUS attempt" in the
+  // sentence below (ts-bridge.ts's own marker filter — see its comment) — it is harness-health
+  // data, not corpus data, so it must not silently inflate or reshape the corpus numbers a reader
+  // sees. But its OWN result (did the settle-detector's ref/DOM/poll wiring actually work THIS
+  // run?) is real information a reader of this doc should still get, not just the console's gate
+  // line — appended to `dryBanner` below, separately, rather than folded into the (dry-suppressed)
+  // SETTLE-DETECTOR STATUS banner used for live runs.
   const dryBanner = graded.mode === 'dry'
     ? '\n> **DRY RUN — no model.** Every session ran against a stubbed socket that never replies '
       + '(scripts/battery/run.mjs\'s `STUB_SOCKET_SCRIPT`) — zero API spend, zero real model output. '
-      + 'Every attempt below graded `abandoned` (the turn machinery\'s `no_response`/`speech_only` '
-      + 'path) by construction, not by model behavior. This doc exists to prove the harness itself — '
-      + 'boot, connect, type, export, grade — works end to end before Task 10 spends a single real '
-      + 'token.\n'
+      + 'Every CORPUS attempt below graded `abandoned` (the turn machinery\'s `no_response`/'
+      + '`speech_only` path) by construction, not by model behavior. This doc exists to prove the '
+      + 'harness itself — boot, connect, type, export, grade — works end to end before Task 10 '
+      + 'spends a single real token.\n'
+      + (settleTotals
+        ? '>\n> **SETTLE-DETECTOR SELF-TEST** (one dedicated, out-of-band utterance per session — '
+          + 'run.mjs\'s `runDrySelfTest` — EXCLUDED from the table below and from "every CORPUS '
+          + 'attempt" above; harness health, not corpus data): ' + settleTotals.settled + ' of '
+          + graded.totalRuns + ' session(s) proved a genuine settle (median '
+          + (settleTotals.medianSettledWaitedMs ?? 'n/a') + 'ms). ' + (settleTotals.settled === graded.totalRuns
+            ? 'The settle-detector\'s own wiring (ref -> DOM attribute -> selector -> poll) worked in every session this run drove.'
+            : 'At least one session did NOT prove a genuine settle — the settle-detector\'s own wiring may be broken; see the manifest\'s per-session `settleStats` before trusting a live run\'s numbers.')
+          + '\n'
+        : '')
     : '';
   // N2 (task-9 review round 2, Important): I2 (round 1) made an aborted run's manifest survive;
   // this is what makes the DOC say so. As prominent as the DRY RUN banner, deliberately — the
@@ -210,7 +232,11 @@ function main() {
               + 'transcription_lost — the app actually answering), median latency ' + medianStr + '. '
               + forceClosed + ' (' + forceClosedPct + '%) force-closed instead — the SESSION ended '
               + '(a drop or reconnect) out from under an open turn, which is NOT the app answering it '
-              + '(I1: previously miscounted as a genuine settle). ' + settleTotals.timedOut + ' ('
+              + '(I1: previously miscounted as a genuine settle). NOTE (N9): this force-closed count '
+              + 'is a FLOOR, not a full count — a reconnect that flushes a turn AFTER its own poll '
+              + 'already returned is real but invisible to this poll, so "0% force-closed" does not '
+              + 'mean no reconnect ever force-closed a turn, only that none landed inside an active '
+              + 'poll window. ' + settleTotals.timedOut + ' ('
               + timedOutPct + '%) rode the poll ceiling with no close at all — read those as '
               + 'harness-limited, not necessarily slow-model, per "Known limitations" below. This '
               + 'total excludes any session that failed before producing an export (M5) — see '
@@ -232,7 +258,7 @@ function main() {
       'theoretical floor).'
     : 'This run graded no cells, so there is no real cell to illustrate the point with here.';
 
-  const doc = `# Battery run — ${date}
+  const doc = `# Battery run — ${date}${isDry ? ' (dry gate)' : ''}
 ${dryBanner}${abortedBanner}${settleStatusBanner}
 Mode: **${graded.mode}**. ${graded.totalRuns} of ${graded.plannedSessions} planned session(s) graded, ${graded.totalAttempts} total attempt(s) across ${graded.cells.length} cell(s).
 
@@ -319,13 +345,22 @@ ${renderLedger(graded.ledgerTop)}
 `;
 
   mkdirSync(EVALS_DIR, { recursive: true });
-  const docPath = path.join(EVALS_DIR, `${date}-battery.md`);
-  // I3: refuse to silently clobber whatever is already at this path — a same-day (or, now, a
-  // same-run-date) re-invocation used to overwrite it unconditionally, which is exactly how a
-  // hand-edited doc got destroyed. `--force` is the explicit, deliberate opt-in to overwrite;
-  // its absence is a normal usage error, not a crash — reported the same way the other refusals
-  // in this file are.
-  if (existsSync(docPath) && !force) {
+  // NEW-1 (settle-detector re-review, 2026-07-30): a DRY doc gets its own filename — a mode
+  // discriminator, not just a date — so THE GATE (task-9 brief, `node scripts/battery/run.mjs
+  // --dry` then this script) can never collide with a live pilot doc on the same date again. Before
+  // this fix, both modes wrote `<date>-battery.md`: on the pilot's own date, the dry gate's doc and
+  // the hand-edited pilot doc were the SAME FILE, so I3's refuse-overwrite (correct for protecting
+  // the pilot doc) made THE GATE itself fail — the only way to pass was `--force`, which would have
+  // destroyed the very doc I3 exists to protect.
+  const docPath = path.join(EVALS_DIR, `${date}-battery${isDry ? '-dry' : ''}.md`);
+  // A dry doc is a disposable GATE ARTIFACT, not a hand-edited pilot record — nothing about it is
+  // precious the way `2026-07-30-battery.md` is, and THE GATE must be able to run repeatedly (CI-
+  // shaped usage, or a human re-running it) without ever needing `--force` or failing on a naming
+  // collision with itself. So the dry path always overwrites, unconditionally: idempotent by
+  // construction, and it can never touch a live pilot doc because `isDry` also picked a distinct
+  // filename above. `--force` and the refuse-overwrite guard below are therefore LIVE-ONLY (I3's
+  // original protection, unchanged in behavior for that path).
+  if (!isDry && existsSync(docPath) && !force) {
     console.error(
       `[summarize] refusing to overwrite ${path.relative(ROOT, docPath)} — it already exists. ` +
       `Pass --force to overwrite it intentionally: node scripts/battery/summarize.mjs ` +

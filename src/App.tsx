@@ -878,29 +878,52 @@ export default function App() {
   // scripts/battery/run.mjs's settle-detector polls `data-turn-open` on this element;
   // `turnOpenAttr` (eval/turns.ts) is the one pure function that decides what it says.
   const turnFormElRef = useRef<HTMLFormElement | null>(null);
+  // N7 (settle-detector re-review, 2026-07-30): the most recently recorded close reason, used
+  // ONLY by the remount callback below to re-stamp a (re)mounted form with the ACTUAL last state
+  // rather than always assuming 'settled'. Before this ref existed, a remount right after a flush
+  // would re-stamp '0' (genuinely settled) for a turn that was actually force-closed — the exact
+  // I1 mistake, reintroduced at the remount seam instead of the write seam. Meaningless while a
+  // turn IS open (the callback only reads it when `openTurnRef.current` is null); starts 'settled'
+  // because there is nothing to have flushed before the very first turn ever opens.
+  const lastCloseReasonRef = useRef<'settled' | 'flushed'>('settled');
   // M3 (settle-detector review, 2026-07-30): a CALLBACK ref, not a plain object ref, so a
-  // (re)mount re-stamps the attribute from whatever `openTurnRef` ALREADY holds instead of
-  // leaving a freshly mounted form with no `data-turn-open` at all until the next turn-machine
-  // event happens to fire. Latent today — Omnibox's `<form>` does not remount on skin change
-  // (`surfaceBox(activeSkin)` varies a style, not element identity, confirmed in review) — but a
-  // callback ref costs nothing over a plain one and closes the gap structurally rather than by
-  // continuing to rely on that fact staying true. `React.useCallback` with no deps: it only ever
-  // reads `.current` values at call time, never captures a render-scoped variable, so it is safe
-  // to keep the exact same function identity across renders (the point of a callback ref that
+  // (re)mount re-stamps the attribute from whatever `openTurnRef`/`lastCloseReasonRef` ALREADY
+  // hold instead of leaving a freshly mounted form with no `data-turn-open` at all until the next
+  // turn-machine event happens to fire. Latent today — Omnibox's `<form>` does not remount on skin
+  // change (`surfaceBox(activeSkin)` varies a style, not element identity, confirmed in review) —
+  // but a callback ref costs nothing over a plain one and closes the gap structurally rather than
+  // by continuing to rely on that fact staying true. `React.useCallback` with no deps: it only
+  // ever reads `.current` values at call time, never captures a render-scoped variable, so it is
+  // safe to keep the exact same function identity across renders (the point of a callback ref that
   // fires once per real mount/unmount, not once per render).
   const turnFormRef = React.useCallback((el: HTMLFormElement | null) => {
     turnFormElRef.current = el;
-    if (el) el.dataset.turnOpen = turnOpenAttr(openTurnRef.current?.open ?? null);
+    if (el) el.dataset.turnOpen = turnOpenAttr(openTurnRef.current?.open ?? null, lastCloseReasonRef.current);
   }, []);
-  /** THE single writer of `openTurnRef.current` — every other line in this file that used to
-   *  assign it directly now calls this instead, so the DOM attribute can never drift out of sync
-   *  with the ref it mirrors (one seam, not several independently-remembered ones).
-   *  `closeReason` ('settled' by default) is read only when `next` is null — 'flushed' distinguishes
-   *  `flushOpenTurn`'s force-close from a real ack/transcription_lost settle (I1, settle-detector
-   *  review, 2026-07-30; see `turnOpenAttr`'s own doc for exactly why that distinction matters). */
-  const setOpenTurn = (next: { open: OpenTurn; run: number } | null, closeReason: 'settled' | 'flushed' = 'settled') => {
+  /** THE single writer of `openTurnRef.current` for every OPEN transition and every ORDINARY
+   *  (genuine) close — ack and transcription_lost both close through here, and both mean
+   *  'settled' UNCONDITIONALLY: there is no `closeReason` parameter here at all, so there is
+   *  nothing for a future edit to silently drop (N8, settle-detector re-review, 2026-07-30 — the
+   *  previous shape gave `closeReason` a default of `'settled'`, which meant an edit that dropped
+   *  the second argument at `flushOpenTurn`'s call site would silently restore I1 rather than fail
+   *  anything, anywhere). `flushOpenTurn`'s force-close uses the SEPARATE `setOpenTurnFlushed`
+   *  below instead of calling this with an argument, for exactly that reason: with no shared
+   *  function signature, there is no argument left to forget. */
+  const setOpenTurn = (next: { open: OpenTurn; run: number } | null) => {
     openTurnRef.current = next;
-    if (turnFormElRef.current) turnFormElRef.current.dataset.turnOpen = turnOpenAttr(next?.open ?? null, closeReason);
+    if (next === null) lastCloseReasonRef.current = 'settled';
+    if (turnFormElRef.current) turnFormElRef.current.dataset.turnOpen = turnOpenAttr(next?.open ?? null, 'settled');
+  };
+  /** ONLY `flushOpenTurn` may call this. Closes `openTurnRef` AND stamps `data-turn-open` as
+   *  force-closed ('f') — structurally distinct from `setOpenTurn(null)` (I1/N8, settle-detector
+   *  review + re-review, 2026-07-30): a session ending (an unrequested socket drop, or any of the
+   *  three reconnect effects) out from under an open turn is NOT the app answering the request,
+   *  and this function's very existence — rather than an optional argument on `setOpenTurn` — is
+   *  what makes that distinction impossible to silently lose. */
+  const setOpenTurnFlushed = () => {
+    openTurnRef.current = null;
+    lastCloseReasonRef.current = 'flushed';
+    if (turnFormElRef.current) turnFormElRef.current.dataset.turnOpen = turnOpenAttr(null, 'flushed');
   };
   const turnSeqRef = useRef(0);
   const nextTurnId = () => `turn-${(turnSeqRef.current += 1)}`;
@@ -940,11 +963,12 @@ export default function App() {
   const flushOpenTurn = () => {
     const cur = openTurnRef.current;
     if (!cur) return;
-    // 'flushed', not the default 'settled' — this is the SESSION ending out from under an open
+    // `setOpenTurnFlushed`, NOT `setOpenTurn` — this is the SESSION ending out from under an open
     // turn (an unrequested socket drop, or a reconnect), not the app answering the request. See
-    // `turnOpenAttr`'s own doc (I1, settle-detector review) for why the settle-detector needs to
-    // tell the two apart.
-    setOpenTurn(null, 'flushed');
+    // `turnOpenAttr`'s own doc (I1) and `setOpenTurnFlushed`'s own doc (N8, re-review) for why the
+    // settle-detector needs to tell the two apart, and why that distinction is a separate function
+    // rather than an argument that could be silently dropped.
+    setOpenTurnFlushed();
     // `cur.open.t` — the CLOSING turn's own open time, never the current clock. Passing "now"
     // here is the wiring mistake turns.ts's comments warn about: it makes every latency come out
     // negative, and nothing at this layer would notice.

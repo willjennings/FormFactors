@@ -25,6 +25,13 @@
 
 import { readFileSync } from 'node:fs';
 import { UTTERANCES } from '../../src/eval/utterances';
+// NEW-2 (settle-detector re-review, 2026-07-30): the marker text run.mjs's dry-mode self-test
+// utterance uses (`runDrySelfTest`/`injectDrySettleReply`) — imported, not duplicated, from the
+// one shared module both ends of this contract read (`selfTestMarker.mjs`'s own doc). `grade`
+// below filters any `turn` event carrying this exact `request` out of what it hands to
+// `deriveAttempts`/`buildLatency`/the ledger: the self-test is harness-health data (did the
+// settle-detector's own wiring work?), never corpus data, and must not be gradeable as either.
+import { DRY_SELF_TEST_REQUEST } from './selfTestMarker.mjs';
 import { deriveAttempts } from '../../src/eval/deriveAttempts';
 import { armAggregate, UNDERPOWERED_N } from '../../src/eval/armAggregate';
 import type { ArmAggregate } from '../../src/eval/armAggregate';
@@ -147,7 +154,16 @@ function grade(manifestPath: string): GradeOutput {
     const events: TelemetryEvent[] = [];
     for (const e of entries) {
       const exported = JSON.parse(readFileSync(e.file, 'utf8'));
-      events.push(...(exported.events as TelemetryEvent[]));
+      // NEW-2 (settle-detector re-review, 2026-07-30): drop the dry-mode settle-detector's own
+      // self-test turn (run.mjs's `runDrySelfTest`) BEFORE it ever reaches `deriveAttempts` /
+      // `buildLatency` / the ledger — filtered here, at collection, so every downstream consumer
+      // (attempts, latency's cold-start column, the capability ledger) sees exactly the same
+      // corpus a session with NO settle-detector self-test would have produced. A no-op on any
+      // live manifest (nothing there ever carries this marker `request`) and on a manifest written
+      // before the self-test existed at all.
+      const filtered = (exported.events as TelemetryEvent[])
+        .filter((ev) => !(ev.type === 'turn' && ev.request === DRY_SELF_TEST_REQUEST));
+      events.push(...filtered);
       totalRuns += 1;
     }
     perCellEvents.set(key, events);

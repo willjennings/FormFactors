@@ -12,3 +12,7 @@ coverage/
 # manifest summarize.mjs grades. Spec §5's ruling 2 (verbatim storage: "yes, local-only") — these
 # never leave a machine, dry or live; regenerable by re-running the harness either way.
 scripts/battery/out/
+# NEW-1 (settle-detector re-review, 2026-07-30): the dry gate's own doc — always overwritten,
+# never hand-edited, disposable by design (unlike a real <date>-battery.md pilot doc, which stays
+# tracked). Re-running the gate should not create git noise or risk an accidental commit.
+docs/superpowers/evals/*-battery-dry.md
