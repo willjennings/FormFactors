@@ -150,8 +150,12 @@ import { loadRuns, saveRuns } from './missions/persistence';
 import type { MissionRun, MissionObservables } from './missions/types';
 import { bootJournal, resetBootMemo } from './journal/boot';
 import { appendEntry, compact, type JournalEntry } from './journal/journal';
-import { JOURNAL_REGISTRY, DEFAULT_DESK_RECT, type WorkspaceState, type DialsState } from './journal/registry';
+import {
+  JOURNAL_REGISTRY, DEFAULT_DESK_RECT, bootCorpus, isWideCorpusBoot,
+  type WorkspaceState, type DialsState,
+} from './journal/registry';
 import { saveJournal, clearJournal, JOURNAL_CAP } from './journal/persistence';
+import { wideCorpus } from './artifacts/wideCorpus';
 
 // --- Types ---
 interface Marker {
@@ -943,7 +947,9 @@ export default function App() {
   useEffect(() => { actRequestRef.current = actRequest; }, [actRequest]);
   // Action verbs (save/edit/format/insert/photo) mutate this mock document; a pending action
   // is witness-rendered before it commits — the same grammar as `share`.
-  const [mockDoc, setMockDoc] = useState<MockDoc>(() => bootStates?.workspace ? (bootStates.workspace.corpus[bootStates.workspace.activeProgram] ?? seedCorpus()[bootStates.workspace.activeProgram]) : seedCorpus()[DEFAULT_PROGRAM]);
+  // bootCorpus() (not seedCorpus() directly) so a `?corpus=wide` fresh boot agrees with
+  // initialWorkspaceState (Task 6, spec §3) — see the comment there for the exact contract.
+  const [mockDoc, setMockDoc] = useState<MockDoc>(() => bootStates?.workspace ? (bootStates.workspace.corpus[bootStates.workspace.activeProgram] ?? bootCorpus()[bootStates.workspace.activeProgram]) : bootCorpus()[DEFAULT_PROGRAM]);
   // Live mirror so the tool-call closure can read the current doc without stale-closure risk.
   const mockDocRef = useRef(mockDoc);
   useEffect(() => { mockDocRef.current = mockDoc; }, [mockDoc]);
@@ -953,7 +959,7 @@ export default function App() {
   // §3.1), so "take the report and the numbers" is expressible on the first turn with no
   // program tour first. fullCorpus overrides the active entry with the live mockDoc wherever
   // it's consumed. corpusRef mirrors it for the tool-call closure, same pattern as mockDocRef.
-  const [corpus, setCorpus] = useState<Partial<Record<ProgramId, MockDoc>>>(() => bootStates?.workspace?.corpus ?? seedCorpus());
+  const [corpus, setCorpus] = useState<Partial<Record<ProgramId, MockDoc>>>(() => bootStates?.workspace?.corpus ?? bootCorpus());
   const corpusRef = useRef(corpus);
   useEffect(() => { corpusRef.current = corpus; }, [corpus]);
   const [artifactState, artifactDispatch] = useReducer(artifactReduce, undefined, () => bootStates?.artifacts ?? initialArtifactState());
@@ -1004,6 +1010,23 @@ export default function App() {
   // refuse (rejectedAtCap) — journals identically, so replay reproduces the exact same refusal.
   // Call sites use this wrapper, never artifactDispatch directly (except the useReducer above).
   const artifactDispatchJ = (event: ArtifactEvent, label?: string) => { journalAppend('artifacts', event, label); artifactDispatch(event); };
+  // ?corpus=wide boot param (Task 6, spec §3): pre-seed the desk with the wide corpus's 6
+  // artifacts via the REAL artifact.create events, dispatched through artifactDispatchJ exactly
+  // like any live tool call — mirrors ?artifacts=1's demo (src/artifacts/demo.ts), never a
+  // hand-built ArtifactState. Deliberately NOT wired into JOURNAL_REGISTRY.artifacts.initial:
+  // that function is identity-checked against the real initialArtifactState import
+  // (registry.test.ts, "no forked behaviour from the live app") and must stay untouched — this
+  // effect only runs for a FRESH boot with nothing restored (bootStates?.artifacts is the
+  // restore signal; a returning session's own history always wins). Guarded by VALUE, not call
+  // count — same discipline as the ?shell= skin effect below: StrictMode's second mount pass
+  // sees artifactStateRef.current.artifacts already at 6 (artifactDispatch writes synchronously)
+  // and skips, so the events are never double-journaled.
+  useEffect(() => {
+    if (!isWideCorpusBoot() || bootStates?.artifacts) return;
+    if (artifactStateRef.current.artifacts.length > 0) return;
+    for (const event of wideCorpus(42).artifactEvents) artifactDispatchJ(event, 'wide corpus boot seed');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   // C1 (final review): the tray is otherwise only cleared on program swap, on fire, and by
   // explicit user removal — NOTHING reconciles it against artifact deletion. `artifact.close`
   // deletes outright (artifactStore.ts has no soft-delete), so a tray chip naming a closed

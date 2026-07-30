@@ -1,11 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import {
   workspaceReduce, initialWorkspaceState, dialsReduce, initialDialsState, JOURNAL_REGISTRY,
-  DEFAULT_DESK_RECT,
+  DEFAULT_DESK_RECT, bootCorpus, isWideCorpusBoot,
 } from './registry';
 import { reduce as artifactReduce, initialArtifactState } from '../artifacts/artifactStore';
 import { reduce as goalReduce, initialGoalState } from '../goal/goalStore';
 import { seedCorpus } from '../artifacts/seeds';
+import { wideCorpus } from '../artifacts/wideCorpus';
 import { DEFAULT_PROGRAM } from '../scenarios';
 import { replay, appendEntry, compact } from './journal';
 import { deskReduce, initialDeskState, programWindowId } from '../shell/desk/deskStore';
@@ -31,6 +32,44 @@ describe('workspace store', () => {
   it('workspace.restore replaces the whole state — the compaction snapshot', () => {
     const target = { corpus: { word: seedCorpus().word }, activeProgram: 'excel' as const };
     expect(workspaceReduce(initialWorkspaceState(), { type: 'workspace.restore', state: target })).toEqual(target);
+  });
+});
+
+describe('?corpus=wide boot param (Task 6, spec §3)', () => {
+  // vitest runs this suite with environment: 'node' — no ambient `window`. Stub it exactly the
+  // way isWideCorpusBoot()/bootCorpus() read it (window.location.search via URLSearchParams),
+  // and always restore whatever was there (nothing, in this suite) so no other test file sees a
+  // leaked global.
+  const withSearch = (search: string, fn: () => void) => {
+    const prev = (globalThis as { window?: unknown }).window;
+    (globalThis as { window?: unknown }).window = { location: { search } };
+    try { fn(); } finally {
+      if (prev === undefined) delete (globalThis as { window?: unknown }).window;
+      else (globalThis as { window?: unknown }).window = prev;
+    }
+  };
+
+  it('no corpus param at all: default seed corpus', () => {
+    withSearch('', () => {
+      expect(isWideCorpusBoot()).toBe(false);
+      expect(bootCorpus()).toEqual(seedCorpus());
+      expect(initialWorkspaceState().corpus).toEqual(seedCorpus());
+    });
+  });
+  it('an unknown corpus value is IGNORED — no silent fallback to some OTHER corpus, no crash (resolveSkin convention)', () => {
+    withSearch('?corpus=huge', () => {
+      expect(isWideCorpusBoot()).toBe(false);
+      expect(bootCorpus()).toEqual(seedCorpus());
+      expect(initialWorkspaceState().corpus).toEqual(seedCorpus());
+    });
+  });
+  it('?corpus=wide selects the generated wide corpus', () => {
+    withSearch('?corpus=wide', () => {
+      expect(isWideCorpusBoot()).toBe(true);
+      expect(bootCorpus()).toEqual(wideCorpus(42).corpus);
+      expect(initialWorkspaceState().corpus).toEqual(wideCorpus(42).corpus);
+      expect(initialWorkspaceState().activeProgram).toBe(DEFAULT_PROGRAM); // unchanged by corpus choice
+    });
   });
 });
 
