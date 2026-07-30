@@ -24,17 +24,36 @@ const BRIDGE = path.join(HERE, 'ts-bridge.ts');
 const OUT_ROOT = path.join(HERE, 'out');
 const EVALS_DIR = path.join(ROOT, 'docs', 'superpowers', 'evals');
 
+/** P7 (task-9 review round 3): the pre-fix version picked the newest MANIFEST among every run
+ *  directory, silently skipping over any newer directory that had none — a run that crashed before
+ *  writing one (a throw outside the session loop: `startViteOrDry`, `waitForHttp`, `spawnBrowser`;
+ *  or a Ctrl-C) left no trace of that skip, so a bare `node scripts/battery/summarize.mjs` quietly
+ *  graded and published the PREVIOUS run's numbers under TODAY's date, with no banner and no way to
+ *  tell from the doc alone. Now: find the newest run DIRECTORY (its name is an ISO timestamp —
+ *  `main()`'s own `runId` — so lexicographic sort is chronological), and REFUSE outright if that
+ *  specific directory has no manifest, rather than silently falling back to an older one. */
 function findLatestManifest() {
   let runDirs;
   try { runDirs = readdirSync(OUT_ROOT); } catch {
     throw new Error(`no runs found under ${OUT_ROOT} — run scripts/battery/run.mjs first`);
   }
-  const withManifest = runDirs
-    .map((d) => path.join(OUT_ROOT, d, 'manifest.json'))
-    .filter((p) => { try { return statSync(p).isFile(); } catch { return false; } })
-    .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
-  if (!withManifest.length) throw new Error(`no manifest.json found under ${OUT_ROOT} — run scripts/battery/run.mjs first`);
-  return withManifest[0];
+  const dirsWithStat = runDirs
+    .map((d) => ({ name: d, dir: path.join(OUT_ROOT, d) }))
+    .filter((e) => { try { return statSync(e.dir).isDirectory(); } catch { return false; } })
+    .sort((a, b) => b.name.localeCompare(a.name)); // ISO-timestamp names sort chronologically
+  if (!dirsWithStat.length) throw new Error(`no runs found under ${OUT_ROOT} — run scripts/battery/run.mjs first`);
+  const newest = dirsWithStat[0];
+  const manifestPath = path.join(newest.dir, 'manifest.json');
+  try { if (!statSync(manifestPath).isFile()) throw new Error('not a file'); } catch {
+    throw new Error(
+      `the newest run directory (${path.relative(ROOT, newest.dir)}) has no manifest.json — it did ` +
+      `not finish far enough to write one (a crash before the session loop, or an interrupted run). ` +
+      `Refusing to fall back to an OLDER run's manifest and grade it under today's date. Pass a ` +
+      `manifest path explicitly if you really want to re-grade a specific earlier run: ` +
+      `node scripts/battery/summarize.mjs path/to/manifest.json`,
+    );
+  }
+  return manifestPath;
 }
 
 function pct(rate) {
@@ -129,12 +148,15 @@ queued-text flush, a joint-system number, not model latency); "Cold-start" is th
 reported on its own rather than silently discarded. A cell whose sessions all failed before a
 timeable first turn landed shows \`n/a\` for both, honestly, rather than a manufactured zero.
 **"Runs" (per-cell table above) and "Sessions" (this table) are NOT the same count** (N7, task-9
-review round 2): "Runs" counts EXPORT FILES — one per cell — but each export can hold several
-telemetry \`session_start\`s, because a mid-session program swap reconnects (App.tsx's
-\`activeProgram\` effect) and \`scopeToArm\` opens a fresh cold slot on every one. A live default
-cell drives ~15 program swaps, so "Sessions" can run an order of magnitude ahead of "Runs" — e.g.
-\`Runs=3, Sessions=48\` is one cell whose three exports together reconnected 48 times, not a
-typo. Expect most turns in a live cell to classify "cold-start" for exactly this reason._
+review round 2; corrected P6, round 3 — the previous wording claimed "Runs" is always one per
+cell, which is false): "Runs" counts EXPORT FILES fed into that cell — the pilot plan gives a live
+cell THREE (one per repeat), not one. "Sessions" counts telemetry \`session_start\`s summed across
+every one of those runs, because a mid-session program swap reconnects (App.tsx's \`activeProgram\`
+effect) and \`scopeToArm\` opens a fresh cold slot on every one. A single live default RUN
+(one session, the full 28-row default-corpus utterance set) reconnects roughly 16 times on its
+own — so a 3-run cell's Sessions total is roughly 3 x that, not 3 x 1: \`Runs=3, Sessions=48\` is
+one real cell whose three exports reconnected 48 times BETWEEN them, not a typo and not "16 per
+cell". Expect most turns in a live cell to classify "cold-start" for exactly this reason._
 
 ## Probe verdicts (winsWhen, register/shell registries)
 

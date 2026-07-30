@@ -53,9 +53,19 @@ interface Manifest {
   createdAt: string;
   // N2 (task-9 review round 2, Important): optional so a round-1-shaped manifest (no abort fields
   // at all) still parses — `aborted`/`abortReason`/`plannedSessions` are absent entirely on those,
-  // not `false`/`null`/undefined, and this reads that absence the same honest way (see `grade`'s
-  // own handling below: `manifest.aborted` un-set is treated as a normal completion, never guessed
-  // at as an abort).
+  // not `false`/`null`/undefined. `aborted` un-set is read honestly (see `grade`'s own handling
+  // below: treated as `false`, which is TRUE for every manifest round-1's code could have written
+  // — it never had a concept of an abort marker to omit).
+  //
+  // P6 (task-9 review round 3, corrected — this comment previously claimed `plannedSessions`'s
+  // fallback was equally honest; it is not): `grade`'s `manifest.plannedSessions ?? entries.length`
+  // MANUFACTURES a value for an old manifest lacking the field — it renders as "N of N planned"
+  // (a completeness claim) rather than "unknown planned count". Left as a documented, harmless gap
+  // rather than widened into a real tri-state (present / absent-but-inferrable / genuinely
+  // unknown): no round-1-shaped manifest survives anywhere in this repo (`scripts/battery/out/` is
+  // gitignored, and `run.mjs` has written this field unconditionally since round 2), so the
+  // fallback is dead code on every manifest this codebase can actually produce today — this note
+  // exists so a future reader does not mistake the fallback for a considered "unknown" case.
   aborted?: boolean;
   abortReason?: string | null;
   plannedSessions?: number;
