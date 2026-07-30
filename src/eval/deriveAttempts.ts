@@ -17,14 +17,27 @@
 // file's shape): for a normal tool-call exchange, the real app pushes the `action` event BEFORE
 // the `turn` event that reports it — `handleVoiceToolCall`'s `ack()` calls `telemetry.action(...)`
 // and only THEN closes the turn (`pushTurn(closeTurn(...))`), because the decision is known before
-// the ack that settles the turn fires. So in ARRAY order, `action` precedes its own `turn`, even
-// though the turn's `t` field (its own open time) is chronologically earlier. Rule 1's "attempt
-// opens on a turn event" describes the CONCEPTUAL open (the utterance that starts it); it does not
-// mean the `turn` TelemetryEvent is the first thing this module sees for that exchange. The state
-// machine below is therefore built to be agnostic to which of `action`/`turn` a given exchange's
-// events arrive in: signals are folded into a `Pending` accumulator that may not yet have an
-// identity (id/askedAt/request), and a `turn` event supplies that identity the first time it is
-// missing, whichever order things actually arrived in.
+// the ack that settles the turn fires. So in ARRAY order, `action` precedes its own `turn`. Rule
+// 1's "attempt opens on a turn event" describes the CONCEPTUAL open (the utterance that starts
+// it); it does not mean the `turn` TelemetryEvent is the first thing this module sees for that
+// exchange. The state machine below is therefore built to be agnostic to which of `action`/`turn`
+// a given exchange's events arrive in: signals are folded into a `Pending` accumulator that may
+// not yet have an identity (id/askedAt/request), and a `turn` event supplies that identity the
+// first time it is missing, whichever order things actually arrived in.
+//
+// CORRECTED (fix round 1, C1 — the first version of this comment had the causality backwards):
+// the exported `turn` event's `t` is NOT its open time. `telemetry.push()` stamps every event's
+// `t` as `Date.now() - startedAt` AT THE MOMENT the pusher calls it — and `telemetry.turn()` is
+// called with no `t` argument at all (App.tsx's own comment: "ClosedTurn.t is absolute epoch ms
+// here, and nothing reads it: telemetry.turn() takes no `t`"). So the exported `t` is close to
+// SETTLEMENT time, same clock family as the `action` event that resolved it (confirmed live: an
+// `action()` call, a busy-wait, then `turn()` — the turn's exported `t` came out LATER, not
+// earlier). `askedAt` below is still sourced from this `t` — it is the best per-exchange
+// timestamp this schema exports, but it is a settle-adjacent value, not a true open time; this is
+// a disclosed schema limitation (the true open time lives only in the ephemeral `OpenTurn` inside
+// App.tsx and is never exported). Because of this, `askedAt` is NEVER used to compute `durationMs`
+// — see `settle()` below, which sources duration from `turn.settledMs` instead: that field is
+// computed INSIDE turns.ts's `closeTurn`, from the true open time, before it gets lost on export.
 //
 // DISCLOSED LIMITATION: because a `turn` event with outcome `tool_call` and nothing else attached
 // is genuinely ambiguous — it is the same shape whether the tool was unknown/hallucinated (nothing
@@ -63,11 +76,17 @@ interface Pending {
                                    // set, only a subsequent `turn` event (or the final boundary)
                                    // still needs to fire to push it, since `turn` is what carries
                                    // the identity when an action arrived before its own turn event
-  lastT: number;                  // MAX `t` seen touching this window (not "last written" — a
-                                   // `turn` event's own `t` is its OPEN time, chronologically
-                                   // EARLIER than the action that resolved it in real streams; a
-                                   // plain overwrite would corrupt durationMs) — passed through to
-                                   // durationMs only, per the task-3 brief; never used to decide outcomes
+  lastT: number;                  // MAX `t` seen touching this window — used ONLY as the identity
+                                   // fallback in `settle()` for a malformed stream with no `turn`
+                                   // event at all; never used to compute durationMs (see the
+                                   // file-header C1 note) and never used to decide outcomes
+  settledMs: number | null;       // the most recent `turn` event's own `settledMs` — computed
+                                   // inside turns.ts from the TRUE open time, so (unlike `askedAt`)
+                                   // it survives export uncorrupted. Sourced for `durationMs`
+                                   // directly; for a multi-turn attempt (an ask flow) this is only
+                                   // the RESOLVING turn's own open-to-settle span, not the whole
+                                   // attempt's ask-to-resolution length — the schema exports no
+                                   // event that would let this module reconstruct the latter.
 }
 
 export function deriveAttempts(events: TelemetryEvent[]): Attempt[] {
@@ -86,7 +105,7 @@ export function deriveAttempts(events: TelemetryEvent[]): Attempt[] {
     id: null, askedAt: null, request: null, program: currentProgram, arm: currentArm,
     verb: null, turns: 0, corrections: 0, undos: 0, witnessed: false, committed: false,
     correctedBeforeCommit: false, askAnswered: false, rejectedPending: false,
-    sawAction: false, decided: null, lastT: 0,
+    sawAction: false, decided: null, lastT: 0, settledMs: null,
   });
   const ensurePending = (): Pending => { if (!pending) pending = blank(); return pending; };
 
@@ -114,6 +133,13 @@ export function deriveAttempts(events: TelemetryEvent[]): Attempt[] {
     if (!p.sawAction) return nothingHappened;
     return { outcome: 'ungradeable', reason: 'ambiguous-boundary' }; // rule 9 — never guessed
   };
+  // M1: `refused-honestly` was considered and rejected for this case (a `tool_call` turn with no
+  // `action` event at all — e.g. the M4 unknown/hallucinated-tool ack path, which answers the
+  // model honestly but never goes through validate.ts's gate). Rejected because `refused-honestly`
+  // is rule 5's outcome for a GRADED refusal — an `action` event with `decision: 'rejected'`, the
+  // gate's own `{error}` verdict. A hallucinated tool name never reaches that gate at all; calling
+  // it "refused" would credit the gate for a decision it never made. `ungradeable` says, correctly,
+  // that this module cannot tell from the ontology it has whether the system behaved well here.
   const TOOL_CALL_NOTHING = { outcome: 'ungradeable' as const, reason: 'tool-call-without-action' };
   const SPEECH_NOTHING = { outcome: 'abandoned' as const, reason: null }; // rule 7, the survivorship fix
 
@@ -133,7 +159,12 @@ export function deriveAttempts(events: TelemetryEvent[]): Attempt[] {
       corrections: p.corrections,
       undos: p.undos,
       witnessed: p.witnessed,
-      durationMs: p.lastT - (p.askedAt ?? p.lastT),
+      // C1 fix: NOT `lastT - askedAt` (both are settle-adjacent exported timestamps, so that
+      // subtraction collapsed to ~0 for nearly every ordinary attempt). `turn.settledMs` is
+      // computed inside turns.ts from the true open time and survives export correctly; when no
+      // turn ever settled this window (transcription_lost/speech_only/no_response, or a boundary
+      // close with no turn event at all), it stays honestly null rather than fabricated.
+      durationMs: p.settledMs,
       arm: p.arm,
       ungradeableReason: reason,
     });
@@ -174,11 +205,17 @@ export function deriveAttempts(events: TelemetryEvent[]): Attempt[] {
         p.lastT = Math.max(p.lastT, ev.t);
         if (p.id === null) {
           p.id = ev.id;
-          p.askedAt = ev.t;
+          p.askedAt = ev.t; // settle-adjacent, not a true open time — see the file-header C1 note
           p.request = ev.request;
           closeUndoWindow(); // a new utterance ends any pending undo window from a PRIOR attempt
         }
         p.turns += 1;
+        // The most recent turn's own settlement span. For a `rejected`-then-boundary-close
+        // resolution (rule 5, no retry) this is captured HERE, before the window later closes at
+        // `closeAtBoundary` with no turn event of its own to source it from — `ack()` always calls
+        // `closeTurn` with a real `settledAt`, success or failure alike, so a rejected exchange's
+        // turn is genuinely settled even though `decided` stays null until the boundary.
+        p.settledMs = ev.settledMs;
         if (ev.outcome === 'transcription_lost') {
           const { outcome, reason } = resolve(p, TOOL_CALL_NOTHING, 'transcription-lost'); // rule 8
           settle(p, outcome, reason);
@@ -252,7 +289,14 @@ export function deriveAttempts(events: TelemetryEvent[]): Attempt[] {
           pending.lastT = Math.max(pending.lastT, ev.t);
         } else if (undoWindow !== null) {
           // Rule 2: an action the user reverses is a failure that was caught, not a success that
-          // happened to be edited.
+          // happened to be edited. STICKY BY CONSTRUCTION (fix round 1, I1): this branch only ever
+          // sets `a.outcome = 'wrong'`, never un-sets it — a LATER correction in the same window
+          // with `overAgent: false` (a plain ramble edit, not a further undo) still increments
+          // `corrections` but cannot flip a `wrong` verdict back to whatever it was before. A
+          // "last correction wins" rewrite (recomputing `outcome` from just the newest correction
+          // on every event) would silently un-convict an undone commit — see
+          // deriveAttempts.test.ts's two-corrections-one-window test, written specifically to fail
+          // under that rewrite.
           const a = attempts[undoWindow];
           a.corrections += 1;
           if (ev.overAgent) { a.undos += 1; a.outcome = 'wrong'; }

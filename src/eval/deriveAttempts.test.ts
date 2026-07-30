@@ -9,6 +9,16 @@ import { DEFAULT_DIALS } from '../register/registry';
 import type { TelemetryEvent, Arm, SessionConfig } from '../telemetry';
 
 // ---- fixture builders: real TelemetryEvent shapes, nothing invented ----------------------
+//
+// FIXTURE DISCIPLINE (fix round 1, C1): real streams stamp EVERY event's `t` via
+// `telemetry.push`'s own `Date.now() - startedAt` at call time, and `telemetry.turn()` is called
+// with no `t` argument (App.tsx never passes the turn's true open time through) — so a turn
+// event's exported `t` is close to SETTLEMENT time, same clock family as the `action` event that
+// resolved it, and typically slightly LATER (verified live by the round-1 reviewer: `action()`,
+// a busy-wait, then `turn()` — the turn's exported `t` came out later). Every fixture below stamps
+// `turn.t >= action.t` for that reason. The true open-to-settle span lives in `turn.settledMs`
+// (computed inside turns.ts from the real open time, before it is lost on export) — fixtures pass
+// it explicitly wherever `durationMs` is asserted.
 
 const ARM: Arm = { register: 'guided', dials: DEFAULT_DIALS, shell: 'familiar' };
 
@@ -38,21 +48,51 @@ const ask = (t: number, field: string, answered: boolean, viaChip = false): Tele
   ({ t, type: 'unspecified_ask', field, answered, viaChip });
 
 // ==========================================================================================
-// Rule 1 — boundary: opens on a turn, closes on commit; askedAt/durationMs from real `t`s only
+// Rule 1 — boundary: opens on a turn, closes on commit; durationMs sourced from settledMs only
 // ==========================================================================================
 describe('rule 1 — attempt boundary', () => {
-  it('askedAt is the turn\'s own open time; durationMs spans to the resolving action, using the MAX t seen (real streams push `action` before its own `turn` event)', () => {
+  it('askedAt comes from the turn event; durationMs comes from turn.settledMs, not from any t arithmetic', () => {
     const events = [
       sessionStart(0),
       action(180, 'set_heading', 'commit'), // arrives first in array order (ack fires after telemetry.action)
-      turn(120, 't1', 'add a heading', 'tool_call'), // turn.t is its OWN open time — earlier than the action that resolved it
+      turn(185, 't1', 'add a heading', 'tool_call', 50, 40), // turn.t >= action.t; settledMs is turns.ts's own true open-to-settle computation
     ];
     const attempts = deriveAttempts(events);
     expect(attempts).toHaveLength(1);
-    expect(attempts[0].askedAt).toBe(120);
-    expect(attempts[0].durationMs).toBe(60); // 180 - 120, not corrupted by the turn event's own (earlier) t
+    expect(attempts[0].askedAt).toBe(185);
+    expect(attempts[0].durationMs).toBe(40); // from settledMs, NOT (turn.t - askedAt) — see C1
     expect(attempts[0].id).toBe('t1');
     expect(attempts[0].request).toBe('add a heading');
+  });
+
+  it('C1: durationMs is correct even when turn.t is far from any plausible open time — the exported t is settle-adjacent and must never be used for duration math', () => {
+    // Under the OLD (reverted) implementation, durationMs was `lastT - askedAt`, both sourced from
+    // exported `t`s that sit right next to each other in real time — here they are made to sit far
+    // apart on purpose (50000 vs 50010) to prove the point either way: the old code would have
+    // returned ~10 (or 0, since askedAt IS turn.t); the correct code returns exactly `settledMs`,
+    // independent of how close or far the raw `t`s happen to be.
+    const events = [
+      sessionStart(0),
+      action(50000, 'set_heading', 'commit'),
+      turn(50010, 't1', 'add a heading', 'tool_call', 50, 37),
+    ];
+    const attempts = deriveAttempts(events);
+    expect(attempts[0].durationMs).toBe(37);
+  });
+
+  it('durationMs stays null when no turn ever settled the window (a boundary close with no settlement to source)', () => {
+    const events = [
+      sessionStart(0),
+      action(100, 'do_the_impossible', 'rejected'),
+      turn(105, 't1', 'do the impossible thing', 'tool_call', 50, 60), // this turn DID settle (an ack always fires)...
+      sessionStart(9999), // ...but a witness-only window with no settling turn at all stays null:
+      action(9100, 'set_heading', 'witness'),
+      // no turn event at all for this second window — session ends with nothing to source from
+    ];
+    const attempts = deriveAttempts(events);
+    expect(attempts).toHaveLength(2);
+    expect(attempts[0].durationMs).toBe(60); // the rejected exchange's own ack DID settle its turn
+    expect(attempts[1].durationMs).toBeNull(); // no turn event ever arrived for the witness-only window
   });
 });
 
@@ -64,7 +104,7 @@ describe('rule 2 — commit reversed by a correction (overAgent) → wrong', () 
     const events = [
       sessionStart(0),
       action(100, 'set_heading', 'commit'),
-      turn(90, 't1', 'add a heading', 'tool_call'),
+      turn(105, 't1', 'add a heading', 'tool_call', 50, 30),
       correction(150, true), // the user undid it
     ];
     const attempts = deriveAttempts(events);
@@ -78,7 +118,7 @@ describe('rule 2 — commit reversed by a correction (overAgent) → wrong', () 
     const events = [
       sessionStart(0),
       action(100, 'set_heading', 'commit'),
-      turn(90, 't1', 'add a heading', 'tool_call'),
+      turn(105, 't1', 'add a heading', 'tool_call', 50, 30),
       correction(150), // a ramble edit, not blaming the agent
     ];
     const attempts = deriveAttempts(events);
@@ -87,11 +127,30 @@ describe('rule 2 — commit reversed by a correction (overAgent) → wrong', () 
     expect(attempts[0].corrections).toBe(1); // still counted as a correction touching the attempt
   });
 
+  it('I1: sticky — a reversing correction followed by a LATER non-reversing one in the same window does NOT un-flip wrong back to completed', () => {
+    // Written to fail under a "last correction wins" rewrite (recomputing outcome from only the
+    // most recent correction on every event, rather than a one-way flip): that mutation un-convicts
+    // an undone commit the moment a second, unrelated edit lands in the same window — the exact
+    // §5.2 anti-flattery violation rule 2 exists to prevent.
+    const events = [
+      sessionStart(0),
+      action(100, 'set_heading', 'commit'),
+      turn(105, 't1', 'add a heading', 'tool_call', 50, 30),
+      correction(150, true),  // undo #1 — flips to wrong
+      correction(200, false), // an unrelated later edit — must NOT un-flip it
+    ];
+    const attempts = deriveAttempts(events);
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0].outcome).toBe('wrong'); // stays wrong
+    expect(attempts[0].undos).toBe(1); // only the reversing correction counts as an undo
+    expect(attempts[0].corrections).toBe(2); // both corrections are counted
+  });
+
   it('the undo window closes at the next new utterance: a correction after that belongs to nothing gradeable', () => {
     const events = [
       sessionStart(0),
       action(100, 'set_heading', 'commit'),
-      turn(90, 't1', 'add a heading', 'tool_call'),
+      turn(105, 't1', 'add a heading', 'tool_call', 50, 30),
       turn(200, 't2', 'sum this column', 'no_response'), // a genuinely new utterance closes the undo window
       correction(250, true), // arrives too late to convict t1's commit
     ];
@@ -130,7 +189,7 @@ describe('rule 4 — clean commit, no correction, no ask → completed', () => {
     const events = [
       sessionStart(0),
       action(100, 'set_heading', 'commit'),
-      turn(90, 't1', 'add a heading', 'tool_call'),
+      turn(105, 't1', 'add a heading', 'tool_call', 50, 30),
     ];
     const attempts = deriveAttempts(events);
     expect(attempts).toHaveLength(1);
@@ -148,7 +207,7 @@ describe('rule 5 — {error} refusal (action decision: rejected)', () => {
     const events = [
       sessionStart(0),
       action(100, 'do_the_impossible', 'rejected'),
-      turn(90, 't1', 'do the impossible thing', 'tool_call'),
+      turn(105, 't1', 'do the impossible thing', 'tool_call', 50, 20),
     ];
     const attempts = deriveAttempts(events);
     expect(attempts).toHaveLength(1);
@@ -160,9 +219,9 @@ describe('rule 5 — {error} refusal (action decision: rejected)', () => {
     const events = [
       sessionStart(0),
       action(100, 'set_heading', 'rejected'),
-      turn(90, 't1', 'set the heading', 'tool_call'),
+      turn(105, 't1', 'set the heading', 'tool_call', 50, 20),
       action(150, 'set_heading', 'commit'), // the retry
-      turn(140, 't2', 'set the heading, retry', 'tool_call'),
+      turn(155, 't2', 'set the heading, retry', 'tool_call', 50, 25),
     ];
     const attempts = deriveAttempts(events);
     expect(attempts).toHaveLength(1); // one attempt, not two — the retry continues it
@@ -178,10 +237,10 @@ describe('rule 6 — unspecified_ask', () => {
   it('answered, then a commit lands → asked-and-answered', () => {
     const events = [
       sessionStart(0),
-      turn(100, 't1', 'set the heading', 'tool_call'), // the gate asks; no `action` event for ask_content itself
+      turn(100, 't1', 'set the heading', 'tool_call', 50, 15), // the gate asks; no `action` event for ask_content itself
       ask(150, 'heading', true),
       action(250, 'set_heading', 'commit'),
-      turn(240, 't2', 'Quarterly Report', 'tool_call'), // the user's answer, relayed
+      turn(255, 't2', 'Quarterly Report', 'tool_call', 50, 20), // the user's answer, relayed
     ];
     const attempts = deriveAttempts(events);
     expect(attempts).toHaveLength(1);
@@ -193,7 +252,7 @@ describe('rule 6 — unspecified_ask', () => {
   it('never answered → asked-and-dropped, itself a boundary closer', () => {
     const events = [
       sessionStart(0),
-      turn(100, 't1', 'set the heading', 'tool_call'),
+      turn(100, 't1', 'set the heading', 'tool_call', 50, 15),
       ask(150, 'heading', false),
     ];
     const attempts = deriveAttempts(events);
@@ -205,7 +264,7 @@ describe('rule 6 — unspecified_ask', () => {
   it('answered but no commit ever lands before the boundary → abandoned, not asked-and-answered', () => {
     const events = [
       sessionStart(0),
-      turn(100, 't1', 'set the heading', 'tool_call'),
+      turn(100, 't1', 'set the heading', 'tool_call', 50, 15),
       ask(150, 'heading', true),
       // session ends with no commit
     ];
@@ -248,7 +307,7 @@ describe('rule 8 — transcription_lost', () => {
     const events = [
       sessionStart(0),
       action(100, 'set_heading', 'witness'),
-      turn(90, 't1', 'set the heading', 'tool_call'),
+      turn(105, 't1', 'set the heading', 'tool_call', 50, 25),
       turn(200, 't2', '[dropped audio]', 'transcription_lost', null, null),
     ];
     const attempts = deriveAttempts(events);
@@ -266,7 +325,7 @@ describe('rule 9 — ambiguous boundary', () => {
     const events = [
       sessionStart(0),
       action(100, 'set_heading', 'witness'),
-      turn(90, 't1', 'set the heading', 'tool_call'),
+      turn(105, 't1', 'set the heading', 'tool_call', 50, 25),
       // session ends: witnessed, but no commit and no other signal
     ];
     const attempts = deriveAttempts(events);
@@ -290,12 +349,12 @@ describe('the flattery test', () => {
     const events: TelemetryEvent[] = [
       sessionStart(0),
       action(50, 'do_the_impossible', 'rejected'),
-      turn(40, 't1', 'do the impossible thing', 'tool_call'),
+      turn(55, 't1', 'do the impossible thing', 'tool_call', 50, 10),
       sessionStart(1000), // a second session boundary — closes the refusal cleanly before the next exchange
-      turn(1100, 't2', 'set the heading', 'tool_call'),
+      turn(1100, 't2', 'set the heading', 'tool_call', 50, 15),
       ask(1150, 'heading', true),
       action(1250, 'set_heading', 'commit'),
-      turn(1240, 't3', 'Quarterly Report', 'tool_call'),
+      turn(1255, 't3', 'Quarterly Report', 'tool_call', 50, 20),
     ];
     const attempts = deriveAttempts(events);
     expect(attempts).toHaveLength(2);
@@ -316,9 +375,9 @@ describe('the direction test', () => {
     const base: TelemetryEvent[] = [
       sessionStart(0),
       action(100, 'set_heading', 'commit'),
-      turn(90, 't1', 'add a heading', 'tool_call'),
+      turn(105, 't1', 'add a heading', 'tool_call', 50, 20),
       action(300, 'sum_column', 'commit'),
-      turn(290, 't2', 'sum this column', 'tool_call'),
+      turn(305, 't2', 'sum this column', 'tool_call', 50, 20),
     ];
     const withNoise: TelemetryEvent[] = [
       ...base,
@@ -344,7 +403,7 @@ describe('the double-count guard', () => {
       sessionStart(0),
       action(100, 'set_heading', 'witness'), // the witness card is shown
       action(150, 'set_heading', 'commit'),  // the user confirms it — same exchange, no new turn in between
-      turn(90, 't1', 'set the heading', 'tool_call'),
+      turn(155, 't1', 'set the heading', 'tool_call', 50, 40),
     ];
     const attempts = deriveAttempts(events);
     // DECISION (as ordered): a witness never closes the boundary by itself — only the commit that
@@ -363,11 +422,11 @@ describe('determinism', () => {
     const events: TelemetryEvent[] = [
       sessionStart(0),
       action(100, 'set_heading', 'commit'),
-      turn(90, 't1', 'add a heading', 'tool_call'),
+      turn(105, 't1', 'add a heading', 'tool_call', 50, 20),
       correction(150, true),
       turn(300, 't2', 'what does this do', 'speech_only'),
       action(500, 'do_x', 'rejected'),
-      turn(490, 't3', 'do x', 'tool_call'),
+      turn(505, 't3', 'do x', 'tool_call', 50, 15),
     ];
     const snapshot = JSON.parse(JSON.stringify(events));
     const first = deriveAttempts(events);
@@ -385,13 +444,13 @@ describe('arm and program passthrough', () => {
     const events = [
       sessionStart(0, 'excel', ARM),
       action(100, 'set_cell', 'commit'),
-      turn(90, 't1', 'set A1 to 5', 'tool_call'),
+      turn(105, 't1', 'set A1 to 5', 'tool_call', 50, 20),
     ];
     const attempts = deriveAttempts(events);
     expect(attempts[0].program).toBe('excel');
     expect(attempts[0].arm).toBe(ARM);
 
-    const noSession = [action(100, 'set_cell', 'commit'), turn(90, 't1', 'set A1 to 5', 'tool_call')];
+    const noSession = [action(100, 'set_cell', 'commit'), turn(105, 't1', 'set A1 to 5', 'tool_call', 50, 20)];
     const attemptsNoSession = deriveAttempts(noSession);
     expect(attemptsNoSession[0].program).toBeUndefined();
     expect(attemptsNoSession[0].arm).toBeUndefined();
@@ -401,10 +460,10 @@ describe('arm and program passthrough', () => {
     const events = [
       sessionStart(0, 'word'),
       action(100, 'set_heading', 'witness'), // pending, nothing else — would be ambiguous at session end
-      turn(90, 't1', 'set the heading', 'tool_call'),
+      turn(105, 't1', 'set the heading', 'tool_call', 50, 25),
       sessionStart(500, 'excel'), // program swap
       action(600, 'set_cell', 'commit'),
-      turn(590, 't2', 'set A1 to 5', 'tool_call'),
+      turn(605, 't2', 'set A1 to 5', 'tool_call', 50, 20),
     ];
     const attempts = deriveAttempts(events);
     expect(attempts).toHaveLength(2);
@@ -420,15 +479,16 @@ describe('ordering robustness', () => {
     const actionThenTurn: TelemetryEvent[] = [
       sessionStart(0),
       action(180, 'set_heading', 'commit'),
-      turn(120, 't1', 'add a heading', 'tool_call'),
+      turn(185, 't1', 'add a heading', 'tool_call', 50, 40),
     ];
     const turnThenAction: TelemetryEvent[] = [
       sessionStart(0),
-      turn(120, 't1', 'add a heading', 'tool_call'),
+      turn(185, 't1', 'add a heading', 'tool_call', 50, 40),
       action(180, 'set_heading', 'commit'),
     ];
     const a = deriveAttempts(actionThenTurn);
     const b = deriveAttempts(turnThenAction);
     expect(a).toEqual(b);
+    expect(a[0].durationMs).toBe(40);
   });
 });
