@@ -152,6 +152,7 @@ import { EVAL_DECK, deckReduce, initialDeckState, isDeckComplete, isAbandoned, t
 import { armAggregate } from './eval/armAggregate';
 import { capabilityLedger } from './eval/capabilityLedger';
 import { scorecard, guidedControlFromSitting, attemptsForArm, type ScorecardModel } from './eval/scorecard';
+import { currentArmFrom } from './eval/types';
 import { Scorecard } from './eval/ScorecardView';
 import { bootJournal, resetBootMemo } from './journal/boot';
 import { appendEntry, compact, type JournalEntry } from './journal/journal';
@@ -4971,7 +4972,15 @@ export default function App() {
     // with `abandoned: false`, positively asserting "normally completed" about a run that was not.
     if (abandoned) telemetry.evalDeckAbandoned(results.length, EVAL_DECK.length);
     const snap = telemetry.snapshot();
-    const arm = snap.config?.arm;
+    // R1 (fix round 4, reviewer-ruled): the arm the card is BUILT FOR — read off the stream via
+    // `advanceArm` (the same machine `attemptsForArm`/`capabilityLedger`/`scorecard` scope with),
+    // not off `snap.config?.arm`, which is the CONNECT-TIME stamp and is not updated by
+    // `handleSkinSelect` (a shell switch emits `shell_switch` and does not reconnect — spec
+    // `2026-07-28-desktop-metaphor-shell-design.md` §9 requires the live session to survive it).
+    // With the connect-time arm, a sitting that switched shell mid-deck drew a card headlined with
+    // the shell that was no longer on screen, and every trial recorded after the switch was scoped
+    // out of it — present in no card the app could ask for. See `currentArmFrom`'s own doc.
+    const arm = currentArmFrom(snap.events);
     if (!arm) {
       // No session ever started (unreachable in practice — EvalDeck disables Start until
       // `recording`, spec §4b's own I7 fix — but the deck's own reducer is otherwise unaware of

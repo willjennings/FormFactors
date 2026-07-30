@@ -49,9 +49,18 @@
 // `ledger` MUST be computed over the SAME arm-scoped population as `agg`
 // (`capabilityLedger(events, attemptsForArm(attempts, arm), arm)` — the ledger's own pass 2 needs
 // the `arm` argument too, since it reads raw events directly and was never touched by scoping
-// `attempts`). `opts.events` may still be the whole-sitting stream; `eventsForArm` below re-scopes
+// `attempts`). `opts.events` may still be the whole-sitting stream; `scopeToArm` below re-scopes
 // it internally for `latency`/`cost`, because turns carry no `arm` field of their own the way
-// `Attempt` does — only `session_start` boundaries do.
+// `Attempt` does — the arm has to be tracked ACROSS the stream instead. R3 (fix round 4): this
+// paragraph used to end "— only `session_start` boundaries do", which was the claim P2 (round 3)
+// refuted and `scopeToArm`'s own docblock below already contradicted: a `shell_switch` moves the
+// arm too, with no reconnect and therefore no new `session_start`. Two arm boundary types, one
+// state machine (`advanceArm`, ./types.ts), no second opinion in this file.
+//
+// FIX ROUND 4 (reviewer-ruled, R1/R2): the SUBJECT of the card — which arm it is built for and
+// named after — is no longer `SessionConfig.arm` at either call site (see `currentArmFrom` in
+// ./types.ts for why that was wrong and what replaced it), and the cold-start slot is now opened
+// only by a real `session_start`, never by entering scope at a `shell_switch` (see `scopeToArm`).
 
 import type { Arm, TelemetryEvent } from '../telemetry';
 import type { ArmAggregate } from './armAggregate';
@@ -71,6 +80,17 @@ export interface ScorecardModel {
   // of 12 produced a model indistinguishable from one that finished all twelve; the caller's own
   // knowledge of which path it took (`isDeckComplete` vs `isAbandoned`, deck.ts) never reached the
   // model it built. `false` for a normally-completed deck or a non-deck session summary.
+  //
+  // SCOPE, stated because it is the ONE field on this card that is not arm-scoped (R6, fix round 4,
+  // reviewer-ruled — ruled coherent, but undocumented): `abandoned` is SITTING-scoped. There is at
+  // most one deck run per sitting (deck.ts's `deckReduce` 'start' case is idempotent once
+  // `startedAt` is set, so a run cannot be restarted), and it may span arms — the participant can
+  // switch register or shell between cards. So a deck abandoned under Guided marks the card of
+  // whatever arm is current when the card is drawn, Terminal included. That matches `deckSummary`,
+  // which is whole-sitting for the same reason (telemetry.ts's `snapshot()` reconstructs it from
+  // every `eval_card` event, unscoped), and it is the honest answer: the run that was abandoned is
+  // the sitting's only run, and the alternative — hiding the abandonment from every card whose arm
+  // wasn't current at the moment Esc was pressed — is exactly the "absence" spec §5.6 forbids.
   abandoned: boolean;
   goodAt: string[];              // plain-language lines, each ending with (n/n)
   shaky: string[];
@@ -139,86 +159,102 @@ function formatVerdict(label: string, v: ProbeVerdict): string {
   return `${label} — ${v.verdict}: ${v.because}`;
 }
 
-/** Per-session cold-first-turn split (carry-in #2). A single pass over the whole-sitting stream:
- *  `session_start` resets "have we seen this session's first turn yet"; the first `turn` event
- *  touching each session is that session's cold row-1 and is pulled OUT of the warm pool entirely
- *  (never averaged in). Turns with no measurable `firstResponseMs` (no_response/transcription_lost)
- *  contribute nothing numeric either way but still consume their session's cold slot — they WERE
- *  row 1, whether or not they produced a timeable number. */
-function splitColdAndWarmTurns(events: TelemetryEvent[]): {
+/** Everything the arm-scoped `latency`/`cost` blocks need, produced by ONE pass over the
+ *  whole-sitting stream (`scopeToArm` below). Three of the four fields could not be computed
+ *  correctly from the scoped event list alone, which is why this is a scope object rather than a
+ *  filtered array — see the docblock below for each. */
+interface ArmScope {
+  /** The events that happened while `arm` was active — the population `cost` reduces over. */
+  events: TelemetryEvent[];
+  /** In-scope, timeable SESSION-first turns (carry-in #2's cold figure). */
   cold: number[];
+  /** In-scope, timeable non-first turns — the population `medianMs`/`worst` are drawn from. */
   warm: { ms: number; label: string }[];
-} {
-  const cold: number[] = [];
-  const warm: { ms: number; label: string }[] = [];
-  let seenTurnThisSession = false;
-  for (const e of events) {
-    if (e.type === 'session_start') { seenTurnThisSession = false; continue; }
-    if (e.type !== 'turn') continue;
-    const isCold = !seenTurnThisSession;
-    seenTurnThisSession = true;
-    if (e.firstResponseMs === null) continue; // nothing timeable — no_response/transcription_lost
-    if (isCold) cold.push(e.firstResponseMs);
-    else warm.push({ ms: e.firstResponseMs, label: e.request });
-  }
-  return { cold, warm };
+  /** How many of the sitting's SESSIONS this arm was active during (P6/P7 + R2, fix round 4).
+   *  Counted as distinct sessions that contributed an in-scope event, NOT as `session_start`
+   *  boundaries inside the scoped stream: an arm entered mid-session by a shell switch owns real
+   *  turns in a session whose `session_start` belongs to the previous arm, and reporting
+   *  `sessionCount: 0` beside a non-empty latency block (round 3 did) is a card contradicting
+   *  itself. */
+  sessionCount: number;
 }
 
-/** How many `session_start` boundaries the (already arm-scoped, post `eventsForArm`) stream
- *  contains — P6 (fix round 3, corrected): this is called on `armEvents`, never on the raw
- *  whole-sitting `opts.events`, so it counts THIS ARM's sessions, not the sitting's. A sitting with
- *  five sessions of which two belong to this arm reports `sessionCount: 2` here — see P7 for how
- *  the view now states that honestly rather than implying a sitting-wide count. */
-const sessionCount = (events: TelemetryEvent[]): number =>
-  events.filter((e) => e.type === 'session_start').length;
-
-/** N5 (fix round 2, reviewer-ruled) + P2 (fix round 3, reviewer-ruled): scopes the whole-sitting
- *  event stream down to only the events that happened while `arm` was actually active, so
- *  `latency`/`cost` (which reduce directly over events — a `turn`/`session_complete` carries no
- *  `arm` field of its own the way `Attempt` does) cannot attribute one arm's numbers to another's
- *  card. Walks the stream tracking the current arm via the SAME `advanceArm` state machine
- *  `deriveAttempts.ts` and `capabilityLedger.ts` use, rather than session boundaries alone — P2
- *  (round-2 re-review): a `session_start`-only version is blind to a mid-session SHELL switch
- *  (`App.tsx`'s `handleSkinSelect` does not reconnect), so events after such a switch kept scoring
- *  under the PRE-switch shell, silently and uniformly (probe-confirmed: a Terminal sitting that
- *  switched Familiar->Material mid-session reported Material's own trial, deixis miss and slowest
- *  turn all as Familiar's). `advanceArm` also updates on `shell_switch`, so `inScope` is
- *  re-evaluated at both boundary types. An event stream with no `session_start` at all (a
- *  hand-authored fragment) matches nothing and returns `[]` — silence, not a guess. */
-function eventsForArm(events: TelemetryEvent[], arm: Arm): TelemetryEvent[] {
+/** N5 (round 2) + P2 (round 3) + R2 (round 4), all reviewer-ruled: scopes the whole-sitting event
+ *  stream down to the events that happened while `arm` was actually active, so `latency`/`cost`
+ *  (which reduce directly over events — a `turn`/`session_complete` carries no `arm` field of its
+ *  own the way `Attempt` does) cannot attribute one arm's numbers to another's card.
+ *
+ *  ARM BOUNDARIES: walked with the SAME `advanceArm` state machine `deriveAttempts.ts` and
+ *  `capabilityLedger.ts` use, rather than session boundaries alone — P2 (round-2 re-review): a
+ *  `session_start`-only version is blind to a mid-session SHELL switch (`App.tsx`'s
+ *  `handleSkinSelect` does not reconnect, by spec — see `currentArmFrom`), so events after such a
+ *  switch kept scoring under the PRE-switch shell, silently and uniformly (probe-confirmed: a
+ *  Terminal sitting that switched Familiar->Material mid-session reported Material's own trial,
+ *  deixis miss and slowest turn all as Familiar's). An event stream with no `session_start` at all
+ *  (a hand-authored fragment) matches nothing and scopes to empty — silence, not a guess.
+ *
+ *  COLD TURNS (carry-in #2, performance-realism spec §1): classified against the WHOLE-SITTING
+ *  stream, before scoping, and never re-derived from the scoped one. A session's cold row-1 is the
+ *  first `turn` after a `session_start` — the joint-system connect number — and that is a property
+ *  of the SESSION, not of whichever arm happens to be reading. R2 (round 4, a regression this
+ *  fixes): round 3 split cold from warm inside the already-scoped stream, whose first event may be
+ *  a `shell_switch` rather than a `session_start`, so the first turn an arm saw after a shell
+ *  switch was reported to the participant as "cold start (session connect)" and pulled out of that
+ *  arm's median — probe-confirmed at 120 ms on the card the app actually draws, while the sitting's
+ *  real 5000 ms connect turn appeared on no card at all. A shell switch is not a connect. The slot
+ *  is opened ONLY by a `session_start` and is consumed by the next turn in the stream whether or
+ *  not that turn is in scope (it was still row 1) and whether or not it is timeable
+ *  (no_response/transcription_lost contribute nothing numeric but WERE row 1). Consequence, and it
+ *  is the honest one: a connect under Familiar whose first turn happens after a switch to Material
+ *  puts that cold figure on MATERIAL's card — the arm that was actually on screen while it was
+ *  measured — and leaves Familiar with `coldStartMs: null`, rather than dropping it from every
+ *  card or crediting it to an arm that was not running. */
+function scopeToArm(events: TelemetryEvent[], arm: Arm): ArmScope {
   const out: TelemetryEvent[] = [];
+  const cold: number[] = [];
+  const warm: { ms: number; label: string }[] = [];
+  const sessions = new Set<number>();
   let currentArm: Arm | undefined;
   let inScope = false;
+  let sessionIndex = -1;
+  let coldSlotOpen = false;
   for (const e of events) {
+    if (e.type === 'session_start') { sessionIndex += 1; coldSlotOpen = true; }
+    let isCold = false;
+    if (e.type === 'turn') { isCold = coldSlotOpen; coldSlotOpen = false; }
     if (e.type === 'session_start' || e.type === 'shell_switch') {
       currentArm = advanceArm(currentArm, e);
       inScope = sameArm(currentArm, arm);
-      if (inScope) out.push(e);
-      continue;
     }
-    if (inScope) out.push(e);
+    if (!inScope) continue;
+    out.push(e);
+    sessions.add(sessionIndex);
+    if (e.type === 'turn' && e.firstResponseMs !== null) {
+      if (isCold) cold.push(e.firstResponseMs);
+      else warm.push({ ms: e.firstResponseMs, label: e.request });
+    }
   }
-  return out;
+  return { events: out, cold, warm, sessionCount: sessions.size };
 }
 
-function buildLatency(events: TelemetryEvent[]): ScorecardModel['latency'] {
-  const { cold, warm } = splitColdAndWarmTurns(events);
+function buildLatency(scope: ArmScope): ScorecardModel['latency'] {
+  const { cold, warm } = scope;
   const medianMs = lowerMedian(warm.map((w) => w.ms));
   const worst = warm.length
     ? warm.reduce((a, b) => (b.ms > a.ms ? b : a))
     : null;
   const coldStartMs = lowerMedian(cold);
-  return { medianMs, warmN: warm.length, worst, coldStartMs, coldStartN: cold.length, sessionCount: sessionCount(events) };
+  return { medianMs, warmN: warm.length, worst, coldStartMs, coldStartN: cold.length, sessionCount: scope.sessionCount };
 }
 
-function buildCost(events: TelemetryEvent[]): ScorecardModel['cost'] {
-  const { frames, hints } = events.reduce(
+function buildCost(scope: ArmScope): ScorecardModel['cost'] {
+  const { frames, hints } = scope.events.reduce(
     (acc, e) => e.type === 'session_complete'
       ? { frames: acc.frames + e.framesSent, hints: acc.hints + e.hintsSent }
       : acc,
     { frames: 0, hints: 0 },
   );
-  return { frames, hints, sessionCount: sessionCount(events) };
+  return { frames, hints, sessionCount: scope.sessionCount };
 }
 
 function buildComparison(agg: ArmAggregate, arm: Arm, control: ArmAggregate | null | undefined): string {
@@ -397,13 +433,15 @@ export function scorecard(agg: ArmAggregate, ledger: LedgerRow[], deck: CardResu
     ));
   }
 
-  // N5 (fix round 2, reviewer-ruled): `opts.events` is the whole-sitting stream; `eventsForArm`
-  // scopes it to this arm's own sessions before either block reduces over it, so a Terminal-headed
-  // card can no longer report a Guided session's latency/cost under a `Terminal · N trials`
-  // headline (reproduced: `medianMs`/`worst` were Guided's turns while `agg.n` was Terminal's 1).
-  const armEvents = eventsForArm(opts.events, arm);
-  const latency = buildLatency(armEvents);
-  const cost = buildCost(armEvents);
+  // N5 (fix round 2, reviewer-ruled): `opts.events` is the whole-sitting stream; `scopeToArm`
+  // scopes it to the stretches where this arm was active before either block reduces over it, so a
+  // Terminal-headed card can no longer report a Guided session's latency/cost under a
+  // `Terminal · N trials` headline (reproduced: `medianMs`/`worst` were Guided's turns while
+  // `agg.n` was Terminal's 1). One pass, shared by both blocks (and by the cold/warm split, which
+  // R2 in round 4 moved out of the scoped stream and back onto the sitting's session boundaries).
+  const scope = scopeToArm(opts.events, arm);
+  const latency = buildLatency(scope);
+  const cost = buildCost(scope);
   const comparison = buildComparison(agg, arm, opts.control);
 
   // M7 (fix round 1): `deckTallyOf` takes the `CardResult[]` this module actually has, rather than

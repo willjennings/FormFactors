@@ -49,6 +49,10 @@ export function Scorecard({ model }: { model: ScorecardModel }) {
         // distinctly at the moment it happens, but this panel can be read later (or reopened) —
         // spec §5.6's "abandonment is data, not absence" belongs on the persistent card too, not
         // only the transient feedback around it.
+        // SCOPE (R6, fix round 4): this banner is the one line on the card that speaks for the
+        // whole SITTING rather than for the headline's arm — a deck abandoned under a different
+        // register/shell still raises it here. Deliberate: there is at most one deck run per
+        // sitting and it may span arms. Full rationale at `ScorecardModel.abandoned`'s own doc.
         <p className="text-[10px] font-mono uppercase tracking-widest text-amber-600 dark:text-amber-400">
           Abandoned — closed before the deck finished
         </p>

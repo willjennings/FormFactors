@@ -484,7 +484,10 @@ export function deriveAttempts(events: TelemetryEvent[]): Attempt[] {
       default:
         break; // no grading signal in this module: deixis, grounding, map, fill, gap_question,
                // readback, stall, session_complete, error, guidance, mission_*, register_switch,
-               // pin, combine_tray, artifact_created, eval_card. `shell_switch` moved OUT of this
+               // pin, combine_tray, artifact_created, eval_card, eval_deck_abandoned (R4, fix
+               // round 4: added — it landed in the same commit as the `shell_switch` move below and
+               // was left out of a list that reads as exhaustive; like `eval_card` it records what
+               // the DECK did, never how an attempt graded). `shell_switch` moved OUT of this
                // list (fix round 3, P2) — it has its own case above; it carries no GRADING signal
                // either, but it does carry an arm-attribution one, which is why it is no longer
                // lumped in as inert. `eval_card` in particular is a

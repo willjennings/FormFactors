@@ -10,7 +10,7 @@ import { EVAL_DECK, type CardResult } from './deck';
 import { DEFAULT_DIALS } from '../register/registry';
 import type { Arm, TelemetryEvent, SessionConfig } from '../telemetry';
 import type { LedgerRow } from './capabilityLedger';
-import type { Attempt } from './types';
+import { currentArmFrom, type Attempt } from './types';
 
 // ---- fixture builders -----------------------------------------------------------------------
 
@@ -600,9 +600,9 @@ describe('N5 — latency and cost are scoped to the arm under test, not the whol
     const materialArm: Arm = { register: 'terminal', dials: DEFAULT_DIALS, shell: 'material' };
     const events: TelemetryEvent[] = [
       sessionStart(0, familiarArm),
-      turn(10, 'f1', 'under familiar', 'tool_call', 100),        // Familiar's cold row-1
+      turn(10, 'f1', 'under familiar', 'tool_call', 100),        // the SESSION's cold row-1
       { t: 20, type: 'shell_switch', from: 'familiar', to: 'material', midSession: true },
-      turn(30, 'm1', 'under material', 'tool_call', 4900),        // Material's own cold row-1 (new arm, fresh cold slot)
+      turn(30, 'm1', 'under material', 'tool_call', 4900),        // a WARM turn — no connect happened here
     ];
     const aggFamiliar = mkAgg(1, { completion: 1 });
     const modelFamiliar = scorecard(aggFamiliar, [], [], familiarArm, opts(events));
@@ -611,9 +611,82 @@ describe('N5 — latency and cost are scoped to the arm under test, not the whol
     expect(modelFamiliar.latency.medianMs).toBeNull(); // one turn total, and it's the cold one
     expect(modelFamiliar.latency.worst).toBeNull();
 
+    // R2 (fix round 4, reviewer-ruled — a REGRESSION this test used to pin as correct). Round 3
+    // asserted `coldStartMs === 4900` here, commented "Material's own cold row-1 (new arm, fresh
+    // cold slot)". That rule is wrong: a shell switch reconnects nothing (that is the whole premise
+    // of the fix above), so no turn after it can be a session connect. Material's post-switch turn
+    // is a WARM turn — it belongs in Material's median, and Material has no cold figure at all
+    // because the only connect this sitting made had already spent its row-1 under Familiar.
     const aggMaterial = mkAgg(1, { completion: 1 });
     const modelMaterial = scorecard(aggMaterial, [], [], materialArm, opts(events));
-    expect(modelMaterial.latency.coldStartMs).toBe(4900);
+    expect(modelMaterial.latency.coldStartMs).toBeNull();
+    expect(modelMaterial.latency.coldStartN).toBe(0);
+    expect(modelMaterial.latency.medianMs).toBe(4900);
+    expect(modelMaterial.latency.warmN).toBe(1);
+    expect(modelMaterial.latency.worst).toEqual({ ms: 4900, label: 'under material' });
+    // …and it is not a card claiming to cover zero sessions: the arm was live during session 1.
+    expect(modelMaterial.latency.sessionCount).toBe(1);
+    expect(modelMaterial.cost.sessionCount).toBe(1);
+  });
+
+  // R2 (fix round 4, reviewer-ruled): the re-review's Probe C, verbatim — connect under Familiar,
+  // switch to Material BEFORE the first turn, one 5000 ms connect turn there, switch back, then two
+  // warm turns. Round 3 reported Familiar's 120 ms warm turn as "cold start (session connect)" and
+  // pulled it out of Familiar's own median, while the sitting's real 5000 ms connect turn appeared
+  // on no card. The cold slot belongs to the SESSION and is spent by the session's first turn,
+  // whichever arm was on screen when it happened.
+  it('probe C — the connect turn lands on the arm that was live when it happened, and nowhere else', () => {
+    const familiarArm: Arm = { register: 'terminal', dials: DEFAULT_DIALS, shell: 'familiar' };
+    const materialArm: Arm = { register: 'terminal', dials: DEFAULT_DIALS, shell: 'material' };
+    const events: TelemetryEvent[] = [
+      sessionStart(0, familiarArm),
+      { t: 5, type: 'shell_switch', from: 'familiar', to: 'material', midSession: true },
+      turn(10, 'm1', 'the connect turn', 'tool_call', 5000),      // the session's row 1, under Material
+      { t: 20, type: 'shell_switch', from: 'material', to: 'familiar', midSession: true },
+      turn(30, 'f1', 'warm one', 'tool_call', 120),
+      turn(40, 'f2', 'warm two', 'tool_call', 130),
+    ];
+    const modelFamiliar = scorecard(mkAgg(2, { completion: 1 }), [], [], familiarArm, opts(events));
+    expect(modelFamiliar.latency.coldStartMs).toBeNull();   // round 3 read 120 here — a warm turn
+    expect(modelFamiliar.latency.coldStartN).toBe(0);
+    expect(modelFamiliar.latency.medianMs).toBe(120);        // …and 120 was missing from this median
+    expect(modelFamiliar.latency.warmN).toBe(2);
+
+    const modelMaterial = scorecard(mkAgg(1, { completion: 1 }), [], [], materialArm, opts(events));
+    expect(modelMaterial.latency.coldStartMs).toBe(5000);    // the connect turn is on exactly one card
+    expect(modelMaterial.latency.coldStartN).toBe(1);
+    expect(modelMaterial.latency.warmN).toBe(0);
+  });
+
+  // R2 (fix round 4): a turn that is row-1 of a session but has no timeable first response still
+  // SPENDS the session's cold slot (round 3's documented doctrine, preserved through the rewrite) —
+  // the next turn is warm, not a second cold start.
+  it('an untimeable row-1 turn still spends its session cold slot', () => {
+    const events: TelemetryEvent[] = [
+      sessionStart(0),
+      turn(10, 't1', 'lost transcript', 'transcription_lost', null),
+      turn(20, 't2', 'the next one', 'tool_call', 300),
+    ];
+    const model = scorecard(mkAgg(2, { completion: 1 }), [], [], ARM, opts(events));
+    expect(model.latency.coldStartMs).toBeNull();
+    expect(model.latency.coldStartN).toBe(0);
+    expect(model.latency.medianMs).toBe(300);
+    expect(model.latency.warmN).toBe(1);
+  });
+
+  // R2 (fix round 4): cold start means SESSION CONNECT. A stream fragment with no `session_start`
+  // at all scopes to nothing (there is no arm to match), and a scoped stream entered at a shell
+  // boundary never opens a cold slot of its own — the only opener is a real `session_start`.
+  it('no session_start anywhere means no card, and never an invented cold start', () => {
+    const events: TelemetryEvent[] = [
+      { t: 0, type: 'shell_switch', from: 'familiar', to: 'material', midSession: true },
+      turn(10, 't1', 'orphan turn', 'tool_call', 900),
+    ];
+    const model = scorecard(mkAgg(1, { completion: 1 }), [], [], ARM, opts(events));
+    expect(model.latency.coldStartMs).toBeNull();
+    expect(model.latency.coldStartN).toBe(0);
+    expect(model.latency.medianMs).toBeNull();
+    expect(model.latency.sessionCount).toBe(0);
   });
 });
 
@@ -658,5 +731,44 @@ describe('N2 — ScorecardModel.abandoned reflects opts.abandoned, defaulting to
     const agg = mkAgg(3, { completion: 1 });
     const model = scorecard(agg, [], [], ARM, opts([], { abandoned: true }));
     expect(model.abandoned).toBe(true);
+  });
+});
+
+// ==========================================================================================
+// R1 (fix round 4, reviewer-ruled — the Important finding): the SUBJECT of a card (which arm it is
+// built for and named after) is now derived from the stream by `currentArmFrom`, the same
+// `advanceArm` machine the three walkers scope with, instead of from the connect-time
+// `SessionConfig.arm` that `shellSwitch` never updates. Unit-pinned here; pinned end-to-end through
+// the real singleton in telemetry.test.ts's own R1 block.
+// ==========================================================================================
+describe('R1 — currentArmFrom reads the arm in effect at the END of the stream', () => {
+  const familiarArm: Arm = { register: 'terminal', dials: DEFAULT_DIALS, shell: 'familiar' };
+  const materialArm: Arm = { register: 'terminal', dials: DEFAULT_DIALS, shell: 'material' };
+
+  it('a mid-session shell switch moves the subject arm, with no reconnect in the stream', () => {
+    const events: TelemetryEvent[] = [
+      sessionStart(0, familiarArm),
+      turn(10, 'f1', 'under familiar', 'tool_call', 100),
+      { t: 20, type: 'shell_switch', from: 'familiar', to: 'material', midSession: true },
+    ];
+    expect(currentArmFrom(events)).toEqual(materialArm);
+    // …and the card built for it is Material's, carrying Material's own scope.
+    const model = scorecard(mkAgg(1, { completion: 1 }), [], [], currentArmFrom(events)!, opts(events));
+    expect(model.headline.startsWith('Terminal · Material')).toBe(true);
+  });
+
+  it('the LAST session_start wins over an earlier one, and a later shell switch over that', () => {
+    const events: TelemetryEvent[] = [
+      sessionStart(0, materialArm),
+      sessionStart(10, familiarArm),
+      { t: 20, type: 'shell_switch', from: 'familiar', to: 'material', midSession: true },
+      { t: 30, type: 'shell_switch', from: 'material', to: 'familiar', midSession: true },
+    ];
+    expect(currentArmFrom(events)).toEqual(familiarArm);
+  });
+
+  it('a stream with no session_start has no arm — undefined, never a guess', () => {
+    expect(currentArmFrom([])).toBeUndefined();
+    expect(currentArmFrom([{ t: 0, type: 'shell_switch', from: 'familiar', to: 'material', midSession: true }])).toBeUndefined();
   });
 });

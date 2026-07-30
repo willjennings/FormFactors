@@ -106,3 +106,29 @@ export function advanceArm(current: Arm | undefined, ev: TelemetryEvent): Arm | 
   if (ev.type === 'shell_switch') return current ? { ...current, shell: ev.to } : current;
   return current;
 }
+
+/** R1 (fix round 4, reviewer-ruled — the Important finding): the arm a stream ENDS in, i.e. the one
+ *  actually in effect at the moment a card is drawn. `advanceArm` folded over the whole sitting.
+ *
+ *  This exists because the SUBJECT of a scorecard — the arm the card is scoped TO and named after —
+ *  was read from `SessionConfig.arm` (`telemetry.ts`'s `this.config`, mirrored at App.tsx's
+ *  `snap.config?.arm`), which is stamped at CONNECT and never updated: `shellSwitch`
+ *  (`telemetry.ts`) pushes an event and touches nothing else, because a shell switch deliberately
+ *  does not reconnect (`docs/superpowers/specs/2026-07-28-desktop-metaphor-shell-design.md` §9:
+ *  "switch shells mid-session and confirm the session survives"). So after a mid-session shell
+ *  switch the three stream-walkers that use `advanceArm` (deriveAttempts, capabilityLedger,
+ *  scorecard's own scoping) had moved on while the subject had not: the card was built FOR the
+ *  pre-switch arm, headlined with a shell no longer on screen, and every post-switch trial, ledger
+ *  row and turn was silently absent from it — the only card the app could ask for. Both call sites
+ *  now derive the subject here instead, from the same machine the walkers use, so subject and scope
+ *  cannot disagree.
+ *
+ *  Returns `undefined` for a stream with no `session_start` (nothing was ever recorded to have an
+ *  arm) — callers treat that exactly as they treated an absent `config.arm`: no card, said plainly.
+ *  For a sitting that never switched shells this is byte-identical to `config.arm`, since the
+ *  current run's `session_start` carries that very object. */
+export function currentArmFrom(events: TelemetryEvent[]): Arm | undefined {
+  let arm: Arm | undefined;
+  for (const e of events) arm = advanceArm(arm, e);
+  return arm;
+}

@@ -39,6 +39,7 @@ import { deriveAttempts } from './eval/deriveAttempts';
 import { capabilityLedger } from './eval/capabilityLedger';
 import { armAggregate } from './eval/armAggregate';
 import { scorecard, guidedControlFromSitting, attemptsForArm } from './eval/scorecard';
+import { currentArmFrom } from './eval/types';
 import type { CardResult } from './eval/deck';
 
 export type FormFactor = 'mobile' | 'tablet' | 'desktop';
@@ -459,7 +460,17 @@ class Telemetry {
     // block) read expecting the full sitting. The scorecard below needs its OWN, arm-scoped copy —
     // see the N1 comment at its call.
     const ledger = capabilityLedger(events, attempts);
-    const arm = this.config?.arm;
+    // R1 (fix round 4, reviewer-ruled — the Important finding): the arm this card is BUILT FOR,
+    // derived from the stream by the same `advanceArm` machine `deriveAttempts`/`capabilityLedger`/
+    // `scorecard` scope with — NOT `this.config.arm`, which is stamped at connect (App.tsx's
+    // `telemetry.start()` inside the provider's `onOpen`) and is never updated by `shellSwitch`
+    // (which pushes an event and nothing else, because a shell switch deliberately does not
+    // reconnect). While the subject came from `config`, a sitting that switched shell mid-session
+    // built a card for the PRE-switch arm: the headline named a shell no longer on screen and every
+    // post-switch trial, ledger row and turn fell outside the scope, appearing on no card at all.
+    // Identical to `config.arm` for any sitting that never switched shell. `config` itself is still
+    // reported verbatim below — it is the current run's connect record, and that is what it says.
+    const arm = currentArmFrom(events);
     let scorecardModel = null;
     if (arm) {
       // C1 (fix round 1, reviewer-ruled): `attempts` spans the WHOLE sitting (every
@@ -488,8 +499,11 @@ class Telemetry {
       // P4 (fix round 3, reviewer-ruled): derived from the SAME durable event the abandon path now
       // pushes (`evalDeckAbandoned`, following `mission_abandoned`'s precedent) — not from any
       // live-App-only state this class has no access to. At most one such event can ever exist in
-      // a sitting (the deck cannot be restarted once started — deck.ts's own header), so presence
-      // alone is the whole check.
+      // a sitting (the deck cannot be restarted once started — R5, fix round 4, corrected pointer:
+      // that invariant lives in `deckReduce`'s `'start'` case, which returns `s` unchanged once
+      // `startedAt !== null`, NOT in deck.ts's file header, which says nothing about restarting),
+      // so presence alone is the whole check. Note the scope this gives the field: WHOLE SITTING,
+      // not this arm — see `ScorecardModel.abandoned`'s own doc for why that is the right answer.
       const abandoned = events.some((e) => e.type === 'eval_deck_abandoned');
       scorecardModel = scorecard(agg, scopedLedger, deck, arm, {
         events, control, backend: this.config?.backend, unrecorded: opts?.unrecorded, abandoned,

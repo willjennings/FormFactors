@@ -452,6 +452,66 @@ describe('N16 — snapshot().scorecard is arm-scoped end-to-end across a real re
 });
 
 // ==========================================================================================
+// R1 (fix round 4, reviewer-ruled — the Important finding): round 3 gave the three stream-walkers
+// one shared arm machine (`advanceArm`) and left the SUBJECT arm — the one the card is built for
+// and named after — on the connect-time `SessionConfig.arm`, which `shellSwitch` never updates.
+// The reviewer's Probe A2, on this same real singleton: a Terminal sitting that switched
+// Familiar->Material mid-session drew `Terminal · Familiar · Gemini · 1 trial` with `watch: []` —
+// Material's trial, Material's deixis miss and Material's slow turn in NO card at all, under a
+// headline naming a shell no longer on screen. Reproduced here as a test, end-to-end through
+// `snapshot()`. NOTE this is a SHELL switch, which by spec does not reconnect
+// (`2026-07-28-desktop-metaphor-shell-design.md` §9, "switch shells mid-session and confirm the
+// session survives") — so there is exactly one `session_start` in this stream, and the subject arm
+// can only come from the stream itself.
+// ==========================================================================================
+describe('R1 — snapshot().scorecard is scoped to the arm CURRENT at snapshot time, across a mid-session shell switch', () => {
+  const dials = { honest: false, autonomy: 'confirm' as const, feedback: 'earcon' as const, confirmGoals: false, markings: false, chipDensity: 'full' as const, traceView: 'hidden' as const, teaching: 'off' as const, proactivity: 'never' as const };
+  const device = { width: 1280, height: 800, touch: false, pointer: 'fine', formFactor: 'desktop' as const, ua: 'test' };
+
+  it('the card names Material and carries Material\'s trial, miss and turn — none of it silently absent', () => {
+    telemetry.reset();
+    telemetry.start({ backend: 'gemini', autonomy: 'auto-safe', feedback: 'earcon', program: 'word', honest: false, device,
+      arm: { register: 'terminal', dials, shell: 'familiar' } });
+    // One completed attempt under Familiar (the connect shell), including the session's cold row-1.
+    telemetry.turn('f1', 'typed', 'bold the title', 'tool_call', 100, 400);
+    telemetry.action('set_bold', 'mutate', 'commit');
+
+    telemetry.shellSwitch('familiar', 'material', true);   // no reconnect: the session survives
+
+    // One completed attempt under Material, plus a deixis miss only Material's card may carry.
+    telemetry.turn('m1', 'typed', 'sum this column', 'tool_call', 4900, 5200);
+    telemetry.deixis('that', 'B2', 'C4', 'high');
+    telemetry.action('column_total', 'mutate', 'commit');
+
+    const snap = telemetry.snapshot();
+    const model = snap.scorecard;
+    expect(model).not.toBeNull();
+    // The connect-time config still says Familiar — correct, that IS what it connected as. The card
+    // must not: it is drawn for the arm on screen.
+    expect(snap.config?.arm?.shell).toBe('familiar');
+    expect(model!.headline).toBe('Terminal · Material · Gemini · 1 trial');
+    // Material's own deixis miss reaches the card it belongs to (round 3: it reached no card).
+    expect(model!.watch.some((l) => l.includes('wrong referent'))).toBe(true);
+    // Material's 4900 ms turn is on the card too — and as a WARM turn, since no connect happened at
+    // the shell switch (R2). The session's real cold row-1 (100 ms) belongs to Familiar.
+    expect(model!.latency.medianMs).toBe(4900);
+    expect(model!.latency.warmN).toBe(1);
+    expect(model!.latency.coldStartMs).toBeNull();
+    expect(model!.latency.sessionCount).toBe(1);
+  });
+
+  it('with no shell switch, the subject arm is exactly the connect-time one (nothing changes for the ordinary sitting)', () => {
+    telemetry.reset();
+    telemetry.start({ backend: 'gemini', autonomy: 'auto-safe', feedback: 'earcon', program: 'word', honest: false, device,
+      arm: { register: 'terminal', dials, shell: 'familiar' } });
+    telemetry.turn('f1', 'typed', 'bold the title', 'tool_call', 100, 400);
+    telemetry.action('set_bold', 'mutate', 'commit');
+    const model = telemetry.snapshot().scorecard;
+    expect(model!.headline).toBe('Terminal · Familiar · Gemini · 1 trial');
+  });
+});
+
+// ==========================================================================================
 // P4 (fix round 3, reviewer-ruled — the Important finding): before `eval_deck_abandoned` existed,
 // `abandoned` was a live-React-state-only fact — `snapshot()`'s own internal scorecard had no way
 // to know a run had been abandoned, and always built one with `abandoned: false`, which per that
