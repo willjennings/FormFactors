@@ -9,7 +9,7 @@ import { ASK_CHIP_COLOR } from '../actions/askContent';
 export type Suggestion = { key: string; label: string; phrase: string; color: string };
 export type GroundingChip = { id: string; title: string; color: string };
 
-export function Omnibox({ isLive, isConnecting, error, transcript, suggestions, firstRunHint, restoredDraft, modelCaption, busy = false, grounding = [], quickFireEcho = null, tray, askQuestion = null, onRemoveGrounding, onRemoveTray, onFireTray, onSubmit, onMicToggle, onChipTap, above }: {
+export function Omnibox({ isLive, isConnecting, error, transcript, suggestions, firstRunHint, restoredDraft, modelCaption, busy = false, grounding = [], quickFireEcho = null, tray, askQuestion = null, onRemoveGrounding, onRemoveTray, onFireTray, onSubmit, onMicToggle, onChipTap, above, formRef }: {
   isLive: boolean; isConnecting: boolean; error: string | null; transcript: string | null;
   suggestions: Suggestion[]; firstRunHint: boolean;
   /** An open unspecified ask's question — rendered as its own line above the chips AND as the
@@ -35,6 +35,12 @@ export function Omnibox({ isLive, isConnecting, error, transcript, suggestions, 
   /** Rendered at the top of the bottom-center column (witness cards) so cards and the
    *  caption/chips STACK instead of overlapping (human smoke 2026-07-16). */
   above?: React.ReactNode;
+  /** Forwarded onto the `<form>` below. App.tsx uses it to write `data-turn-open` directly at the
+   *  turn machine's own open/close seams (`setOpenTurn`, App.tsx) — the battery harness's
+   *  settle-detector (scripts/battery/run.mjs) polls that attribute. Not app state: a ref write
+   *  triggers no re-render, so this is the only way the DOM attribute can exist without a second,
+   *  parallel (and laggier) `useState` mirror of `openTurnRef`. */
+  formRef?: React.Ref<HTMLFormElement>;
 }) {
   const [draft, setDraft] = useState('');
   // Restore typed text that was lost when a cold-start connect failed (R1 path).
@@ -131,6 +137,7 @@ export function Omnibox({ isLive, isConnecting, error, transcript, suggestions, 
         </div>
       )}
       <form
+        ref={formRef}
         className="flex items-center gap-2 px-3 py-2 rounded-2xl border border-[var(--card-border)] bg-[var(--card-bg)]/90 backdrop-blur shadow-lg"
         onSubmit={(e) => { e.preventDefault(); if (draft.trim()) { onSubmit(draft); setDraft(''); } }}
       >

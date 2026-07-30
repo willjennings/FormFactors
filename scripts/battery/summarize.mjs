@@ -14,7 +14,7 @@
 //   (omit the path to grade the most recently written run under scripts/battery/out/)
 
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -118,6 +118,13 @@ function main() {
   console.log(`[summarize] grading ${path.relative(ROOT, manifestPath)}`);
   const out = execFileSync('npx', ['tsx', BRIDGE, 'grade', manifestPath], { cwd: ROOT, encoding: 'utf8' });
   const graded = JSON.parse(out);
+  // Task 10 (settle-detector): `settleTotals` is harness-health data (how many utterances settled
+  // via a real `data-turn-open` close versus rode the poll's ceiling) — plain arithmetic run.mjs
+  // already did, not app-grading, so it is read straight off the manifest rather than round-tripped
+  // through ts-bridge. `null` on a manifest written before this field existed (an older run being
+  // re-graded) — read honestly, not backfilled with a manufactured zero.
+  const rawManifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  const settleTotals = rawManifest.settleTotals ?? null;
 
   const date = new Date().toISOString().slice(0, 10);
   const dryBanner = graded.mode === 'dry'
@@ -138,20 +145,32 @@ function main() {
       + 'Everything below reflects ONLY the sessions that finished — read every count against '
       + `\`${graded.plannedSessions}\` planned, not as a complete pilot.\n`
     : '';
-  // Important-1 (task-9 final review, 2026-07-30): the dominant fact about the abandonment/
-  // completion numbers below is a harness ceiling, not an app measurement — see the matching
-  // "Known limitations" bullet for the full explanation. Said HERE too, right beside the table a
-  // reader hits first, deliberately: the ledger already knows this ("tracks the harness's OWN
-  // pre-flagged limitation... not necessarily an app defect"), and the one thing a future reader
-  // sees is this doc, not the ledger. Skipped for a dry run — the dry banner above already states
-  // (correctly, and more strongly) that every attempt there is `abandoned` by construction, not by
-  // any timing effect.
-  const settleCeilingBanner = graded.mode !== 'dry'
-    ? '\n> **READ THE ABANDONMENT/COMPLETION NUMBERS BELOW AGAINST A HARNESS CEILING FIRST.** A '
-      + 'fixed 8-second settle sleep between submits (`SETTLE_MS.live`, run.mjs) force-closes any '
-      + 'response slower than 8s as `speech_only`/`no_response`, and roughly 15 mid-session program '
-      + 'reconnects per live default run force-close whatever turn was open when each one fired. See '
-      + '"Known limitations" below for the full explanation.\n'
+  // Important-1 (task-9 final review, 2026-07-30) / Task 10 (settle-detector, resolved): the old
+  // fixed 8-second sleep this banner used to warn about is gone — each utterance now waits on a
+  // real poll of the turn machine's own `data-turn-open` state (see "Known limitations" below for
+  // exactly which settle paths that poll can and cannot see). What replaces the warning is the
+  // poll's own health record: how many utterances actually settled versus rode the ceiling. A run
+  // with many timeouts is STILL harness-limited on that fraction (same caution as before, narrower
+  // scope); a run with few is finally measuring the app's own responsiveness rather than a fixed
+  // sleep's timing. Skipped for a dry run — the dry banner above already states (correctly, and
+  // more strongly) that every attempt there is `abandoned` by construction: the stub never replies,
+  // so EVERY dry utterance rides the (small, deliberately fast) dry ceiling, not just some fraction.
+  const settleStatusBanner = graded.mode !== 'dry'
+    ? (settleTotals
+        ? (() => {
+            const total = settleTotals.settled + settleTotals.timedOut;
+            const timedOutPct = total > 0 ? Math.round((settleTotals.timedOut / total) * 100) : 0;
+            return '\n> **SETTLE-DETECTOR STATUS.** ' + settleTotals.settled + ' of ' + total
+              + ' utterance(s) settled via a real turn-close (tool-call ack or transcription-lost); '
+              + settleTotals.timedOut + ' (' + timedOutPct + '%) rode the poll ceiling instead — read '
+              + 'those as harness-limited, not necessarily slow-model, per "Known limitations" below. '
+              + 'Roughly 15 mid-session program reconnects per live default run still force-close '
+              + 'whatever turn was open when each one fired, independent of this poll.\n';
+          })()
+        : '\n> **SETTLE-DETECTOR STATUS UNKNOWN.** This manifest predates the settle-detector '
+          + '(no `settleTotals` field) — its per-utterance waits used the old fixed 8-second sleep, '
+          + 'not the poll described in "Known limitations" below. Re-run the battery to get real '
+          + 'settle/timeout counts.\n')
     : '';
 
   const runsSessionsExample = pickRunsSessionsExample(graded.cells);
@@ -165,7 +184,7 @@ function main() {
     : 'This run graded no cells, so there is no real cell to illustrate the point with here.';
 
   const doc = `# Battery run — ${date}
-${dryBanner}${abortedBanner}${settleCeilingBanner}
+${dryBanner}${abortedBanner}${settleStatusBanner}
 Mode: **${graded.mode}**. ${graded.totalRuns} of ${graded.plannedSessions} planned session(s) graded, ${graded.totalAttempts} total attempt(s) across ${graded.cells.length} cell(s).
 
 ## Per-cell results
@@ -211,20 +230,33 @@ ${renderLedger(graded.ledgerTop)}
 
 ## Known limitations
 
-- **Abandonment and completion rates are bounded by the harness, not just the model** (Important-1,
-  task-9 final review, 2026-07-30). This is the DOMINANT fact about the table above, so it is stated
-  first, not last. Every submit is followed by a FIXED 8-second sleep before the next one fires
-  (\`SETTLE_MS.live\`, \`scripts/battery/run.mjs\`) — not a real "wait for the model to finish
-  responding" poll (\`driveSession\`'s own SETTLE-WAIT SCOPE NOTE says so explicitly). Any response
-  slower than 8 seconds is therefore force-closed \`speech_only\`/\`no_response\` by the next submit,
-  exactly as if the model had never answered at all. On top of that, a live default run's own program
-  sequence forces around 15 mid-session reconnects (see the latency table's own footnote above), and
-  each one force-closes whatever turn happened to be open when it fired. Read the Abandoned and
-  Completed columns in the per-cell table above against THIS ceiling first: they are at least as
-  much a measurement of the harness's settle-wait and reconnect cadence as of the app's own
-  responsiveness, and this run cannot separate the two. A real settle-detector (poll the omnibox's
-  busy state, or grow-watch the telemetry stream, instead of a fixed sleep) is the named next
-  investment before these rates can be read as app numbers on their own.
+- **Abandonment and completion rates were bounded by a fixed harness sleep before Task 10 —
+  resolved for runs from that point on, still a real caveat within them** (Important-1, task-9
+  final review, 2026-07-30; closed by the settle-detector, same date). Every submit used to be
+  followed by a FIXED 8-second sleep before the next one fired (\`SETTLE_MS.live\`,
+  \`scripts/battery/run.mjs\`), force-closing any response slower than 8 seconds as
+  \`speech_only\`/\`no_response\` regardless of whether the model was about to answer. That sleep is
+  gone: each utterance now waits on \`pollTurnSettled\`, a real poll (every 250ms, up to
+  \`MAX_SETTLE_MS.live\`) of the turn machine's own \`data-turn-open\` state — App.tsx's
+  \`setOpenTurn\`, written at the same seams that write \`openTurnRef\` itself, mirroring
+  \`src/eval/turns.ts\`'s \`turnOpenAttr\`. This closes most of the old gap: a tool-call ack (commit,
+  refusal, OR a collaborative ask — App.tsx's \`ack()\` is the one wrapper every tool call's result
+  flows through) now ends the wait the moment it happens rather than after a flat 8 seconds,
+  including for ordinary conversational replies, since this app's \`respond\` tool IS a tool call.
+  What the poll still cannot see: a turn that settles as \`speech_only\` — the model spoke and never
+  invoked ANY tool for it — never flips \`data-turn-open\` on its own; it rides
+  \`MAX_SETTLE_MS.live\`'s ceiling exactly as the old fixed sleep would have, indistinguishable from
+  a turn the model never answered at all. That is the app's own turn machine's deliberate design
+  (turns.ts: closing a speech-only turn early "would report silence as a transcription failure"),
+  not a gap this harness can close from outside — see the SETTLE-DETECTOR STATUS line above THIS
+  run's own settled-vs-timed-out count. On top of that, a live default run's own program sequence
+  still forces around 15 mid-session reconnects (see the latency table's own footnote above), and
+  each one still force-closes whatever turn happened to be open when it fired — the poll has no
+  visibility into a reconnect either, by design (a reconnect is not a turn closing). Read the
+  Abandoned and Completed columns in the per-cell table above against the SETTLE-DETECTOR STATUS
+  line for this run: a low timed-out count means those columns are close to an honest app
+  measurement; a high one means they are still, in part, measuring the poll ceiling and the
+  reconnect cadence.
 - **Recorded requests are not always byte-identical to the utterance sent** (M7, task-9 review
   round 1, pre-existing app behavior — not introduced by this harness). \`App.tsx\`'s transcript
   ASCII filter strips non-ASCII punctuation from what it records, so e.g. \`point-by-number\`'s em

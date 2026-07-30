@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { openTurn, noteFirstResponse, updateRequest, closeTurn } from './turns';
+import { openTurn, noteFirstResponse, updateRequest, closeTurn, turnOpenAttr } from './turns';
 import type { OpenTurn } from './turns';
 
 describe('openTurn', () => {
@@ -55,6 +55,18 @@ describe('noteFirstResponse', () => {
     const open: OpenTurn = { id: 'a', t: 100, modality: 'voice', request: 'x', firstResponseAt: null };
     noteFirstResponse(open, 150);
     expect(open.firstResponseAt).toBeNull();
+  });
+});
+
+describe('turnOpenAttr', () => {
+  it('is "0" for no open turn (settled)', () => {
+    expect(turnOpenAttr(null)).toBe('0');
+  });
+
+  it('is "1" for an open turn, whatever state it carries', () => {
+    const open: OpenTurn = { id: 'a', t: 100, modality: 'voice', request: 'x', firstResponseAt: null };
+    expect(turnOpenAttr(open)).toBe('1');
+    expect(turnOpenAttr({ ...open, firstResponseAt: 150 })).toBe('1');
   });
 });
 

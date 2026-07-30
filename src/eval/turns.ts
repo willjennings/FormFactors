@@ -77,6 +77,21 @@ export function updateRequest(open: OpenTurn, request: string): OpenTurn {
   return { ...open, request };
 }
 
+/** The one place "is a turn open" becomes a string a DOM attribute can carry. App.tsx writes this
+ *  onto the omnibox form's `data-turn-open` at the exact same call sites that write `openTurnRef`
+ *  itself (its `setOpenTurn` helper — never a separate effect mirroring the ref, which would only
+ *  ever run a render behind). scripts/battery/run.mjs's settle-detector polls that attribute:
+ *  '0' means the turn machine has nothing open — settled by tool_call ack (any commit, refusal, or
+ *  ask — App.tsx's `ack()`, the one wrapper every tool call's result flows through) or by
+ *  `transcription_lost`. '1' covers everything else, INCLUDING a `speech_only` turn that has not
+ *  yet been superseded — this function (and the DOM attribute it drives) cannot distinguish "the
+ *  model answered with speech only and will never call a tool for this turn" from "still working
+ *  on it"; only the next `openTurn` call (superseding close) or session end resolves that, on
+ *  purpose (see `openTurn`'s own doc on why a speech-only turn is not closed here). */
+export function turnOpenAttr(open: OpenTurn | null): '0' | '1' {
+  return open ? '1' : '0';
+}
+
 /** Close an open turn with a known outcome. `t` is the turn's own open time (normally `open.t`;
  *  `openTurn` passes `prev.t` explicitly when a new turn forces the previous one closed, so the
  *  reference point is always the CLOSING turn's own start, never the caller's current clock).

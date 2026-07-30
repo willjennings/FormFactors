@@ -119,7 +119,7 @@ import type { InputModality } from './telemetry';
 import { buildInstructions } from './prompt/instructions';
 import { withTrafficCount } from './shell/traffic';
 import type { Traffic } from './shell/traffic';
-import { openTurn, noteFirstResponse, updateRequest, closeTurn,
+import { openTurn, noteFirstResponse, updateRequest, closeTurn, turnOpenAttr,
   type OpenTurn, type ClosedTurn } from './eval/turns';
 import { idleExceeded } from './shell/idle';
 import { saveAndLoad } from './artifacts/corpus';
@@ -871,6 +871,20 @@ export default function App() {
   // both, written SYNCHRONOUSLY at every site, because a useEffect mirror would be rolled back by
   // StrictMode's second mount pass.
   const openTurnRef = useRef<{ open: OpenTurn; run: number } | null>(null);
+  // The omnibox form element, forwarded to Omnibox so `setOpenTurn` below can write a DOM
+  // attribute at the exact same call sites that write `openTurnRef` — not a `useEffect` mirror of
+  // the ref (a ref write triggers no re-render, so an effect keyed on it would never fire from the
+  // write itself, only accidentally on some LATER render). scripts/battery/run.mjs's
+  // settle-detector polls `data-turn-open` on this element; turnOpenAttr (eval/turns.ts) is the
+  // one pure function that decides what it says.
+  const turnFormRef = useRef<HTMLFormElement | null>(null);
+  /** THE single writer of `openTurnRef.current` — every other line in this file that used to
+   *  assign it directly now calls this instead, so the DOM attribute can never drift out of sync
+   *  with the ref it mirrors (one seam, not several independently-remembered ones). */
+  const setOpenTurn = (next: { open: OpenTurn; run: number } | null) => {
+    openTurnRef.current = next;
+    if (turnFormRef.current) turnFormRef.current.dataset.turnOpen = turnOpenAttr(next?.open ?? null);
+  };
   const turnSeqRef = useRef(0);
   const nextTurnId = () => `turn-${(turnSeqRef.current += 1)}`;
   // The run a `transcription_lost` row has already been recorded for. One lost row per run, not
@@ -909,7 +923,7 @@ export default function App() {
   const flushOpenTurn = () => {
     const cur = openTurnRef.current;
     if (!cur) return;
-    openTurnRef.current = null;
+    setOpenTurn(null);
     // `cur.open.t` — the CLOSING turn's own open time, never the current clock. Passing "now"
     // here is the wiring mistake turns.ts's comments warn about: it makes every latency come out
     // negative, and nothing at this layer would notice.
@@ -2303,7 +2317,7 @@ export default function App() {
       // follow answer no new utterance of theirs.
       const settling = openTurnRef.current;
       if (settling) {
-        openTurnRef.current = null;
+        setOpenTurn(null);
         // `settling.open.t` — the closing turn's OWN open time (turns.ts closeTurn); the clock
         // belongs in the settledAt argument only. Swapped, every latency comes out negative.
         pushTurn(closeTurn(settling.open, settling.open.t, { kind: 'tool_call' }, turnClock()));
@@ -3050,7 +3064,7 @@ export default function App() {
         const { open, closedPrev } = openTurn(openTurnRef.current?.open ?? null, nextTurnId(),
           turnClock(), lastInputModalityRef.current, text.trim());
         if (closedPrev) pushTurn(closedPrev);
-        openTurnRef.current = null;
+        setOpenTurn(null);
         // `open.t` — this turn's own open time (turns.ts closeTurn), not the current clock.
         pushTurn(closeTurn(open, open.t, { kind: 'transcription_lost' }, null));
       }
@@ -3203,11 +3217,11 @@ export default function App() {
       // the new current — it never does, because this merge never updates it — so the SECOND bump
       // falls through to the `else` branch below and closes the turn instead, exactly as the
       // paragraph above promises ("exactly one bump, extension only").
-      openTurnRef.current = { ...liveTurn, open: updateRequest(liveTurn.open, grown) };
+      setOpenTurn({ ...liveTurn, open: updateRequest(liveTurn.open, grown) });
     } else {
       const { open, closedPrev } = openTurn(liveTurn?.open ?? null, nextTurnId(), turnClock(),
         lastInputModalityRef.current, cleanedText);
-      openTurnRef.current = { open, run: transcriptRunRef.current };
+      setOpenTurn({ open, run: transcriptRunRef.current });
       if (closedPrev) pushTurn(closedPrev);
     }
 
@@ -3789,7 +3803,7 @@ export default function App() {
             // idempotent, so on azure/openai (response.created → onResponseStart, which precedes
             // every call) this changes nothing.
             const answering = openTurnRef.current;
-            if (answering) openTurnRef.current = { ...answering, open: noteFirstResponse(answering.open, turnClock()) };
+            if (answering) setOpenTurn({ ...answering, open: noteFirstResponse(answering.open, turnClock()) });
             handleVoiceToolCall(call);
           },
           onResponseStart: () => {
@@ -3800,7 +3814,7 @@ export default function App() {
             // it, and a response that arrives with no turn open (the model speaking unprompted)
             // records nothing.
             const answering = openTurnRef.current;
-            if (answering) openTurnRef.current = { ...answering, open: noteFirstResponse(answering.open, turnClock()) };
+            if (answering) setOpenTurn({ ...answering, open: noteFirstResponse(answering.open, turnClock()) });
             setModelBusy(true);
             setPersistentPaths([]);
             setLiveTranscription("");
@@ -5722,6 +5736,7 @@ export default function App() {
             restoredDraft={restoredDraft}
             modelCaption={modelCaption}
             busy={modelBusy}
+            formRef={turnFormRef}
             grounding={grounding}
             quickFireEcho={quickFireEcho}
             askQuestion={ask?.question ?? null}
