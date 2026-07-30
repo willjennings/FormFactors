@@ -33,7 +33,9 @@ export const BOTTOM_INSET: Record<Slots['bottomBar'], number> = {
   taskbar: 52, shelf: 76, timeline: 140, none: 8,
 };
 
-const COLUMN_W = 680;
+// Shared with `projectDesk` (Conversation pushes windows out from this same column), so the
+// width the furniture draws and the width the projection reasons about can never drift apart.
+export const COLUMN_W = 680;
 
 /** The box the existing omnibox and response-rail components are positioned inside (the activity
  *  ticker uses `planeBox` below instead — see its note). It REPOSITIONS them: they are not forked
