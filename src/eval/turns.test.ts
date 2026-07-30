@@ -59,13 +59,22 @@ describe('noteFirstResponse', () => {
 });
 
 describe('turnOpenAttr', () => {
-  it('is "0" for no open turn (settled)', () => {
+  it('is "0" for no open turn and no closeReason (default: settled)', () => {
     expect(turnOpenAttr(null)).toBe('0');
   });
 
-  it('is "1" for an open turn, whatever state it carries', () => {
+  it('is "0" for no open turn, closeReason "settled" explicit', () => {
+    expect(turnOpenAttr(null, 'settled')).toBe('0');
+  });
+
+  it('is "f" for no open turn, closeReason "flushed"', () => {
+    expect(turnOpenAttr(null, 'flushed')).toBe('f');
+  });
+
+  it('is "1" for an open turn regardless of closeReason (closeReason is only consulted when open is null)', () => {
     const open: OpenTurn = { id: 'a', t: 100, modality: 'voice', request: 'x', firstResponseAt: null };
     expect(turnOpenAttr(open)).toBe('1');
+    expect(turnOpenAttr(open, 'flushed')).toBe('1');
     expect(turnOpenAttr({ ...open, firstResponseAt: 150 })).toBe('1');
   });
 });

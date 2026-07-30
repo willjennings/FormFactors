@@ -77,19 +77,34 @@ export function updateRequest(open: OpenTurn, request: string): OpenTurn {
   return { ...open, request };
 }
 
-/** The one place "is a turn open" becomes a string a DOM attribute can carry. App.tsx writes this
- *  onto the omnibox form's `data-turn-open` at the exact same call sites that write `openTurnRef`
- *  itself (its `setOpenTurn` helper — never a separate effect mirroring the ref, which would only
- *  ever run a render behind). scripts/battery/run.mjs's settle-detector polls that attribute:
- *  '0' means the turn machine has nothing open — settled by tool_call ack (any commit, refusal, or
- *  ask — App.tsx's `ack()`, the one wrapper every tool call's result flows through) or by
- *  `transcription_lost`. '1' covers everything else, INCLUDING a `speech_only` turn that has not
- *  yet been superseded — this function (and the DOM attribute it drives) cannot distinguish "the
- *  model answered with speech only and will never call a tool for this turn" from "still working
- *  on it"; only the next `openTurn` call (superseding close) or session end resolves that, on
- *  purpose (see `openTurn`'s own doc on why a speech-only turn is not closed here). */
-export function turnOpenAttr(open: OpenTurn | null): '0' | '1' {
-  return open ? '1' : '0';
+/** The one place "is a turn open, and if not, why" becomes a string a DOM attribute can carry.
+ *  App.tsx writes this onto the omnibox form's `data-turn-open` at the exact same call sites that
+ *  write `openTurnRef` itself (its `setOpenTurn` helper — never a separate effect mirroring the
+ *  ref, which would only ever run a render behind). scripts/battery/run.mjs's settle-detector
+ *  polls that attribute:
+ *
+ *  '1' — a turn is open. Covers a `speech_only` turn that has not yet been superseded, too — this
+ *  function (and the attribute it drives) cannot distinguish "the model answered with speech only
+ *  and will never call a tool for this turn" from "still working on it"; only the next `openTurn`
+ *  call (superseding close) resolves that, on purpose (see `openTurn`'s own doc on why a
+ *  speech-only turn is not closed here).
+ *
+ *  '0' — settled HONESTLY: closed by a tool-call ack (any commit, refusal, or ask — App.tsx's
+ *  `ack()`, the one wrapper every tool call's result flows through) or by `transcription_lost`.
+ *  This is the app answering (or definitively failing to transcribe) the user's own request.
+ *
+ *  'f' — force-closed: `flushOpenTurn` (App.tsx) called this with no ack and no lost transcript,
+ *  because the SESSION ended out from under the open turn — an unrequested socket drop
+ *  (`onClose`), or any of the three reconnect effects (dial/backend/program-swap changes), or an
+ *  ordinary explicit end (mic toggle, idle guard). This is NOT the app answering the request; it
+ *  is the request never getting a chance to be answered before its session went away. Settle-
+ *  detector review (2026-07-30, C-cycle I1): folding this into '0' let a mid-poll reconnect or
+ *  socket death read as a genuine settle, over-reporting harness health in exactly the failure
+ *  mode the counter exists to catch. `closeReason` defaults to `'settled'` so every EXISTING call
+ *  site (ack, transcription_lost) needs no change; only `flushOpenTurn` passes `'flushed'`. */
+export function turnOpenAttr(open: OpenTurn | null, closeReason: 'settled' | 'flushed' = 'settled'): '0' | '1' | 'f' {
+  if (open) return '1';
+  return closeReason === 'flushed' ? 'f' : '0';
 }
 
 /** Close an open turn with a known outcome. `t` is the turn's own open time (normally `open.t`;

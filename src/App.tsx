@@ -871,19 +871,36 @@ export default function App() {
   // both, written SYNCHRONOUSLY at every site, because a useEffect mirror would be rolled back by
   // StrictMode's second mount pass.
   const openTurnRef = useRef<{ open: OpenTurn; run: number } | null>(null);
-  // The omnibox form element, forwarded to Omnibox so `setOpenTurn` below can write a DOM
-  // attribute at the exact same call sites that write `openTurnRef` — not a `useEffect` mirror of
-  // the ref (a ref write triggers no re-render, so an effect keyed on it would never fire from the
-  // write itself, only accidentally on some LATER render). scripts/battery/run.mjs's
-  // settle-detector polls `data-turn-open` on this element; turnOpenAttr (eval/turns.ts) is the
-  // one pure function that decides what it says.
-  const turnFormRef = useRef<HTMLFormElement | null>(null);
+  // The omnibox form ELEMENT — not the same thing as the ref CALLBACK below, which is what
+  // actually gets forwarded to Omnibox. `setOpenTurn` writes here directly (a plain ref read, not
+  // a `useEffect` mirror of `openTurnRef`: a ref write triggers no re-render, so an effect keyed
+  // on it would never fire from the write itself, only accidentally on some LATER render).
+  // scripts/battery/run.mjs's settle-detector polls `data-turn-open` on this element;
+  // `turnOpenAttr` (eval/turns.ts) is the one pure function that decides what it says.
+  const turnFormElRef = useRef<HTMLFormElement | null>(null);
+  // M3 (settle-detector review, 2026-07-30): a CALLBACK ref, not a plain object ref, so a
+  // (re)mount re-stamps the attribute from whatever `openTurnRef` ALREADY holds instead of
+  // leaving a freshly mounted form with no `data-turn-open` at all until the next turn-machine
+  // event happens to fire. Latent today — Omnibox's `<form>` does not remount on skin change
+  // (`surfaceBox(activeSkin)` varies a style, not element identity, confirmed in review) — but a
+  // callback ref costs nothing over a plain one and closes the gap structurally rather than by
+  // continuing to rely on that fact staying true. `React.useCallback` with no deps: it only ever
+  // reads `.current` values at call time, never captures a render-scoped variable, so it is safe
+  // to keep the exact same function identity across renders (the point of a callback ref that
+  // fires once per real mount/unmount, not once per render).
+  const turnFormRef = React.useCallback((el: HTMLFormElement | null) => {
+    turnFormElRef.current = el;
+    if (el) el.dataset.turnOpen = turnOpenAttr(openTurnRef.current?.open ?? null);
+  }, []);
   /** THE single writer of `openTurnRef.current` — every other line in this file that used to
    *  assign it directly now calls this instead, so the DOM attribute can never drift out of sync
-   *  with the ref it mirrors (one seam, not several independently-remembered ones). */
-  const setOpenTurn = (next: { open: OpenTurn; run: number } | null) => {
+   *  with the ref it mirrors (one seam, not several independently-remembered ones).
+   *  `closeReason` ('settled' by default) is read only when `next` is null — 'flushed' distinguishes
+   *  `flushOpenTurn`'s force-close from a real ack/transcription_lost settle (I1, settle-detector
+   *  review, 2026-07-30; see `turnOpenAttr`'s own doc for exactly why that distinction matters). */
+  const setOpenTurn = (next: { open: OpenTurn; run: number } | null, closeReason: 'settled' | 'flushed' = 'settled') => {
     openTurnRef.current = next;
-    if (turnFormRef.current) turnFormRef.current.dataset.turnOpen = turnOpenAttr(next?.open ?? null);
+    if (turnFormElRef.current) turnFormElRef.current.dataset.turnOpen = turnOpenAttr(next?.open ?? null, closeReason);
   };
   const turnSeqRef = useRef(0);
   const nextTurnId = () => `turn-${(turnSeqRef.current += 1)}`;
@@ -923,7 +940,11 @@ export default function App() {
   const flushOpenTurn = () => {
     const cur = openTurnRef.current;
     if (!cur) return;
-    setOpenTurn(null);
+    // 'flushed', not the default 'settled' — this is the SESSION ending out from under an open
+    // turn (an unrequested socket drop, or a reconnect), not the app answering the request. See
+    // `turnOpenAttr`'s own doc (I1, settle-detector review) for why the settle-detector needs to
+    // tell the two apart.
+    setOpenTurn(null, 'flushed');
     // `cur.open.t` — the CLOSING turn's own open time, never the current clock. Passing "now"
     // here is the wiring mistake turns.ts's comments warn about: it makes every latency come out
     // negative, and nothing at this layer would notice.

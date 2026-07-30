@@ -10,11 +10,13 @@
 // every number below is read off the bridge's output, never recomputed here.
 //
 // Usage:
-//   node scripts/battery/summarize.mjs [path/to/manifest.json]
+//   node scripts/battery/summarize.mjs [path/to/manifest.json] [--force]
 //   (omit the path to grade the most recently written run under scripts/battery/out/)
+//   --force: overwrite an existing doc at the target path (I3, settle-detector review,
+//   2026-07-30 — see the doc-naming block below for why this exists).
 
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -114,7 +116,13 @@ function renderLedger(ledgerTop) {
 }
 
 function main() {
-  const manifestPath = process.argv[2] ? path.resolve(process.argv[2]) : findLatestManifest();
+  // I3 (settle-detector review, 2026-07-30): `--force` may appear anywhere; the manifest path (if
+  // given at all) is whatever OTHER argument survives — the same positional contract as before,
+  // just no longer assuming argv[2] specifically is it.
+  const rawArgs = process.argv.slice(2);
+  const force = rawArgs.includes('--force');
+  const manifestArg = rawArgs.find((a) => a !== '--force');
+  const manifestPath = manifestArg ? path.resolve(manifestArg) : findLatestManifest();
   console.log(`[summarize] grading ${path.relative(ROOT, manifestPath)}`);
   const out = execFileSync('npx', ['tsx', BRIDGE, 'grade', manifestPath], { cwd: ROOT, encoding: 'utf8' });
   const graded = JSON.parse(out);
@@ -126,7 +134,17 @@ function main() {
   const rawManifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
   const settleTotals = rawManifest.settleTotals ?? null;
 
-  const date = new Date().toISOString().slice(0, 10);
+  // I3 (settle-detector review, 2026-07-30): the doc is named (and titled) from the RUN's own
+  // date — `manifest.createdAt`, `run.mjs`'s own timestamp, written once at the end of that run —
+  // not from whatever day THIS script happens to be invoked on. Before this fix, `summarize.mjs`
+  // could be run hours or days after the battery finished (or, worse, invoked via the exact
+  // command `run.mjs` prints as its own last line, right after an UNRELATED same-day dry gate),
+  // and "today" silently pointed every same-day run at the SAME file — a reviewer hit this
+  // destroying a hand-edited pilot doc mid-review and had to restore it from backup. Falls back to
+  // today only if the manifest genuinely has no `createdAt` (a manifest shape old enough to predate
+  // that field too — read honestly, not backfilled).
+  const runCreatedAt = rawManifest.createdAt ? new Date(rawManifest.createdAt) : new Date();
+  const date = runCreatedAt.toISOString().slice(0, 10);
   const dryBanner = graded.mode === 'dry'
     ? '\n> **DRY RUN — no model.** Every session ran against a stubbed socket that never replies '
       + '(scripts/battery/run.mjs\'s `STUB_SOCKET_SCRIPT`) — zero API spend, zero real model output. '
@@ -145,27 +163,58 @@ function main() {
       + 'Everything below reflects ONLY the sessions that finished — read every count against '
       + `\`${graded.plannedSessions}\` planned, not as a complete pilot.\n`
     : '';
-  // Important-1 (task-9 final review, 2026-07-30) / Task 10 (settle-detector, resolved): the old
-  // fixed 8-second sleep this banner used to warn about is gone — each utterance now waits on a
-  // real poll of the turn machine's own `data-turn-open` state (see "Known limitations" below for
-  // exactly which settle paths that poll can and cannot see). What replaces the warning is the
-  // poll's own health record: how many utterances actually settled versus rode the ceiling. A run
-  // with many timeouts is STILL harness-limited on that fraction (same caution as before, narrower
-  // scope); a run with few is finally measuring the app's own responsiveness rather than a fixed
-  // sleep's timing. Skipped for a dry run — the dry banner above already states (correctly, and
-  // more strongly) that every attempt there is `abandoned` by construction: the stub never replies,
-  // so EVERY dry utterance rides the (small, deliberately fast) dry ceiling, not just some fraction.
+  // Important-1 (task-9 final review, 2026-07-30) / Task 10 (settle-detector, resolved) / I1, M1,
+  // M5 (settle-detector review, 2026-07-30): the old fixed 8-second sleep this banner used to warn
+  // about is gone — each utterance now waits on a real poll of the turn machine's own
+  // `data-turn-open` state (see "Known limitations" below for exactly which settle paths that poll
+  // can and cannot see). What replaces the warning is the poll's own three-bucket health record:
+  // how many utterances GENUINELY settled (a tool-call ack or transcription_lost — the app
+  // answering the request) versus FORCE-CLOSED (the session ended out from under an open turn —
+  // NOT the app answering it; I1) versus rode the ceiling with no close at all. A run with many
+  // timeouts is STILL harness-limited on that fraction; a run with few genuine settles (and a low
+  // median latency for them — M1, arguably the single most useful number this feature produces) is
+  // finally measuring the app's own responsiveness. Skipped for a dry run — the dry banner above
+  // already states (correctly, and more strongly) that every ORDINARY attempt there is `abandoned`
+  // by construction (the stub does not genuinely reply); the one designated per-cell utterance the
+  // dry stub DOES answer (I2) exists to prove the instrument works, not to measure anything.
   const settleStatusBanner = graded.mode !== 'dry'
     ? (settleTotals
         ? (() => {
-            const total = settleTotals.settled + settleTotals.timedOut;
-            const timedOutPct = total > 0 ? Math.round((settleTotals.timedOut / total) * 100) : 0;
-            return '\n> **SETTLE-DETECTOR STATUS.** ' + settleTotals.settled + ' of ' + total
-              + ' utterance(s) settled via a real turn-close (tool-call ack or transcription-lost); '
-              + settleTotals.timedOut + ' (' + timedOutPct + '%) rode the poll ceiling instead — read '
-              + 'those as harness-limited, not necessarily slow-model, per "Known limitations" below. '
-              + 'Roughly 15 mid-session program reconnects per live default run still force-close '
-              + 'whatever turn was open when each one fired, independent of this poll.\n';
+            const forceClosed = settleTotals.forceClosed ?? 0; // ?? 0: absent on a manifest written
+              // before I1 added this bucket — an older run genuinely has no such count, not a zero
+              // this script is manufacturing; the distinction is inert here because we only ever
+              // ADD it, but stated so a reader of this arithmetic does not mistake it for a real
+              // "we know it was zero."
+            // M5: the denominator here is UTTERANCES IN SESSIONS THAT EXPORTED — `manifestEntries`,
+            // which excludes any session that threw before producing an export (most acutely, a
+            // session that hit SESSION_TIMEOUT_MS before C1's fix; also possible after it, from an
+            // unrelated failure). Said explicitly rather than left to look like "every utterance
+            // this run attempted."
+            const total = settleTotals.settled + forceClosed + settleTotals.timedOut;
+            if (total === 0) {
+              return '\n> **SETTLE-DETECTOR STATUS: NO DATA.** No session in this run produced an '
+                + 'export with any recorded settle-poll outcome — either every session failed before '
+                + 'exporting (check "aborted" above), or this manifest predates per-utterance '
+                + '`settleStats` entirely. The Abandoned/Completed columns below carry no ceiling '
+                + 'caveat FROM THIS BANNER, but that does not mean there is not one — see "Known '
+                + 'limitations".\n';
+            }
+            const timedOutPct = Math.round((settleTotals.timedOut / total) * 100);
+            const forceClosedPct = Math.round((forceClosed / total) * 100);
+            const medianStr = settleTotals.medianSettledWaitedMs != null
+              ? `${settleTotals.medianSettledWaitedMs}ms` : 'n/a (no genuine settle recorded)';
+            const sessionsCoveredStr = settleTotals.sessionsCounted != null
+              ? `${settleTotals.sessionsCounted} session(s) that exported` : 'sessions that exported (count not recorded on this manifest)';
+            return '\n> **SETTLE-DETECTOR STATUS.** Across ' + sessionsCoveredStr + ': ' + settleTotals.settled
+              + ' of ' + total + ' utterance(s) settled genuinely (a tool-call ack or '
+              + 'transcription_lost — the app actually answering), median latency ' + medianStr + '. '
+              + forceClosed + ' (' + forceClosedPct + '%) force-closed instead — the SESSION ended '
+              + '(a drop or reconnect) out from under an open turn, which is NOT the app answering it '
+              + '(I1: previously miscounted as a genuine settle). ' + settleTotals.timedOut + ' ('
+              + timedOutPct + '%) rode the poll ceiling with no close at all — read those as '
+              + 'harness-limited, not necessarily slow-model, per "Known limitations" below. This '
+              + 'total excludes any session that failed before producing an export (M5) — see '
+              + '"ABORTED RUN" above if this run has one.\n';
           })()
         : '\n> **SETTLE-DETECTOR STATUS UNKNOWN.** This manifest predates the settle-detector '
           + '(no `settleTotals` field) — its per-utterance waits used the old fixed 8-second sleep, '
@@ -249,14 +298,18 @@ ${renderLedger(graded.ledgerTop)}
   a turn the model never answered at all. That is the app's own turn machine's deliberate design
   (turns.ts: closing a speech-only turn early "would report silence as a transcription failure"),
   not a gap this harness can close from outside — see the SETTLE-DETECTOR STATUS line above THIS
-  run's own settled-vs-timed-out count. On top of that, a live default run's own program sequence
-  still forces around 15 mid-session reconnects (see the latency table's own footnote above), and
-  each one still force-closes whatever turn happened to be open when it fired — the poll has no
-  visibility into a reconnect either, by design (a reconnect is not a turn closing). Read the
-  Abandoned and Completed columns in the per-cell table above against the SETTLE-DETECTOR STATUS
-  line for this run: a low timed-out count means those columns are close to an honest app
-  measurement; a high one means they are still, in part, measuring the poll ceiling and the
-  reconnect cadence.
+  run's own settled/force-closed/timed-out breakdown. On top of that, a live default run's own
+  program sequence still forces around 15 mid-session reconnects (see the latency table's own
+  footnote above) — and, corrected here (I1, settle-detector review, 2026-07-30; a previous version
+  of this paragraph claimed the opposite): a reconnect DOES close the open turn early, exactly the
+  way an ack does at the DOM-attribute level (\`flushOpenTurn\`, App.tsx). What the poll now does is
+  tell the two apart rather than conflate them — a reconnect-driven close is counted as
+  \`forceClosed\`, NOT as \`settled\`, because the session ending is not the app answering the
+  request. Read the Abandoned and Completed columns in the per-cell table above against the
+  SETTLE-DETECTOR STATUS line for this run: a high genuine-\`settled\` share with a low median
+  latency means those columns are close to an honest app measurement; a high \`forceClosed\` or
+  \`timedOut\` share means they are still, in large part, measuring the poll ceiling and the
+  reconnect cadence rather than the app.
 - **Recorded requests are not always byte-identical to the utterance sent** (M7, task-9 review
   round 1, pre-existing app behavior — not introduced by this harness). \`App.tsx\`'s transcript
   ASCII filter strips non-ASCII punctuation from what it records, so e.g. \`point-by-number\`'s em
@@ -267,6 +320,19 @@ ${renderLedger(graded.ledgerTop)}
 
   mkdirSync(EVALS_DIR, { recursive: true });
   const docPath = path.join(EVALS_DIR, `${date}-battery.md`);
+  // I3: refuse to silently clobber whatever is already at this path — a same-day (or, now, a
+  // same-run-date) re-invocation used to overwrite it unconditionally, which is exactly how a
+  // hand-edited doc got destroyed. `--force` is the explicit, deliberate opt-in to overwrite;
+  // its absence is a normal usage error, not a crash — reported the same way the other refusals
+  // in this file are.
+  if (existsSync(docPath) && !force) {
+    console.error(
+      `[summarize] refusing to overwrite ${path.relative(ROOT, docPath)} — it already exists. ` +
+      `Pass --force to overwrite it intentionally: node scripts/battery/summarize.mjs ` +
+      `${path.relative(ROOT, manifestPath)} --force`,
+    );
+    process.exit(1);
+  }
   writeFileSync(docPath, doc);
   console.log(`[summarize] wrote ${path.relative(ROOT, docPath)}`);
 
@@ -274,9 +340,23 @@ ${renderLedger(graded.ledgerTop)}
   // strings and a nonzero attempt count. Checked here, not just eyeballed, so a future edit that
   // reintroduces an unformatted `undefined` fails loudly instead of shipping a doc that lies by
   // omission.
+  //
+  // I2 (settle-detector review, 2026-07-30): for a DRY run specifically, also require
+  // `settleTotals.settled >= 1`. The dry gate used to be unable to discriminate a working
+  // settle-detector from a completely broken one (wrong selector, a ref that never attaches, an
+  // attribute never written) — every one of those failure shapes produces the exact same `0
+  // settled, N timed out` a CORRECTLY working detector produces against a stub that never
+  // genuinely replies. `run.mjs` now makes the dry stub answer exactly one designated utterance
+  // per cell with a synthetic tool-call reply (see `injectDrySettleReply` there) specifically so
+  // this assertion has something real to check — a regression in the ref/DOM/poll wiring now fails
+  // THIS gate, for free, instead of surfacing only during a paid --live run.
   const undefinedCount = (doc.match(/undefined/g) ?? []).length;
-  const gatePass = undefinedCount === 0 && graded.totalAttempts > 0;
-  console.log(`[summarize] gate check: zero-undefined=${undefinedCount === 0} (found ${undefinedCount}) nonzero-attempts=${graded.totalAttempts > 0} (${graded.totalAttempts}) -> ${gatePass ? 'PASS' : 'FAIL'}`);
+  const settleCheck = graded.mode !== 'dry' || (settleTotals?.settled ?? 0) >= 1;
+  const gatePass = undefinedCount === 0 && graded.totalAttempts > 0 && settleCheck;
+  console.log(`[summarize] gate check: zero-undefined=${undefinedCount === 0} (found ${undefinedCount}) `
+    + `nonzero-attempts=${graded.totalAttempts > 0} (${graded.totalAttempts}) `
+    + `settle-detector-proven=${settleCheck}${graded.mode === 'dry' ? ` (settled=${settleTotals?.settled ?? 0})` : ' (n/a, live)'} `
+    + `-> ${gatePass ? 'PASS' : 'FAIL'}`);
   if (!gatePass) process.exit(1);
 }
 

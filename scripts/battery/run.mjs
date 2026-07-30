@@ -17,10 +17,15 @@
 //           unreachable from a stub socket that never lets a real commit happen, since nothing
 //           calls it without one, but faked anyway rather than merely disclosed as unreachable —
 //           M5, task-9 review round 1). The app runs its real gate, real telemetry, real turn
-//           machinery; nothing leaves this machine on EITHER channel. The model never replies, so
-//           every turn eventually settles `no_response`/`speech_only` and every attempt grades
-//           `abandoned` — a real, honest measurement of the harness itself, not a fabricated pass.
-//           This is what THE GATE (task-9 brief) runs.
+//           machinery; nothing leaves this machine on EITHER channel. The model never replies on
+//           its own, so every ORDINARY turn eventually settles `no_response`/`speech_only` and
+//           every ordinary attempt grades `abandoned` — a real, honest measurement of the harness
+//           itself, not a fabricated pass. ONE designated utterance per dry cell is the sole
+//           exception (I2, settle-detector review, 2026-07-30, `injectDrySettleReply`): this script
+//           itself — not the stub, and not a real model — injects a synthetic tool-call reply
+//           through the exact same path a real server frame would arrive on, so the dry gate can
+//           prove the settle-detector's OWN wiring works (`settleTotals.settled >= 1`) rather than
+//           being structurally blind to whether it does. This is what THE GATE (task-9 brief) runs.
 //   --live  Real spend. Starts `npm run dev` (which reads `.env` itself — this script never does)
 //           and drives real utterances against the real model. Task 10's job, under its own
 //           protocol. `server.ts` reads `PORT` from the environment (default 3000, unchanged) —
@@ -49,7 +54,24 @@ import { loadUtterances } from './utterances.mjs';
 
 // ---- Hard caps (compiled in, verbatim per the task-9 brief — grepped in review) ----
 const MAX_SESSIONS = 12;
-const SESSION_TIMEOUT_MS = 360_000;
+// C1 (settle-detector review, 2026-07-30): 360_000 (the task-9 brief's original figure) fit the
+// OLD fixed `SETTLE_MS.live = 8000` sleep with ~70s of margin — which is exactly why the
+// 2026-07-30 pilot completed 12/12. Task 10 changed the per-utterance wait to a 20s CEILING
+// (`MAX_SETTLE_MS.live`, below) without re-deriving this constant, and the corpus this harness
+// actually drives (`scripts/battery/utterances.mjs`) rides that ceiling on ~90% of turns (the
+// 2026-07-30 pilot's own per-cell table shows 87-93% Abandoned — precisely the turns a
+// `speech_only`/`no_response` close can never settle early, per `pollTurnSettled`'s own doc). The
+// worst real cell (the wide corpus: 30 utterances, 16 mid-session program swaps) needs up to
+// `30 x 20000 + 16 x 1800 + FIXED_SESSION_OVERHEAD_MS` = `600000 + 28800 + 60000` = 688800ms — a
+// session that legitimately needs that long was, before this fix, torn down by `withTimeout` at
+// ~360s, BEFORE `exportSession` ever ran: every utterance already driven (and, under --live,
+// already paid for) produced nothing, and two such sessions in a row aborted the whole pilot.
+// Raised to 780_000 (≈76s of margin over the 688800ms worst case) — not re-derived to the brief's
+// original number, because that number was sized for a wait shape (`SETTLE_MS.live`'s fixed 8s
+// sleep) this file no longer has. `assertSessionBudget` in `main()` is the structural half of this
+// fix: it recomputes the SAME worst-case arithmetic against the REAL plan at startup and refuses
+// to run rather than let this constant and the corpus/ceiling drift apart silently again.
+const SESSION_TIMEOUT_MS = 780_000;
 const MAX_CONSECUTIVE_FAILURES = 2;
 
 // M2 (task-9 review round 1): NOT a brief requirement — the brief names no ports. These are
@@ -90,6 +112,80 @@ const MAX_SETTLE_MS = { dry: 900, live: 20000 };
 const SETTLE_POLL_INTERVAL_MS = 250;
 const BOOT_WAIT_MS = 2500;
 const CONNECT_TIMEOUT_MS = 15000;
+
+// C1 (settle-detector review, 2026-07-30): the fixed sleep after a mid-session program swap
+// (`driveSession`'s utterance loop, below) — named here, not just inline, so `assertSessionBudget`
+// and the actual `await sleep(PROGRAM_SWAP_WAIT_MS)` call can never disagree about what a swap
+// costs. Value unchanged from before this fix (1800ms); only its role changed, from "a number
+// used once" to "a number the session-budget arithmetic also depends on."
+const PROGRAM_SWAP_WAIT_MS = 1800;
+
+// C1: the fixed per-session cost OUTSIDE the utterance loop — everything `assertSessionBudget`'s
+// worst-case arithmetic has to account for besides `utterances x ceiling` and `swaps x
+// PROGRAM_SWAP_WAIT_MS`. Real components, summed generously rather than measured exactly (each is
+// itself a worst-case bound already, so summing worst-cases here is deliberately pessimistic):
+// BOOT_WAIT_MS (2500) + the initial connect's own CONNECT_TIMEOUT_MS-bound poll (15000, almost
+// always far faster in practice) + the initial program-switch settle (600) + `endSession`'s own
+// CONNECT_TIMEOUT_MS-bound poll (15000) + its trailing settle (500) + `exportSession`'s drawer-open
+// wait (400) + its download poll (10000) + its size-stabilize loop (20 x 150 = 3000) + `Page.close`'s
+// own bound (5000) ≈ 52000ms. Rounded up to 60000 for margin against anything this list missed.
+const FIXED_SESSION_OVERHEAD_MS = 60_000;
+
+/** How many times consecutive utterances in `utterances` name a DIFFERENT `program` — i.e. how
+ *  many mid-session reconnects (`driveSession`'s utterance loop) a cell's own utterance sequence
+ *  forces. The FIRST utterance never counts (there is no reconnect before the first program is
+ *  ever chosen — `driveSession` handles that as a one-time pre-loop switch, not a loop-body swap;
+ *  see `FIXED_SESSION_OVERHEAD_MS`'s own accounting for that). Pure and total: any array in,
+ *  including empty, a non-negative integer out. */
+function countProgramSwaps(utterances) {
+  let count = 0;
+  let current = null;
+  for (const u of utterances) {
+    if (current !== null && u.program !== current) count += 1;
+    current = u.program;
+  }
+  return count;
+}
+
+/** C1 (settle-detector review, 2026-07-30): the worst-case wall-clock ONE session of `cell` could
+ *  legitimately need, computed from the REAL utterance list and REAL swap count rather than a
+ *  hand-maintained estimate — this is what `assertSessionBudget` checks against `SESSION_TIMEOUT_MS`
+ *  at startup, so a future corpus change that makes a cell's worst case worse fails LOUDLY there
+ *  (before any browser/vite process spawns) instead of silently reopening the exact defect this
+ *  function exists to close (a session torn down by `withTimeout` mid-drive, before `exportSession`
+ *  ever runs, losing everything already paid for). */
+function worstCaseSessionBudgetMs(cell, mode) {
+  return cell.utterances.length * MAX_SETTLE_MS[mode]
+    + countProgramSwaps(cell.utterances) * PROGRAM_SWAP_WAIT_MS
+    + FIXED_SESSION_OVERHEAD_MS;
+}
+
+/** Refuses to start if ANY cell in `plan` needs more wall-clock than `SESSION_TIMEOUT_MS` gives it
+ *  — the structural half of the C1 fix (settle-detector review, 2026-07-30). Checked against the
+ *  ACTUAL plan `buildPlan` produced, not a hardcoded utterance/swap count, so this assertion cannot
+ *  itself go stale the way the constant it protects already did once. Called from `main()` before
+ *  any browser/vite process spawns — failing here costs nothing; failing at utterance ~17 of a real
+ *  paid --live session (this defect's actual prior failure mode) costs a torn-down session and,
+ *  after two in a row, the whole pilot. */
+function assertSessionBudget(plan, mode) {
+  if (!plan.length) return;
+  const worst = plan.reduce((acc, cell) => {
+    const budget = worstCaseSessionBudgetMs(cell, mode);
+    return budget > acc.budget ? { cell, budget } : acc;
+  }, { cell: plan[0], budget: worstCaseSessionBudgetMs(plan[0], mode) });
+  if (worst.budget > SESSION_TIMEOUT_MS) {
+    throw new Error(
+      `refusing to start: the worst-case session in this plan (${worst.cell.register}/${worst.cell.shell}/` +
+      `${worst.cell.corpus}, ${worst.cell.utterances.length} utterances, ${countProgramSwaps(worst.cell.utterances)} ` +
+      `program swaps) needs up to ${worst.budget}ms (${worst.cell.utterances.length} x MAX_SETTLE_MS.${mode}=` +
+      `${MAX_SETTLE_MS[mode]} + ${countProgramSwaps(worst.cell.utterances)} x PROGRAM_SWAP_WAIT_MS=${PROGRAM_SWAP_WAIT_MS} ` +
+      `+ FIXED_SESSION_OVERHEAD_MS=${FIXED_SESSION_OVERHEAD_MS}), which exceeds SESSION_TIMEOUT_MS=${SESSION_TIMEOUT_MS}ms. ` +
+      `Raise SESSION_TIMEOUT_MS, lower MAX_SETTLE_MS.${mode}, or shrink the corpus/plan — do not silently proceed: ` +
+      `a session that hits SESSION_TIMEOUT_MS is torn down by withTimeout BEFORE exportSession runs, losing every ` +
+      `utterance already driven (and, under --live, already paid for).`,
+    );
+  }
+}
 
 function usageError(msg) {
   console.error(`error: ${msg}\nusage: node scripts/battery/run.mjs --dry|--live`);
@@ -442,9 +538,21 @@ async function evalJs(rpc, expression, awaitPromise = false) {
 // dist/web/index.mjs's `live.connect`: `conn.connect()` sets `ws.onopen = callbacks.onopen`
 // directly — there is no server handshake message gating it, e.g. no `setupComplete` wait before
 // the app's `cb.onOpen()` runs). So the stub only needs to become "open" — it never needs to speak
-// Gemini's wire protocol at all. It never calls `onmessage`, so the model never replies: every
-// turn the battery opens is destined to settle `no_response`/`speech_only`, which is the honest,
-// zero-spend measurement this mode exists to produce (see the file header).
+// Gemini's wire protocol at all. BY ITSELF it never calls `onmessage`, so the model never replies:
+// every ORDINARY turn the battery opens is destined to settle `no_response`/`speech_only`, which is
+// the honest, zero-spend measurement this mode exists to produce (see the file header).
+//
+// I2 (settle-detector review, 2026-07-30): `window.__ffLiveSocket` below exposes the CURRENT stub
+// instance so `injectDrySettleReply` (driveSession) can fire ITS `onmessage` directly, from Node,
+// for exactly one designated utterance per cell — the SDK's own `handleWebSocketMessage`
+// (`node_modules/@google/genai`) JSON.parses a raw socket frame straight into the object it hands
+// `onmessage`, so a hand-built `{ toolCall: { functionCalls: [...] } }` string exercises the app's
+// REAL `onToolCall` -> `ack()` path exactly as a genuine model reply would; nothing about the app
+// is faked beyond the socket transport itself, which this whole file already fakes. This is what
+// makes the dry gate able to prove `settleTotals.settled >= 1` STRUCTURALLY (a wrong selector, an
+// unattached ref, or a never-written attribute now fails the gate) instead of the gate being
+// blind to the detector's own correctness (every prior dry run produced `0 settled` whether the
+// instrument worked or was completely broken, because nothing dry-mode ever answered anything).
 const STUB_SOCKET_SCRIPT = `(function(){
   if (window.__ffStubInstalled) return;
   window.__ffStubInstalled = true;
@@ -455,6 +563,7 @@ const STUB_SOCKET_SCRIPT = `(function(){
     this.url = url;
     this.readyState = 0;
     this.onopen = null; this.onmessage = null; this.onerror = null; this.onclose = null;
+    window.__ffLiveSocket = this; // I2: the ONE currently-in-use stub instance, for injection from Node
     var self = this;
     setTimeout(function () {
       self.readyState = 1;
@@ -658,6 +767,15 @@ async function pollUntil(fn, { timeoutMs, intervalMs = 300 }) {
  *  machine's own single writer for `openTurnRef` — `src/eval/turns.ts`'s `turnOpenAttr` decides
  *  what the string says). `null` if the form is not mounted at all (a malformed boot); treated the
  *  same as '1' (open) below — an unreadable signal must never be silently read as "settled". */
+/** Reads the omnibox form's `data-turn-open` (App.tsx's `setOpenTurn`, the turn machine's own
+ *  single writer for `openTurnRef` — `src/eval/turns.ts`'s `turnOpenAttr` decides the string).
+ *  `null` from EITHER of two distinct sources, both read the same way by the caller (M2,
+ *  settle-detector review, 2026-07-30 — the previous version of this doc named only the first):
+ *  (1) the form is not mounted at all (a malformed boot), or (2) the form IS mounted but no turn
+ *  has ever opened on it yet (`dataset.turnOpen` is simply `undefined` pre-first-turn — `??`
+ *  below normalizes that to the same `null` case 1 already returns). Both fail SAFE toward "open"
+ *  in `pollTurnSettled` below (neither `'0'` nor `'f'`), which is the right direction for either
+ *  cause — an unreadable signal must never be silently read as settled. */
 async function readTurnOpen(rpc) {
   return evalJs(rpc, `(function(){
     var form = ${OMNIBOX_FORM};
@@ -665,41 +783,89 @@ async function readTurnOpen(rpc) {
   })()`);
 }
 
-/** THE SETTLE-DETECTOR (Task 10): polls `data-turn-open` every `SETTLE_POLL_INTERVAL_MS` until it
- *  reads '0' (turn closed) or `ceilingMs` elapses, whichever comes first. Replaces the old fixed
- *  sleep between submits — a fast turn no longer wastes wall-clock, and a genuinely slow one is not
- *  cut off before `ceilingMs` the way the old fixed `SETTLE_MS.live` cut off anything past 8s.
+/** THE SETTLE-DETECTOR (Task 10, revised — I1/M1, settle-detector review, 2026-07-30): polls
+ *  `data-turn-open` every `SETTLE_POLL_INTERVAL_MS` until it reads a terminal value or `ceilingMs`
+ *  elapses, whichever comes first. Replaces the old fixed sleep between submits — a fast turn no
+ *  longer wastes wall-clock, and a genuinely slow one is not cut off before `ceilingMs` the way the
+ *  old fixed `SETTLE_MS.live` cut off anything past 8s.
  *
- *  WHAT '0' MEANS, EXACTLY (turns.ts / App.tsx's `ack()`): the turn closed through a tool-call ack
- *  — a commit, a refusal, or a collaborative `ask` (App.tsx's `ack()` is the ONE wrapper every tool
- *  call's result flows through, so "committed", "refused", and "asked" are ALL '0' here, not just
- *  successful commits) — or through `transcription_lost` (an unreadable transcript closes on the
- *  spot). Ordinary conversational replies in this app ARE tool calls too (the `respond` tool, used
- *  for anything that is not a point-and-identify `explain`), so most turns settle through this same
- *  ack path, not just ones that edit a document.
+ *  THREE OUTCOMES, not two — `turnOpenAttr`'s own doc (turns.ts) has the full reasoning; summary:
+ *  - `'settled'` ('0'): the turn closed through a tool-call ack — a commit, a refusal, or a
+ *    collaborative `ask` (App.tsx's `ack()` is the ONE wrapper every tool call's result flows
+ *    through, so all three are `'0'`, not just successful commits) — or through
+ *    `transcription_lost` (an unreadable transcript closes on the spot). Ordinary conversational
+ *    replies in this app ARE tool calls too (the `respond` tool), so most turns settle this way.
+ *    This is the app genuinely answering (or definitively failing to transcribe) the request.
+ *  - `'forceClosed'` ('f'): `flushOpenTurn` (App.tsx) closed it with NO ack and no lost transcript
+ *    — the session ended out from under the open turn (an unrequested socket drop, or any of the
+ *    three reconnect effects: dial/backend/program-swap changes). I1 (settle-detector review):
+ *    folding this into "settled" let a mid-poll reconnect read as the app answering, over-reporting
+ *    harness health in exactly the failure mode this counter exists to catch. Reported separately
+ *    so a run's SETTLE-DETECTOR STATUS can say which happened, not just "closed, not our problem."
+ *  - `'timedOut'`: neither of the above happened before `ceilingMs`. WHAT THIS CANNOT DISTINGUISH:
+ *    a turn that settles as `speech_only` — the model said something but never called ANY tool —
+ *    never flips the attribute on its own; it stays `'1'` until the NEXT utterance's `openTurn`
+ *    supersede-closes it, or the session ends. From this poll alone that is indistinguishable from
+ *    `no_response` (the model never answered at all) — both land here. That is not a harness
+ *    shortcoming to fix from outside: turns.ts's own header says a speech-only turn is deliberately
+ *    left OPEN rather than given an invented close event. The ceiling is the honest fallback for
+ *    exactly that case.
  *
- *  WHAT IT CANNOT SEE: a turn that settles as `speech_only` — the model said something but never
- *  called ANY tool for it, `respond` included — never flips the attribute to '0' on its own; it
- *  stays '1' until the NEXT utterance's `openTurn` supersede-closes it, or the session ends. From
- *  this poll alone that is indistinguishable from `no_response` (the model never answered at all) —
- *  both ride `ceilingMs` here. That is not a harness shortcoming to fix from outside: turns.ts's own
- *  header says a speech-only turn is deliberately left OPEN rather than given an invented close
- *  event ("closing it here would report silence as a transcription failure" — `openTurn`'s doc). The
- *  ceiling below is the honest fallback for exactly that case, and the caller records settled-vs-
- *  timed-out per utterance rather than treating every wait as the same kind of number.
- *
- *  Returns `{ settled, waitedMs }`. On ceiling, `settled` is `false` and the caller proceeds exactly
- *  as the old fixed sleep did (the next submit's `openTurn` supersede-closes whatever is still
- *  open) — this function only changes HOW LONG that takes, and reports which of the two happened. */
+ *  Returns `{ outcome, waitedMs }` — `waitedMs` is ALWAYS the real elapsed time (`Date.now() -
+ *  startedAt`), on every path including timeout (M1: the previous version reported the ceiling
+ *  verbatim on timeout, overshooting real elapsed by up to one poll interval plus CDP round-trip
+ *  latency — measured ~1040ms against a 900ms dry ceiling). On `'timedOut'`, the caller proceeds
+ *  exactly as the old fixed sleep did (the next submit's `openTurn` supersede-closes whatever is
+ *  still open) — this function only changes HOW LONG that takes, and now reports which of the
+ *  three outcomes happened plus a genuinely-measured latency for it. */
 async function pollTurnSettled(rpc, ceilingMs) {
   const startedAt = Date.now();
   const deadline = startedAt + ceilingMs;
   while (Date.now() < deadline) {
     const open = await readTurnOpen(rpc);
-    if (open === '0') return { settled: true, waitedMs: Date.now() - startedAt };
+    if (open === '0') return { outcome: 'settled', waitedMs: Date.now() - startedAt };
+    if (open === 'f') return { outcome: 'forceClosed', waitedMs: Date.now() - startedAt };
     await sleep(SETTLE_POLL_INTERVAL_MS);
   }
-  return { settled: false, waitedMs: ceilingMs };
+  return { outcome: 'timedOut', waitedMs: Date.now() - startedAt };
+}
+
+// I2 (settle-detector review, 2026-07-30): which utterance, per dry cell, the stub answers for
+// real — see `injectDrySettleReply`'s own doc for the mechanism. Index 0 (the FIRST utterance of
+// every dry cell): simplest to reason about (always exists, `cell.utterances.length` is never 0
+// in any planned dry cell — see `buildPlan`), and exercising it on every cell rather than just
+// once across the whole gate means each of the three dry sessions independently proves its own
+// wiring rather than the gate leaning on a single lucky session.
+const DRY_SETTLES_UTTERANCE_INDEX = 0;
+
+/** I2 (settle-detector review, 2026-07-30): fires the CURRENT stub socket's `onmessage` (exposed
+ *  as `window.__ffLiveSocket` — `STUB_SOCKET_SCRIPT`'s own doc) with a hand-built Gemini live
+ *  frame naming the `respond` tool — the same tool this app's OWN conversational replies use, and
+ *  the same wire shape the SDK's `handleWebSocketMessage` (`node_modules/@google/genai`) parses a
+ *  real server frame into before calling the app's `onmessage`. This drives App.tsx's REAL
+ *  `onToolCall` -> `handleVoiceToolCall` -> `ack()` path exactly as a genuine model reply would —
+ *  nothing about the app's OWN turn-closing logic is faked, only the transport underneath it
+ *  (which this whole file already fakes for --dry). Used for exactly `DRY_SETTLES_UTTERANCE_INDEX`
+ *  of each dry cell's utterances, so `settleTotals.settled >= 1` becomes a STRUCTURAL property of
+ *  a working dry gate rather than something no dry run could ever demonstrate either way. Throws
+ *  loudly (not a silent no-op that would just look like an ordinary timeout) if `__ffLiveSocket`
+ *  is missing — that would mean the stub wiring itself is broken, a materially different failure
+ *  than "the settle-detector didn't detect a settle," and deserves a distinguishable error. */
+async function injectDrySettleReply(rpc) {
+  const dispatched = await evalJs(rpc, `(function(){
+    var s = window.__ffLiveSocket;
+    if (!s || !s.onmessage) return false;
+    var msg = { toolCall: { functionCalls: [{ id: 'dry-settle-probe-' + Date.now(), name: 'respond',
+      args: { seq: 'answer', guideLine: 'answer', cards: [{ t: 'answer', text: 'dry gate settle probe' }] } }] } };
+    s.onmessage({ data: JSON.stringify(msg) });
+    return true;
+  })()`);
+  if (!dispatched) {
+    throw new Error(
+      'injectDrySettleReply: window.__ffLiveSocket not found or has no onmessage handler — the ' +
+      'dry stub socket wiring itself is broken (STUB_SOCKET_SCRIPT), not just "no settle detected"',
+    );
+  }
 }
 
 /** Opens the debug drawer, clicks "Export session JSON" (DebugDrawer.tsx — calls
@@ -852,8 +1018,11 @@ async function endSession(rpc) {
  *  ceiling rather than a flat tax. See `pollTurnSettled`'s own doc for exactly which settle paths
  *  it can and cannot see (tool-call ack, including `respond`, covers most turns; a pure
  *  `speech_only` reply with no tool call at all still rides the ceiling, by the app's own honest
- *  design — turns.ts leaves that case open rather than inventing a close event for it). `settleStats`
- *  (settled vs timed-out, per session) is this poll's own health record, carried into the manifest.
+ *  design — turns.ts leaves that case open rather than inventing a close event for it; a session end
+ *  or reconnect force-closes it too, counted separately as `forceClosed` rather than folded into a
+ *  genuine settle — I1, settle-detector review, 2026-07-30). `settleStats` (settled / forceClosed /
+ *  timed-out, plus each genuine settle's real latency, per session) is this poll's own health
+ *  record, carried into the manifest.
  *
  *  C2 (task-9 review round 1, Critical): the actual work below runs inside `withTimeout`, INSIDE
  *  this function's own try/finally — not, as before, wrapped from the OUTSIDE by the caller. That
@@ -911,6 +1080,18 @@ async function driveSession(browserUrl, cdpPort, cell, mode, outDir) {
         throw new Error(`wide-corpus boot assertion failed: expected ${WIDE_CORPUS_ARTIFACT_COUNT} seeded artifact chips, found ${artifactCount} — ?corpus=wide did not seed as expected, or the desk failed to mount them`);
       }
     }
+    // M4 (settle-detector review, 2026-07-30): `OMNIBOX_FORM` (`document.querySelector('[data-shell]
+    // form')`) is FIRST-MATCH-WINS and is now load-bearing for measurement (`typeAndSubmit`,
+    // `readTurnOpen` — the whole settle-detector reads `data-turn-open` off whatever this selector
+    // finds first). Verified at HEAD that exactly one `<form>` sits under `[data-shell]` in this
+    // app's tree, but nothing enforces that staying true — a future form mounted earlier in
+    // document order would silently turn every utterance into a ceiling-ride that LOOKS like a
+    // 100%-timeout slow-model run rather than a selector bug. Asserted once per session, right
+    // beside the other boot assertions, rather than trusted forever.
+    const formCount = await evalJs(rpc, `document.querySelectorAll('[data-shell] form').length`);
+    if (formCount !== 1) {
+      throw new Error(`boot assertion failed: expected exactly 1 form under [data-shell], found ${formCount} — OMNIBOX_FORM ("${OMNIBOX_FORM}") is first-match-wins and load-bearing for the settle-detector (typeAndSubmit, readTurnOpen); a second form earlier in document order would silently read the wrong element`);
+    }
     let currentProgram = active;
     if (cell.utterances.length && cell.utterances[0].program !== currentProgram) {
       const switched = await switchProgram(rpc, cell.utterances[0].program);
@@ -925,12 +1106,16 @@ async function driveSession(browserUrl, cdpPort, cell, mode, outDir) {
     const connected = await pollUntil(() => isLiveNow(rpc), { timeoutMs: CONNECT_TIMEOUT_MS, intervalMs: 300 });
     if (!connected) throw new Error(`session never reached isLive within ${CONNECT_TIMEOUT_MS}ms`);
 
-    // Settle-detector health for THIS session (Task 10): how many of its utterances settled via a
-    // real close (`data-turn-open` flipped to '0') versus rode `MAX_SETTLE_MS[mode]`'s ceiling.
+    // Settle-detector health for THIS session (Task 10; three-bucket shape — I1, settle-detector
+    // review, 2026-07-30): how many of its utterances settled via a real close (`data-turn-open`
+    // '0'), force-closed out from under an open turn (session end/reconnect — 'f'), or rode
+    // `MAX_SETTLE_MS[mode]`'s ceiling with no close at all. `settledWaitedMs` (M1) keeps the real
+    // elapsed time for every GENUINE settle only — `forceClosed`/`timedOut` latencies are not a
+    // measurement of how fast the app answered anything, so they are counted but not averaged in.
     // Surfaced in the manifest per session — a run with many timeouts is still harness-limited on
     // whatever fraction that is; a run with few is finally measuring the app, not the poll ceiling.
-    const settleStats = { settled: 0, timedOut: 0 };
-    for (const u of cell.utterances) {
+    const settleStats = { settled: 0, forceClosed: 0, timedOut: 0, settledWaitedMs: [] };
+    for (const [idx, u] of cell.utterances.entries()) {
       if (u.program !== currentProgram) {
         // A mid-session program swap reconnects (App.tsx's `activeProgram` effect: close, wait
         // 800ms, reconnect — the tool list/system prompt are program-scoped). NOT a
@@ -938,21 +1123,37 @@ async function driveSession(browserUrl, cdpPort, cell, mode, outDir) {
         // session this swap is about to tear down, so polling that same condition would read the
         // stale "true" on its very first check and return immediately, before the close/800ms-
         // delay/reconnect cycle even starts — a real race, not a hypothetical one. `data-turn-open`
-        // does not help here either: a reconnect is not a turn closing, it is the WHOLE SESSION
-        // tearing down and coming back, so this stays a fixed sleep past the app's own 800ms
-        // reconnect delay (with margin for the stub connect itself) — the settle-detector below is
-        // for the per-utterance turn wait, a genuinely different seam.
+        // does not help here either, but NOT because a reconnect leaves it alone — it does not:
+        // `closeLiveSession` -> `recordSessionEnd` -> `flushOpenTurn` force-closes whatever turn
+        // was open (App.tsx's `setOpenTurn(null, 'flushed')`, read here as `'f'` — I1,
+        // settle-detector review, 2026-07-30). That close fires at the START of the reconnect, not
+        // when the NEW session becomes ready, so polling `data-turn-open` here would read
+        // `settled`/`forceClosed` almost instantly and tell us nothing about whether the 800ms
+        // close/reconnect cycle actually finished. This stays a fixed sleep past the app's own
+        // 800ms reconnect delay (with margin for the stub connect itself) because THIS wait is
+        // about session readiness, a different question than the per-utterance turn wait below.
         const switched = await switchProgram(rpc, u.program);
         if (!switched) throw new Error(`program launcher/chip not found for "${u.program}"`);
         currentProgram = u.program;
-        await sleep(1800);
+        await sleep(PROGRAM_SWAP_WAIT_MS);
       }
       const ok = await typeAndSubmit(rpc, u.text);
       if (!ok) throw new Error(`omnibox not found when submitting utterance "${u.key}"`);
+      // I2 (settle-detector review, 2026-07-30): in dry mode, make the designated utterance
+      // genuinely settle instead of riding the ceiling like every other dry utterance — see
+      // `injectDrySettleReply`'s own doc for why. Injected BEFORE the poll below starts (rather
+      // than raced against it) so the poll's very first check can already see it, keeping the dry
+      // gate exactly as fast as it was — this reply is not meant to simulate real latency, only to
+      // prove the detector's wiring end to end.
+      if (mode === 'dry' && idx === DRY_SETTLES_UTTERANCE_INDEX) {
+        await injectDrySettleReply(rpc);
+      }
       // THE SETTLE-DETECTOR (Task 10) — see `pollTurnSettled`'s own doc for exactly which settle
       // paths it can and cannot see, and why a ceiling remains even with a real poll in place.
-      const { settled } = await pollTurnSettled(rpc, MAX_SETTLE_MS[mode]);
-      if (settled) settleStats.settled += 1; else settleStats.timedOut += 1;
+      const { outcome, waitedMs } = await pollTurnSettled(rpc, MAX_SETTLE_MS[mode]);
+      if (outcome === 'settled') { settleStats.settled += 1; settleStats.settledWaitedMs.push(waitedMs); }
+      else if (outcome === 'forceClosed') settleStats.forceClosed += 1;
+      else settleStats.timedOut += 1;
     }
 
     // I1: end the session for real BEFORE exporting — this is what flushes the LAST utterance's
@@ -1057,6 +1258,12 @@ async function main() {
   if (plan.length > MAX_SESSIONS) {
     throw new Error(`planned ${plan.length} sessions, exceeds MAX_SESSIONS=${MAX_SESSIONS} — refusing to start`);
   }
+  // C1 (settle-detector review, 2026-07-30): fail loud HERE, before any browser/vite process
+  // spawns, if this plan's own worst-case session would exceed SESSION_TIMEOUT_MS — see
+  // `assertSessionBudget`'s own doc for why (a session that hits the timeout is torn down before
+  // `exportSession` ever runs, losing everything already driven and, under --live, already paid
+  // for; two in a row aborts the whole pilot with zero data from either).
+  assertSessionBudget(plan, mode);
 
   const runId = new Date().toISOString().replace(/[:.]/g, '-');
   const outDir = path.join(OUT_ROOT, runId);
@@ -1099,7 +1306,8 @@ async function main() {
         });
         consecutiveFailures = 0;
         console.log(`[battery]   -> exported ${path.relative(ROOT, exportPath)} `
-          + `(settle: ${settleStats.settled} settled, ${settleStats.timedOut} timed out)`);
+          + `(settle: ${settleStats.settled} settled, ${settleStats.forceClosed} force-closed, `
+          + `${settleStats.timedOut} timed out)`);
       } catch (err) {
         consecutiveFailures += 1;
         console.error(`[battery]   FAILED (${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}): ${err.message}`);
@@ -1125,21 +1333,44 @@ async function main() {
   // health data, not app-grading data (that stays ts-bridge's job; this is plain arithmetic over
   // what `pollTurnSettled` already recorded per utterance). A run with many timeouts is still
   // harness-limited on whatever fraction that is; a run with few is finally measuring the app.
+  //
+  // M5 (settle-detector review, 2026-07-30): this reduces over `manifestEntries` ONLY — sessions
+  // that produced a gradeable export. A session that THREW (a `catch` below, never reaching the
+  // `manifestEntries.push`) contributes NOTHING here, including whatever utterances it drove
+  // before failing — its `settleStats` never left `driveSession`'s local scope. `sessionsCounted`
+  // records that denominator explicitly (== `manifestEntries.length`) so a reader — or
+  // `summarize.mjs`'s banner — can say what these totals do and do not cover, rather than let
+  // "N of TOTAL utterance(s)" imply TOTAL was every utterance this run attempted.
   const settleTotals = manifestEntries.reduce((acc, e) => ({
     settled: acc.settled + (e.settleStats?.settled ?? 0),
+    forceClosed: acc.forceClosed + (e.settleStats?.forceClosed ?? 0),
     timedOut: acc.timedOut + (e.settleStats?.timedOut ?? 0),
-  }), { settled: 0, timedOut: 0 });
+    settledWaitedMs: acc.settledWaitedMs.concat(e.settleStats?.settledWaitedMs ?? []),
+  }), { settled: 0, forceClosed: 0, timedOut: 0, settledWaitedMs: [] });
+  // M1 (settle-detector review): the payoff number this whole feature exists to produce — how
+  // fast a GENUINE settle actually happens, not just how many did. Median, not mean: a handful of
+  // slow real acks should not be able to drag the headline number the way an outlier mean would.
+  const sortedSettledMs = [...settleTotals.settledWaitedMs].sort((a, b) => a - b);
+  const medianSettledWaitedMs = sortedSettledMs.length
+    ? (sortedSettledMs.length % 2 === 1
+        ? sortedSettledMs[(sortedSettledMs.length - 1) / 2]
+        : Math.round((sortedSettledMs[sortedSettledMs.length / 2 - 1] + sortedSettledMs[sortedSettledMs.length / 2]) / 2))
+    : null;
   const manifest = {
     mode, createdAt: new Date().toISOString(),
     aborted: !!abortError, abortReason: abortError ? abortError.message : null,
-    plannedSessions: plan.length, entries: manifestEntries, settleTotals,
+    plannedSessions: plan.length, entries: manifestEntries,
+    settleTotals: {
+      settled: settleTotals.settled, forceClosed: settleTotals.forceClosed, timedOut: settleTotals.timedOut,
+      medianSettledWaitedMs, sessionsCounted: manifestEntries.length,
+    },
   };
   const manifestPath = path.join(outDir, 'manifest.json');
   writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
   console.log(`[battery] manifest: ${path.relative(ROOT, manifestPath)}`);
   console.log(`[battery] ${manifestEntries.length}/${plan.length} sessions produced a gradeable export`);
-  console.log(`[battery] settle-detector: ${settleTotals.settled} settled, ${settleTotals.timedOut} timed out `
-    + `(ceiling ${MAX_SETTLE_MS[mode]}ms)`);
+  console.log(`[battery] settle-detector: ${settleTotals.settled} settled (median ${medianSettledWaitedMs ?? 'n/a'}ms), `
+    + `${settleTotals.forceClosed} force-closed, ${settleTotals.timedOut} timed out (ceiling ${MAX_SETTLE_MS[mode]}ms)`);
   // P7 (task-9 review round 3): the EXACT command, not just the bare path — a bare
   // `node scripts/battery/summarize.mjs` (no argument) grades the NEWEST manifest under `out/`,
   // which is only this run's if nothing else has run since. Printing the full invocation removes
