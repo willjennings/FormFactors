@@ -171,6 +171,63 @@ describe('shell in telemetry (shell skin is a second, independent measured axis)
   });
 });
 
+describe('turn events (the denominator is real)', () => {
+  beforeEach(() => telemetry.start(cfg));
+
+  it('pushes a turn event with the given shape', () => {
+    telemetry.turn('t1', 'voice', 'add a heading here', 'speech_only', 300, null);
+    const events = JSON.parse(telemetry.exportJSON()).events as any[];
+    const ev = events.find(e => e.type === 'turn');
+    expect(ev).toMatchObject({
+      id: 't1', modality: 'voice', request: 'add a heading here',
+      outcome: 'speech_only', firstResponseMs: 300, settledMs: null,
+    });
+    expect(typeof ev.t).toBe('number');
+  });
+
+  it('records a tool_call turn with both millis set', () => {
+    telemetry.turn('t2', 'typed', 'sum this column', 'tool_call', 120, 900);
+    const events = JSON.parse(telemetry.exportJSON()).events as any[];
+    expect(events.find(e => e.type === 'turn')).toMatchObject({ outcome: 'tool_call', firstResponseMs: 120, settledMs: 900 });
+  });
+
+  it('a turn event never moves any number in metrics() — deep-equal before/after (the same shape that caught a real inverted-denominator bug)', () => {
+    telemetry.action('edit_content', 'mutate', 'commit');
+    telemetry.action('edit_content', 'mutate', 'rejected');
+    telemetry.correction();
+    telemetry.error('boom');
+    telemetry.unspecifiedAsk('heading', true, true);
+    telemetry.deixis('this', 'Cell A1', 'Cell A1', 'high');
+    telemetry.grounding('Cell A1', 'Cell A1', true, 'structural');
+    const before = telemetry.metrics();
+    telemetry.turn('t1', 'voice', 'add a heading here', 'speech_only', 300, null);
+    telemetry.turn('t2', 'voice', 'sum this column', 'no_response', null, null);
+    telemetry.turn('t3', 'typed', 'insert a chart', 'tool_call', 120, 900);
+    telemetry.turn('t4', 'voice', '<lost>', 'transcription_lost', null, null);
+    telemetry.sessionComplete(42_000, 6, 1, 12, 3);
+    const after = telemetry.metrics();
+    expect(after).toEqual(before);
+  });
+});
+
+describe('sessionComplete gains framesSent/hintsSent', () => {
+  beforeEach(() => telemetry.start(cfg));
+
+  it('records framesSent/hintsSent when provided', () => {
+    telemetry.sessionComplete(42_000, 6, 1, 12, 3);
+    const events = JSON.parse(telemetry.exportJSON()).events as any[];
+    expect(events.find(e => e.type === 'session_complete'))
+      .toMatchObject({ timeToCompleteMs: 42_000, slotsFilled: 6, inferredCount: 1, framesSent: 12, hintsSent: 3 });
+  });
+
+  it('defaults framesSent/hintsSent to 0 for existing call sites (compiles unchanged)', () => {
+    telemetry.sessionComplete(42_000, 6, 1);
+    const events = JSON.parse(telemetry.exportJSON()).events as any[];
+    expect(events.find(e => e.type === 'session_complete'))
+      .toMatchObject({ timeToCompleteMs: 42_000, slotsFilled: 6, inferredCount: 1, framesSent: 0, hintsSent: 0 });
+  });
+});
+
 describe('exportConfigString (the arm/shell/cfg segment of the download filename)', () => {
   // Pulled out of exportJSON's `if (typeof window !== 'undefined')` guard, which vitest never
   // executes here (node, no jsdom) — this is the only way the 'unset' fallbacks are exercised.

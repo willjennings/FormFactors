@@ -58,7 +58,7 @@ export type TelemetryEvent =
   | { t: number; type: 'gap_question'; slotId: string }
   | { t: number; type: 'readback'; accepted: boolean }
   | { t: number; type: 'stall' }
-  | { t: number; type: 'session_complete'; timeToCompleteMs: number; slotsFilled: number; inferredCount: number }
+  | { t: number; type: 'session_complete'; timeToCompleteMs: number; slotsFilled: number; inferredCount: number; framesSent: number; hintsSent: number }
   | { t: number; type: 'error'; message: string }
   | { t: number; type: 'guidance'; kind: 'sequence_start' | 'step_done' | 'sequence_complete' | 'sequence_abandoned' | 'blocked' | 'reveal' | 'relate_shown' | 'card_dealt' | 'why_opened' | 'card_flipped' | 'show_me' | 'check_auto_pass' | 'check_auto_fail' | 'check_user_confirmed' | 'rail_complete' | 'rail_abandoned'; taskKey?: string; posture?: string; fadeLevel?: number; cardType?: string; band?: string }
   | { t: number; type: 'mission_start'; key: string; run: number }
@@ -68,6 +68,12 @@ export type TelemetryEvent =
   | { t: number; type: 'register_switch'; from: string; to: string; midSession: boolean }
   | { t: number; type: 'shell_switch'; from: SkinKey; to: SkinKey; midSession: boolean }
   | { t: number; type: 'unspecified_ask'; field: string; answered: boolean; viaChip: boolean }
+  // Every user utterance/typed submit opens a turn; the model's response (tool call, speech-only,
+  // silence, or a lost transcript) closes it. `speech_only`/`no_response` are the rows that do not
+  // exist anywhere else today — the worst failures, currently invisible to any completion rate.
+  | { t: number; type: 'turn'; id: string; modality: InputModality; request: string;
+      outcome: 'tool_call' | 'speech_only' | 'no_response' | 'transcription_lost';
+      firstResponseMs: number | null; settledMs: number | null }
   | { t: number; type: 'pin'; cardType: string; artifactId?: string; error?: string }
   | { t: number; type: 'combine_tray'; count: number; kind: string; ok: boolean };
 
@@ -134,8 +140,10 @@ class Telemetry {
   gapQuestion(slotId: string) { this.push({ type: 'gap_question', slotId }); }
   readback(accepted: boolean) { this.push({ type: 'readback', accepted }); }
   stall() { this.push({ type: 'stall' }); }
-  sessionComplete(timeToCompleteMs: number, slotsFilled: number, inferredCount: number) {
-    this.push({ type: 'session_complete', timeToCompleteMs, slotsFilled, inferredCount });
+  // framesSent/hintsSent default to 0 so existing call sites (which predate the traffic-cost
+  // fold-in) keep compiling unchanged.
+  sessionComplete(timeToCompleteMs: number, slotsFilled: number, inferredCount: number, framesSent = 0, hintsSent = 0) {
+    this.push({ type: 'session_complete', timeToCompleteMs, slotsFilled, inferredCount, framesSent, hintsSent });
   }
   error(message: string) { this.push({ type: 'error', message }); }
   guidance(kind: 'sequence_start' | 'step_done' | 'sequence_complete' | 'sequence_abandoned' | 'blocked' | 'reveal' | 'relate_shown' | 'card_dealt' | 'why_opened' | 'card_flipped' | 'show_me' | 'check_auto_pass' | 'check_auto_fail' | 'check_user_confirmed' | 'rail_complete' | 'rail_abandoned', detail: { taskKey?: string; posture?: string; fadeLevel?: number; cardType?: string; band?: string } = {}) {
@@ -154,6 +162,11 @@ class Telemetry {
    *  place (App's openAsk: same field, candidates added) is one ask and one event; a question
    *  replaced by one about a different field records the displaced one as unanswered. */
   unspecifiedAsk(field: string, answered: boolean, viaChip: boolean) { this.push({ type: 'unspecified_ask', field, answered, viaChip }); }
+  /** One push per `ClosedTurn` (src/eval/turns.ts). Takes primitive args mirroring the event
+   *  fields, not the `ClosedTurn` object itself, so this file has no dependency on `src/eval`. */
+  turn(id: string, modality: InputModality, request: string, outcome: 'tool_call' | 'speech_only' | 'no_response' | 'transcription_lost', firstResponseMs: number | null, settledMs: number | null) {
+    this.push({ type: 'turn', id, modality, request, outcome, firstResponseMs, settledMs });
+  }
   pin(cardType: string, artifactId?: string, error?: string) { this.push({ type: 'pin', cardType, artifactId, error }); }
   combineTray(count: number, kind: string, ok: boolean) { this.push({ type: 'combine_tray', count, kind, ok }); }
 
