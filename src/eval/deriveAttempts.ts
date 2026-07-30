@@ -218,10 +218,18 @@ export function deriveAttempts(events: TelemetryEvent[]): Attempt[] {
   /** Fires on a program swap or session end: whatever is still pending gets graded from what is
    *  known, never left out of the corpus (rule 6, §5.6: abandonment is data, not absence). */
   const closeAtBoundary = (): void => {
-    if (!pending) return;
-    const { outcome, reason } = resolve(pending, TOOL_CALL_NOTHING);
-    settle(pending, outcome, reason);
-    pending = null;
+    if (pending) {
+      const { outcome, reason } = resolve(pending, TOOL_CALL_NOTHING);
+      settle(pending, outcome, reason);
+      pending = null;
+    }
+    // UNCONDITIONAL, and after any settle (2026-07-30, found writing the multi-run tests): this used
+    // to sit behind an `if (!pending) return;` guard, so a boundary reached with NOTHING pending left
+    // the undo window open — and a `correction` recorded in the NEXT run then retroactively convicted
+    // a commit from a previous connection as `wrong`. Unreachable until the recorder began archiving
+    // runs instead of wiping them (telemetry.ts priorRuns), because before that a stream could only
+    // ever hold one `session_start`. After the settle rather than before, so the attempt this
+    // boundary just closed is not itself left undo-eligible across the boundary either.
     closeUndoWindow();
   };
 
@@ -462,7 +470,7 @@ export function deriveAttempts(events: TelemetryEvent[]): Attempt[] {
       default:
         break; // no grading signal in this module: deixis, grounding, map, fill, gap_question,
                // readback, stall, session_complete, error, guidance, mission_*, register_switch,
-               // shell_switch, pin, combine_tray, eval_card. `eval_card` in particular is a
+               // shell_switch, pin, combine_tray, artifact_created, eval_card. `eval_card` in particular is a
                // deliberate no-op here: it records which TRIAL was run and how the deck graded it,
                // which must never feed back into how this module grades the attempt — the deck
                // reads deriveAttempts (via the scorecard), not the other way round.

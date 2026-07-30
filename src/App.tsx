@@ -68,7 +68,7 @@ import { blockedElementNumbers } from './teaching/selectors';
 import { emitFeedbackAudio, FEEDBACK_OPTIONS } from './feedback';
 import type { FeedbackEvent } from './feedback';
 import { primeEarcons } from './feedback/earcons';
-import { telemetry, detectDevice } from './telemetry';
+import { telemetry, detectDevice, reversesAgent } from './telemetry';
 import { referents } from './referents';
 import { CallDeduper, dedupeKeyFor, parseRepair } from './coherence';
 import { assignTargetNumbers, parseTargetSelection } from './input_targets';
@@ -1085,9 +1085,18 @@ export default function App() {
   // Undo stack: pre-commit mementos. Doc entries restore a snapshot (applyAction is pure);
   // artifact entries revert to a revision — which the store records as a NEW revision, so
   // undoing is itself undoable and nothing is ever erased.
+  // `origin` (fix round 1, I1) is the anti-flattery signal's SOURCE. `telemetry.correction`'s
+  // `overAgent` flag — "the user reversed what the AGENT did", the one signal deriveAttempts' rule 2
+  // (`wrong`) fires on — was produced ONLY by RambleLive; every desk undo called `correction()` bare,
+  // so rule 2 was inert on the desk and the fixtures that pinned it described a shape production
+  // never emitted. A memento knows which it was at PUSH time and nothing later can recover it, so it
+  // is recorded here: 'agent' for a tool call's commit (including one the user confirmed through a
+  // witness card — undoing it is still undoing the agent), 'user' for a direct-manipulation edit or
+  // a hand revert. Session state, not journaled: JOURNAL_VERSION stays at 2, and a replayed journal
+  // rebuilds the document, never the undo stack.
   const [undoStack, setUndoStack] = useState<(
-    | { kind: 'doc'; doc: MockDoc; label: string }
-    | { kind: 'artifact'; id: string; toRev: number; label: string }
+    | { kind: 'doc'; doc: MockDoc; label: string; origin: 'agent' | 'user' }
+    | { kind: 'artifact'; id: string; toRev: number; label: string; origin: 'agent' | 'user' }
   )[]>([]);
   // G9: dedup duplicate tool calls. G7: a layout version stamped onto deixis hints so the
   // model has temporal context (bumped on structural layout changes, e.g. program swap).
@@ -1500,6 +1509,11 @@ export default function App() {
       // No fallback dimension is invented: the reducer already refuses unknown card ids, so a
       // missing card here is impossible, and `?? ''` would quietly widen the corpus's vocabulary.
       if (card) telemetry.evalCard(r.cardId, card.dimension, r.grade, r.graded);
+      // I7 (fix round 1): count what the recorder DIDN'T take. `telemetry.push` is a no-op before the
+      // first session_start, so a result recorded then lives in this panel and in no export. The deck
+      // now refuses to start until recording, which should make this permanently 0 — it is counted
+      // anyway, and shown on the completion line, because "should be 0" is not a measurement.
+      if (telemetry.eventCount() === 0) setEvalUnrecorded((n) => n + 1);
     }
   };
   // The baseline a card is dealt at: the telemetry stream's LENGTH at that moment. This is the
@@ -1509,6 +1523,7 @@ export default function App() {
   // carried alongside so the observe effect can refuse to grade a card against a window that
   // belongs to a different one.
   const evalCardBaselineRef = useRef<{ cardId: string | null; index: number }>({ cardId: null, index: 0 });
+  const [evalUnrecorded, setEvalUnrecorded] = useState(0);
   const dealEvalCard = (cardId: string | null) => {
     evalCardBaselineRef.current = { cardId, index: telemetry.eventCount() };
   };
@@ -2323,6 +2338,9 @@ export default function App() {
           artifactStateRef.current = artifactReduce(artifactStateRef.current, v.event);
         }
         addLog('tool', `Tool Call: combine REJECTED — ${v.error}`);
+        // I5 (fix round 1): the refusal half of the combine record. Without it a refused combine
+        // emitted nothing at all, so "the tray fired" was the only trace and it always read as ok.
+        telemetry.artifactCreated('none', 0, 'combine', v.error);
         ack({ success: false, error: v.error });
       } else {
         artifactDispatchJ(v.event);
@@ -2335,6 +2353,9 @@ export default function App() {
         artifactStateRef.current = artifactReduce(artifactStateRef.current, v.event);
         const createdArtifact = (v.event as Extract<ArtifactEvent, { type: 'artifact.create' }>).artifact;
         addLog('tool', `Tool Call: combine — "${createdArtifact.title}" ${v.provenance}`);
+        // I5: the success half. The combine branch acks directly and never reaches the gate's
+        // `action` event, so this is the ONLY telemetry that an artifact came into existence.
+        telemetry.artifactCreated(createdArtifact.kind, createdArtifact.sources.length, 'combine');
         emitFeedback({ outcome: 'committed', verbClass: 'create', label: `Created: ${createdArtifact.title}` });
         // Widget acks carry the same per-feed provenance as the [ARTIFACTS] hint and the chips
         // (spec §8) — the model never sees simulated data without its SIMULATED label.
@@ -2392,7 +2413,7 @@ export default function App() {
           } else {
             artifactDispatchJ(ev);
             artifactStateRef.current = nextState;
-            setUndoStack((s) => [...s, { kind: 'artifact' as const, id: ev.id, toRev: ev.baseRev, label: `Refine ${ev.id}` }]);
+            setUndoStack((s) => [...s, { kind: 'artifact' as const, id: ev.id, toRev: ev.baseRev, label: `Refine ${ev.id}`, origin: 'agent' as const }]);
             addLog('tool', `Tool Call: refine_artifact — ${ev.id} ${partLabel} (rev ${ev.baseRev} → ${applied.rev})`);
             emitFeedback({ outcome: 'committed', verbClass: 'mutate', label: `Refined ${ev.id} ${partLabel}` });
             recordMissionCommit('refine_artifact', 'mutate');
@@ -2529,7 +2550,7 @@ export default function App() {
         mockDocRef.current = nextDoc;
         setMockDoc(nextDoc);
         journalAppend('workspace', { type: 'doc.set', program: activeProgramRef.current ?? activeProgram, doc: nextDoc });
-        setUndoStack(s => [...s, { kind: 'doc' as const, doc: prevDoc, label: phrase }]); // memento for undo
+        setUndoStack(s => [...s, { kind: 'doc' as const, doc: prevDoc, label: phrase, origin: 'agent' as const }]); // memento for undo
         goalDispatchJ({ type: 'goal.actionCommitted', verb: fc.name, target: args.target });
         setPendingAction({ verb: fc.name, label, target, detail, confirmed: true });
         emitFeedback({ outcome: 'committed', verbClass, label: phrase });
@@ -2717,7 +2738,14 @@ export default function App() {
 
   // G8 INPUT FALLBACK: select a target by its number (voice "number two" / number key) — a
   // pointer-free deixis. Simulates pointing at the element so a command resolves to it.
-  const selectTargetByNumber = (n: number) => {
+  //
+  // `origin` (fix round 1, I2) is the DEIXIS KEYWORD this records, and it is load-bearing for the
+  // eval deck: this one function serves two genuinely different gestures — an ordinal the user SAID
+  // or typed ("number two", "the second one"), and an ordinary CLICK on a surface element, which
+  // routes here to reuse the same grounding. Both used to record `keyword: 'number'`, so a click was
+  // indistinguishable from a pointer-free ordinal and the deck's ordinal card was satisfiable by the
+  // one gesture its copy forbids. 'number' now means ordinal-by-words; 'click' means pointed at.
+  const selectTargetByNumber = (n: number, origin: 'ordinal' | 'click' = 'ordinal') => {
     lastInputModalityRef.current = 'direct';
     const img = program.images[n - 1];
     if (!img) return;
@@ -2731,7 +2759,7 @@ export default function App() {
     cursorHistoryRef.current.push({ x: cx, y: cy, t: Date.now(), hovered: entity.id });
     addMarker('THIS', cx, cy);
     referents.note(displayName(entity), 'pointed', entity.id);
-    telemetry.deixis('number', entity.title, focusTitleRef.current ?? null, 'high', 'direct');
+    telemetry.deixis(origin === 'ordinal' ? 'number' : 'click', entity.title, focusTitleRef.current ?? null, 'high', 'direct');
     addLog('event', `Selected target ${n}: ${displayName(entity)}`);
     providerRef.current?.sendTextHint(`[USER SELECTED target ${n}: ${displayName(entity)} (numbered selection). Treat this as what they are pointing at.]`);
   };
@@ -2754,7 +2782,7 @@ export default function App() {
         : [...g.slice(-1), { id: entity.id, title: displayName(entity), color: CATEGORY_COLORS[entity.category] }]);
     }
     const idx = program.images.findIndex(im => im.id === elementId);
-    if (isLive && idx >= 0) selectTargetByNumber(idx + 1);
+    if (isLive && idx >= 0) selectTargetByNumber(idx + 1, 'click');
   };
 
   // Direct manipulation commits immediately — the click IS the confirmation (no witness
@@ -2786,7 +2814,7 @@ export default function App() {
     journalAppend('workspace', { type: 'doc.set', program: activeProgramRef.current ?? activeProgram, doc: nextDoc });
     goalDispatchJ({ type: 'goal.actionCommitted', verb, target: args.target });
     const d = describeAction(verb, args);
-    setUndoStack(s => [...s, { kind: 'doc' as const, doc: prevDoc, label: `${d.label} ${d.target}` }]);
+    setUndoStack(s => [...s, { kind: 'doc' as const, doc: prevDoc, label: `${d.label} ${d.target}`, origin: 'user' as const }]);
     lastInputModalityRef.current = 'direct';
     telemetry.action(verb, classOf(verb), 'commit', 'direct');
     recordMissionCommit(verb, classOf(verb));
@@ -2828,7 +2856,7 @@ export default function App() {
       }
       artifactDispatchJ(ev);
       artifactStateRef.current = nextState;
-      setUndoStack((s) => [...s, { kind: 'artifact' as const, id: p.artifactId!, toRev: p.baseRev!, label: `Refine ${p.artifactId}` }]);
+      setUndoStack((s) => [...s, { kind: 'artifact' as const, id: p.artifactId!, toRev: p.baseRev!, label: `Refine ${p.artifactId}`, origin: 'agent' as const }]);
       telemetry.action('refine_artifact', 'mutate', 'commit', 'direct');
       recordMissionCommit('refine_artifact', 'mutate');
       emitFeedback({ outcome: 'committed', verbClass: 'mutate', label: `Refined ${p.artifactId}` });
@@ -2863,7 +2891,7 @@ export default function App() {
     mockDocRef.current = nextDoc;
     setMockDoc(nextDoc);
     journalAppend('workspace', { type: 'doc.set', program: activeProgramRef.current ?? activeProgram, doc: nextDoc });
-    setUndoStack(s => [...s, { kind: 'doc' as const, doc: prevDoc, label: `${p.label} ${p.target}` }]);
+    setUndoStack(s => [...s, { kind: 'doc' as const, doc: prevDoc, label: `${p.label} ${p.target}`, origin: 'agent' as const }]);
     goalDispatchJ({ type: 'goal.actionCommitted', verb: p.verb, target: p.target });
     telemetry.action(p.verb, classOf(p.verb), 'commit', 'direct');
     recordMissionCommit(p.verb, classOf(p.verb));
@@ -4660,10 +4688,14 @@ export default function App() {
     const count = telemetry.eventCount();
     // Two ways the baseline can be wrong, both handled by re-baselining and grading NOTHING this
     // pass: (1) it belongs to a different card (a deal was missed — grading against another card's
-    // window is worse than a one-tick delay); (2) the stream has SHRUNK below it, which happens for
-    // real — `telemetry.start()` wipes the events on any mid-session reconnect (a register, shell,
-    // backend or program change all reconnect), so a card dealt at index 40 would otherwise sit
-    // forever past the end of a stream that restarted at length 1.
+    // window is worse than a one-tick delay); (2) the stream is somehow SHORTER than the baseline.
+    // (2) used to be the live case — `telemetry.start()` wiped the events on every reconnect, and the
+    // deck's own cards cause reconnects by telling the participant to change program — and the
+    // re-baseline was how a card survived it, at the cost of forgetting everything the participant
+    // had already done on that card. It is now DEFENSIVE ONLY: the recorder archives runs instead of
+    // wiping them (telemetry.ts priorRuns), so `eventsSnapshot()` is monotonic and a card's window
+    // spans the reconnect its own instruction caused. Kept because an index-based reader that assumes
+    // monotonicity without checking is one refactor away from silently grading the wrong window.
     if (b.cardId !== card.id || b.index > count) {
       evalCardBaselineRef.current = { cardId: card.id, index: count };
       return;
@@ -4940,6 +4972,10 @@ export default function App() {
       if (artifacts.length === 0) return;
       const newest = artifacts[artifacts.length - 1];
       artifactDispatchJ({ type: 'artifact.close', id: newest.id });
+      // overAgent is left UNSET here, honestly: `artifact.create` stamps `owner: 'agent'` even for a
+      // user's own pin (see the note at artifactsDemo), so this branch genuinely cannot tell whether
+      // the artifact it just closed was the agent's work or the user's. A guessed `true` would feed
+      // rule 2 a fabricated reversal-of-the-agent.
       telemetry.correction();
       emitFeedback({ outcome: 'undo', label: `Closed ${newest.title}` });
       return;
@@ -4960,6 +4996,10 @@ export default function App() {
       artifactDispatchJ(ev);
       artifactStateRef.current = after;
       addLog('info', `Undo — ${last.label} (reverted to rev ${last.toRev})`);
+      // I4 (fix round 1): this branch emitted NO correction at all — an artifact revert was an undo
+      // the testbed could not see, so the deck's undo card and the correction rate both missed every
+      // artifact reversal. One call, with I1's origin semantics.
+      telemetry.correction(undefined, reversesAgent(last.origin));
       emitFeedback({ outcome: 'committed', verbClass: 'mutate', label: `Undid ${last.label}` });
       return;
     }
@@ -4969,7 +5009,9 @@ export default function App() {
     setUndoStack(undoStack.slice(0, -1));
     setPendingAction(null);
     lastAnswerRef.current = null;   // they just took the write back; it licenses nothing further
-    telemetry.correction(); // undo = a correction signal for the testbed
+    // undo = a correction signal for the testbed; `overAgent` is the SUBSET that reverses the agent
+    // (I1) — the signal rule 2 grades `wrong` on, and until now never emitted outside RambleLive.
+    telemetry.correction(undefined, reversesAgent(last.origin));
     emitFeedback({ outcome: 'undo', label: `Undid ${last.label}` });
   };
 
@@ -5175,7 +5217,7 @@ export default function App() {
                 // is itself a revision, so ⌘Z must be able to step it back too, same as any other
                 // mutation. toRev is the rev the artifact was AT before this revert — undoing
                 // means reverting TO that pre-revert state (a fresh revision, nothing erased).
-                setUndoStack((s) => [...s, { kind: 'artifact' as const, id: a.id, toRev: beforeRev, label: `Revert ${a.id}` }]);
+                setUndoStack((s) => [...s, { kind: 'artifact' as const, id: a.id, toRev: beforeRev, label: `Revert ${a.id}`, origin: 'user' as const }]);
                 addLog('info', `Reverted ${a.id} to rev ${toRev}`);
                 emitFeedback({ outcome: 'committed', verbClass: 'mutate', label: `Reverted ${a.id} to rev ${toRev}` });
               }}
@@ -5184,7 +5226,7 @@ export default function App() {
                   owner: 'user', at: Date.now(), note: 'edited by hand' };
                 artifactDispatchJ(ev);
                 artifactStateRef.current = artifactReduce(artifactStateRef.current, ev);
-                setUndoStack((s) => [...s, { kind: 'artifact' as const, id: a.id, toRev: baseRev, label: `Edit ${a.id}` }]);
+                setUndoStack((s) => [...s, { kind: 'artifact' as const, id: a.id, toRev: baseRev, label: `Edit ${a.id}`, origin: 'user' as const }]);
                 addLog('info', `You edited ${a.id} (rev ${baseRev} → ${baseRev + 1})`);
                 // The model must learn the material changed under it — otherwise its next baseRev
                 // is stale and it will be refused without knowing why. That hint is sent by the
@@ -5229,7 +5271,8 @@ export default function App() {
           {/* `recording` is read straight from the recorder rather than mirrored into state: this
               render is already subscribed to it (telemetryTick bumps on every push, session_start
               included), so the value is never stale and there is no second copy to fall behind. */}
-          <EvalDeck open={evalDeckOpen} state={evalDeck} recording={telemetry.eventCount() > 0} onStart={startEvalDeck}
+          <EvalDeck open={evalDeckOpen} state={evalDeck} recording={telemetry.eventCount() > 0}
+                    unrecorded={evalUnrecorded} onStart={startEvalDeck}
                     onSelfGrade={selfGradeEvalCard} onSkip={skipEvalCard} onAdvance={advanceEvalCard}
                     onClose={() => setEvalDeckOpen(false)} />
           {/* Highlight category legend — explains the colour ↔ category mapping while debug markings are on */}

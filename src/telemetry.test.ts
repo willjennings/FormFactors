@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { telemetry, exportConfigString } from './telemetry';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { telemetry, exportConfigString, reversesAgent } from './telemetry';
 
 const cfg = {
   backend: 'gemini', autonomy: 'confirm', feedback: 'earcon', program: 'excel', honest: true,
@@ -7,7 +7,7 @@ const cfg = {
 };
 
 describe('telemetry resolution slicing', () => {
-  beforeEach(() => telemetry.start(cfg));
+  beforeEach(() => { telemetry.reset(); telemetry.start(cfg); });
 
   it('slices grounding agreement by resolution path', () => {
     telemetry.grounding('Cell A1', 'Cell A1', true, 'structural');
@@ -27,7 +27,7 @@ describe('telemetry resolution slicing', () => {
 });
 
 describe('ramble telemetry (spec §7)', () => {
-  beforeEach(() => telemetry.start(cfg));
+  beforeEach(() => { telemetry.reset(); telemetry.start(cfg); });
   it('records fill / gap_question / readback / stall / session_complete and an attributed correction', () => {
     telemetry.fill('location', 'heard', 0.8);
     telemetry.gapQuestion('neededBy');
@@ -47,7 +47,7 @@ describe('ramble telemetry (spec §7)', () => {
 });
 
 describe('mission telemetry (spec §7)', () => {
-  beforeEach(() => telemetry.start(cfg));
+  beforeEach(() => { telemetry.reset(); telemetry.start(cfg); });
   it('records the four mission events with their payloads', () => {
     telemetry.missionStart('ship-brief', 0);
     telemetry.missionStepDone('ship-brief', 'fix-sheet');
@@ -62,7 +62,7 @@ describe('mission telemetry (spec §7)', () => {
 });
 
 describe('unspecified asks are counted apart from errors', () => {
-  beforeEach(() => telemetry.start(cfg));
+  beforeEach(() => { telemetry.reset(); telemetry.start(cfg); });
 
   it('records field / answered / viaChip per ask and never touches the error count', () => {
     telemetry.unspecifiedAsk('heading', true, true);
@@ -130,7 +130,7 @@ describe('arm in telemetry', () => {
 });
 
 describe('shell in telemetry (shell skin is a second, independent measured axis)', () => {
-  beforeEach(() => telemetry.start(cfg));
+  beforeEach(() => { telemetry.reset(); telemetry.start(cfg); });
 
   it('shellSwitch pushes a shell_switch event with the right shape and a timestamp', () => {
     telemetry.shellSwitch('familiar', 'material', true);
@@ -162,17 +162,23 @@ describe('shell in telemetry (shell skin is a second, independent measured axis)
     telemetry.correction();
     telemetry.error('boom');
     telemetry.unspecifiedAsk('heading', true, true);
+    // Frozen clock: `durationMs` is a clock reading, not a measured number, so two reads either
+    // side of a few pushes can straddle a millisecond and fail a whole-object deep-equal for a
+    // reason this test is not about (seen intermittently 2026-07-30). Freezing keeps EVERY field
+    // in the comparison — the alternative, excluding durationMs, would weaken the invariant.
+    vi.useFakeTimers();
     const before = telemetry.metrics();
     telemetry.shellSwitch('familiar', 'material', true);
     telemetry.shellSwitch('material', 'conversation', false);
     telemetry.shellSwitch('conversation', 'provenance', true);
     const after = telemetry.metrics();
+    vi.useRealTimers();
     expect(after).toEqual(before);
   });
 });
 
 describe('turn events (the denominator is real)', () => {
-  beforeEach(() => telemetry.start(cfg));
+  beforeEach(() => { telemetry.reset(); telemetry.start(cfg); });
 
   it('pushes a turn event with the given shape', () => {
     telemetry.turn('t1', 'voice', 'add a heading here', 'speech_only', 300, null);
@@ -199,6 +205,11 @@ describe('turn events (the denominator is real)', () => {
     telemetry.unspecifiedAsk('heading', true, true);
     telemetry.deixis('this', 'Cell A1', 'Cell A1', 'high');
     telemetry.grounding('Cell A1', 'Cell A1', true, 'structural');
+    // Frozen clock: `durationMs` is a clock reading, not a measured number, so two reads either
+    // side of a few pushes can straddle a millisecond and fail a whole-object deep-equal for a
+    // reason this test is not about (seen intermittently 2026-07-30). Freezing keeps EVERY field
+    // in the comparison — the alternative, excluding durationMs, would weaken the invariant.
+    vi.useFakeTimers();
     const before = telemetry.metrics();
     telemetry.turn('t1', 'voice', 'add a heading here', 'speech_only', 300, null);
     telemetry.turn('t2', 'voice', 'sum this column', 'no_response', null, null);
@@ -206,12 +217,13 @@ describe('turn events (the denominator is real)', () => {
     telemetry.turn('t4', 'voice', '<lost>', 'transcription_lost', null, null);
     telemetry.sessionComplete(42_000, 6, 1, 12, 3);
     const after = telemetry.metrics();
+    vi.useRealTimers();
     expect(after).toEqual(before);
   });
 });
 
 describe('sessionComplete gains framesSent/hintsSent', () => {
-  beforeEach(() => telemetry.start(cfg));
+  beforeEach(() => { telemetry.reset(); telemetry.start(cfg); });
 
   it('records framesSent/hintsSent when provided', () => {
     telemetry.sessionComplete(42_000, 6, 1, 12, 3);
@@ -261,7 +273,7 @@ describe('exportConfigString (the arm/shell/cfg segment of the download filename
 // only durable record of a deck run, whose own state is deliberately unjournaled.
 // ==========================================================================================
 describe('growth subscription (the eval deck observe loop)', () => {
-  beforeEach(() => telemetry.start(cfg));
+  beforeEach(() => { telemetry.reset(); telemetry.start(cfg); });
 
   it('notifies on every push, and the listener already sees the new event', () => {
     const lengths: number[] = [];
@@ -274,15 +286,50 @@ describe('growth subscription (the eval deck observe loop)', () => {
     expect(telemetry.eventCount()).toBe(4);
   });
 
-  it('notifies on start too — a restart SHRINKS the stream, and index-based readers must hear it', () => {
+  it('a restart ARCHIVES the previous run instead of wiping it — the stream only ever grows', () => {
     let calls = 0;
     const off = telemetry.subscribe(() => { calls += 1; });
     telemetry.action('edit_content', 'mutate', 'commit');
     expect(telemetry.eventCount()).toBe(2);
-    telemetry.start(cfg);
-    expect(calls).toBe(2);
-    expect(telemetry.eventCount()).toBe(1);  // wiped back to the fresh session_start
+    expect(telemetry.runCount()).toBe(1);
+    telemetry.start(cfg);                    // a reconnect: program/register/shell/backend change
+    expect(calls).toBe(2);                   // subscribers still hear it
+    // THE C1 FIX (fix round 1). This used to assert 1 — "wiped back to the fresh session_start" —
+    // which is exactly the defect: following the deck means switching program, every switch
+    // reconnects, and a 12-card run exported roughly the last card's events while the panel claimed
+    // twelve. Driven and measured before the fix: 5 events before a switch, 1 after.
+    expect(telemetry.eventCount()).toBe(3);  // 2 archived + this run's session_start
+    expect(telemetry.runCount()).toBe(2);
+    expect(telemetry.eventsSnapshot().map((e) => e.type))
+      .toEqual(['session_start', 'action', 'session_start']);
     off();
+  });
+
+  it('the export carries every run of the sitting, and says how many there were', () => {
+    telemetry.action('edit_content', 'mutate', 'commit');
+    telemetry.start(cfg);
+    telemetry.action('save_file', 'mutate', 'commit');
+    telemetry.start(cfg);
+    telemetry.correction();
+    const snap = JSON.parse(telemetry.exportJSON());
+    expect(snap.runs).toBe(3);
+    expect(snap.events.filter((e: any) => e.type === 'session_start')).toHaveLength(3);
+    expect(snap.events.filter((e: any) => e.type === 'action')).toHaveLength(2);
+    // `metrics` stays CURRENT-RUN only (the drawer's per-session semantics, and what every
+    // invariance test asserts): the two archived commits are in `events`, not in these counts.
+    expect(snap.metrics.actions.total).toBe(0);
+    expect(snap.metrics.corrections).toBe(1);
+  });
+
+  it('reset() drops everything, archives included', () => {
+    telemetry.action('edit_content', 'mutate', 'commit');
+    telemetry.start(cfg);
+    expect(telemetry.eventCount()).toBe(3);
+    telemetry.reset();
+    expect(telemetry.eventCount()).toBe(0);
+    expect(telemetry.runCount()).toBe(0);
+    telemetry.action('edit_content', 'mutate', 'commit');   // no config: records nothing
+    expect(telemetry.eventCount()).toBe(0);
   });
 
   it('eventsSnapshot is a COPY — a held snapshot never changes underneath its reader', () => {
@@ -304,7 +351,7 @@ describe('growth subscription (the eval deck observe loop)', () => {
 });
 
 describe('eval_card events', () => {
-  beforeEach(() => telemetry.start(cfg));
+  beforeEach(() => { telemetry.reset(); telemetry.start(cfg); });
 
   it('records the grade and HOW it was graded, verbatim', () => {
     telemetry.evalCard('honest-refusal', 'honesty', 'done', 'observed');
@@ -325,10 +372,33 @@ describe('eval_card events', () => {
     telemetry.error('boom');
     telemetry.unspecifiedAsk('heading', true, true);
     telemetry.deixis('this', 'Cell A1', 'Cell A1', 'high');
+    // Frozen clock: `durationMs` is a clock reading, not a measured number, so two reads either
+    // side of a few pushes can straddle a millisecond and fail a whole-object deep-equal for a
+    // reason this test is not about (seen intermittently 2026-07-30). Freezing keeps EVERY field
+    // in the comparison — the alternative, excluding durationMs, would weaken the invariant.
+    vi.useFakeTimers();
     const before = telemetry.metrics();
     telemetry.evalCard('honest-refusal', 'honesty', 'done', 'observed');
     telemetry.evalCard('point-then-change', 'pointing', 'failed', 'self');
     telemetry.evalCard('material-combine', 'material', 'skipped', 'self');
-    expect(telemetry.metrics()).toEqual(before);
+    const after = telemetry.metrics();
+    vi.useRealTimers();
+    expect(after).toEqual(before);
+  });
+});
+
+
+describe('reversesAgent — which undo counts as reversing the AGENT (the anti-flattery signal)', () => {
+  it('maps memento origin to overAgent, both directions', () => {
+    expect(reversesAgent('agent')).toBe(true);
+    expect(reversesAgent('user')).toBe(false);
+  });
+  it('is what handleUndo passes, so a desk undo of an agent commit now carries the flag', () => {
+    telemetry.reset(); telemetry.start(cfg);
+    telemetry.action('edit_content', 'mutate', 'commit');
+    telemetry.correction(undefined, reversesAgent('agent'));   // ⌘Z over a tool call's memento
+    telemetry.correction(undefined, reversesAgent('user'));    // ⌘Z over the user's own edit
+    const corrections = telemetry.eventsSnapshot().filter((e) => e.type === 'correction');
+    expect(corrections).toMatchObject([{ overAgent: true }, { overAgent: false }]);
   });
 });

@@ -22,7 +22,7 @@ import { EVAL_DECK, currentCard, isDeckComplete, deckTally, type DeckState, type
  *
  *  Deck state arrives as a prop and lives in App as SESSION-SCOPED React state — deliberately not
  *  journaled (see deck.ts's reducer header: JOURNAL_VERSION stays at 2). */
-export function EvalDeck({ open, state, recording, onStart, onSelfGrade, onSkip, onAdvance, onClose }: {
+export function EvalDeck({ open, state, recording, unrecorded, onStart, onSelfGrade, onSkip, onAdvance, onClose }: {
   open: boolean;
   state: DeckState;
   /** Is the recorder actually recording? Found by driving (2026-07-30): `telemetry.push` is a no-op
@@ -32,6 +32,10 @@ export function EvalDeck({ open, state, recording, onStart, onSelfGrade, onSkip,
    *  short export. App passes `telemetry.eventCount() > 0`, which is exactly "a session_start has
    *  been recorded", not a proxy for it. */
   recording: boolean;
+  /** How many results were recorded while the recorder was NOT recording — trials that exist in deck
+   *  state and in no export (fix round 1, I7). Normally 0, because `Start the deck` is disabled until
+   *  `recording`; it is reported rather than assumed-zero so a gap can never be silent. */
+  unrecorded: number;
   onStart: () => void;
   onSelfGrade: (grade: ObservedGrade) => void;
   onSkip: () => void;
@@ -51,7 +55,7 @@ export function EvalDeck({ open, state, recording, onStart, onSelfGrade, onSkip,
 
   return (
     <div ref={panelRef} tabIndex={-1} onKeyDown={(e) => { if (e.key === 'Escape') onClose(); }}
-         className="absolute top-10 right-4 z-40 w-80 rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] shadow-lg p-3 pointer-events-auto outline-none"
+         className="absolute top-10 right-[21.5rem] z-40 w-80 rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] shadow-lg p-3 pointer-events-auto outline-none"
          role="dialog" aria-label="Eval deck" data-shell>
       <div className="flex items-center justify-between mb-2">
         <span className="text-[10px] font-mono uppercase tracking-widest text-[var(--text-secondary)]">Eval deck</span>
@@ -74,7 +78,13 @@ export function EvalDeck({ open, state, recording, onStart, onSelfGrade, onSkip,
           <p className="text-[11px] text-[var(--text-secondary)]">
             When it can’t tell, it asks you. Skipping a card is fine: a skip is recorded, not ignored.
           </p>
-          <div className="flex justify-end"><Button size="sm" variant="primary" onClick={onStart}>Start the deck</Button></div>
+          {/* I7: the deck cannot start until the recorder is recording. A run begun offline grades
+              nothing (every predicate reads an empty stream) and writes no `eval_card` events, so the
+              panel would claim results that no export contains. Disabled, with the reason above. */}
+          <div className="flex justify-end">
+            <Button size="sm" variant="primary" onClick={onStart} disabled={!recording}
+                    title={recording ? undefined : 'Start the session first'}>Start the deck</Button>
+          </div>
         </div>
       )}
 
@@ -141,6 +151,13 @@ export function EvalDeck({ open, state, recording, onStart, onSelfGrade, onSkip,
           <p className="text-[11px] font-mono text-[var(--text-secondary)]">
             {tally.observed} observed · {tally.self} your call
           </p>
+          {unrecorded > 0 && (
+            <p className="text-[11px] text-[var(--text-primary)]">
+              {unrecorded} of these {unrecorded === 1 ? 'is' : 'are'} in this panel only — the recorder
+              was off when {unrecorded === 1 ? 'it' : 'they'} happened, so the export does not have
+              {unrecorded === 1 ? ' it' : ' them'}.
+            </p>
+          )}
           <div className="flex justify-end"><Button size="sm" variant="primary" onClick={onClose}>Close</Button></div>
         </div>
       )}

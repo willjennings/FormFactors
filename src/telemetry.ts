@@ -76,10 +76,19 @@ export type TelemetryEvent =
       firstResponseMs: number | null; settledMs: number | null }
   | { t: number; type: 'pin'; cardType: string; artifactId?: string; error?: string }
   | { t: number; type: 'combine_tray'; count: number; kind: string; ok: boolean }
+  // The OUTCOME of a combine — the artifact, or the refusal (fix round 1, I5). `combine_tray` records
+  // only that the tray FIRED, with `ok` hardcoded true at the dispatch site, so it says a request left
+  // the building and nothing about whether anything was made; and the combine tool call never reached
+  // the gate's `action` event either, so a created artifact was invisible to every grader. `error` is
+  // the gate/validator's own words when nothing was made.
+  | { t: number; type: 'artifact_created'; kind: string; sources: number; via: string; error?: string }
   // One per eval-deck card that reached a result (src/eval/deck.ts). The deck's own state is
-  // session-scoped React state and is deliberately not journaled, so this event is the ONLY durable
+  // session-scoped React state and is deliberately not journaled, so this event is the durable
   // record that a trial was run — including a skip, which the deck treats as a result and not an
-  // absence. `graded` is carried verbatim and never collapsed: a scorecard that counted a human's
+  // absence. It is durable only as far as the recorder is: nothing is recorded before the first
+  // `session_start` (which is why the deck refuses to start until then), and it survives the
+  // reconnects the deck's own cards cause only because `start()` archives rather than wipes (see
+  // priorRuns). `graded` is carried verbatim and never collapsed: a scorecard that counted a human's
   // "it worked" alongside an observed commit would be measuring optimism.
   | { t: number; type: 'eval_card'; cardId: string; dimension: string; grade: 'done' | 'failed' | 'skipped'; graded: 'observed' | 'self' };
 
@@ -113,8 +122,35 @@ export function exportConfigString(config: SessionConfig | null): string {
   return `${arm}-${shell}-${config.backend}-${config.autonomy}-${config.feedback}`;
 }
 
+/** Where an undo memento came from — the agent's tool call, or the user's own hands. Lives here,
+ *  beside the flag it decides, because `correction.overAgent` is the only thing it exists to answer.
+ *
+ *  (Fix round 1, I1. The flag was produced ONLY by RambleLive; every desk undo emitted `correction()`
+ *  bare, so `deriveAttempts`' rule 2 — an agent action the user reversed is a failure that was caught,
+ *  the single most important rule in that file — could never fire on the desk. The unit suites were
+ *  green throughout, because their fixtures asserted a shape production never emitted. Extracted as a
+ *  named function so the MAPPING is pinned by a test rather than living only inside a React handler
+ *  no test can reach; a missing argument at a call site is caught by the required `origin` field on
+ *  the memento type, not here.) */
+export type MementoOrigin = 'agent' | 'user';
+export const reversesAgent = (origin: MementoOrigin): boolean => origin === 'agent';
+
 class Telemetry {
   private events: TelemetryEvent[] = [];
+  // Every run of this SITTING that has already been superseded, oldest first.
+  //
+  // WHY THIS EXISTS (found by driving, 2026-07-30 — measured: 5 events before a program switch, 1
+  // after): the app reconnects on any program / register / shell / backend change, and every
+  // reconnect calls `start()`, whose first act used to be `this.events = []`. Everything recorded
+  // before the switch was DROPPED. That is fatal for anything that measures a whole sitting rather
+  // than a single connection: the eval deck's cards deliberately move between programs ("switch to
+  // the slide deck…"), so following the deck destroyed the deck's own record — a completed 12-card
+  // run exported roughly the last card's events while the panel said "12 of 12 recorded".
+  //
+  // A run boundary is not lost by archiving: every run begins with its own `session_start`, which is
+  // exactly the boundary `deriveAttempts` already keys on, so the concatenation grades correctly as
+  // a sequence of sessions rather than one impossible mega-session.
+  private priorRuns: TelemetryEvent[][] = [];
   private config: SessionConfig | null = null;
   private startedAt = 0;
   // Growth subscribers. Exists for ONE consumer: the eval deck's observe loop, which grades a card
@@ -123,11 +159,29 @@ class Telemetry {
   private listeners = new Set<() => void>();
 
   start(config: SessionConfig) {
+    // ARCHIVE, never drop (see priorRuns). `this.events.length` rather than `this.config`: the only
+    // stream with nothing worth keeping is an empty one, and a first `start()` has exactly that.
+    if (this.events.length) this.priorRuns.push(this.events);
     this.events = [];
     this.config = config;
     this.startedAt = Date.now();
     this.events.push({ t: 0, type: 'session_start', config });
-    this.notify(); // a restart SHRINKS the stream — every index-based reader must hear about it
+    this.notify();
+  }
+
+  /** Discard EVERYTHING — archived runs, the current run, the config.
+   *
+   *  The app never calls this: a page load makes a fresh instance, which is what "a new sitting"
+   *  means there. It exists because `start()` now ARCHIVES rather than wipes (see priorRuns), so a
+   *  shared module singleton carries one test's events into the next test's export — the isolation
+   *  that `start()` used to provide as a side effect of losing data. Restoring it explicitly is the
+   *  honest trade: tests get a known-empty recorder, and no production path silently drops a run. */
+  reset() {
+    this.priorRuns = [];
+    this.events = [];
+    this.config = null;
+    this.startedAt = 0;
+    this.notify();
   }
 
   private notify() {
@@ -145,15 +199,30 @@ class Telemetry {
     return () => { this.listeners.delete(fn); };
   }
 
-  /** A COPY of the stream, for readers that grade over it (the deck's run-baselined predicates
-   *  index into it). A copy rather than the live array because `push` mutates in place: a consumer
-   *  holding the live reference would see its own "snapshot" change underneath it, which is exactly
-   *  the kind of thing that makes a StrictMode double-invoke non-idempotent. */
-  eventsSnapshot(): TelemetryEvent[] { return [...this.events]; }
+  /** The WHOLE SITTING as one stream — every archived run in order, then the current one. This is
+   *  what graders read (`deriveAttempts`, the eval deck, the export).
+   *
+   *  Two properties the callers depend on, both consequences of archiving rather than dropping:
+   *  MONOTONIC — it only ever grows, so an index taken now (an eval-deck card's baseline) stays
+   *  valid across a reconnect that the card's own instruction caused; and COMPLETE — a sitting that
+   *  spanned four programs exports as four runs, not as its last one.
+   *
+   *  A copy, not the live arrays: `push` mutates in place, so a consumer holding a live reference
+   *  would see its own "snapshot" change underneath it — the exact shape that makes a StrictMode
+   *  double-invoke non-idempotent. */
+  eventsSnapshot(): TelemetryEvent[] {
+    return this.priorRuns.length ? [...this.priorRuns.flat(), ...this.events] : [...this.events];
+  }
 
-  /** The current stream length — the baseline index an eval-deck card is dealt at. Read
+  /** The whole sitting's length — the baseline index an eval-deck card is dealt at. Read
    *  synchronously at the moment a card is dealt; never derived from a React render. */
-  eventCount(): number { return this.events.length; }
+  eventCount(): number {
+    return this.priorRuns.reduce((n, r) => n + r.length, 0) + this.events.length;
+  }
+
+  /** How many runs this sitting has recorded (1 = never reconnected). Reported in the export so a
+   *  reader can tell a four-program sitting from a four-session one. */
+  runCount(): number { return this.config ? this.priorRuns.length + 1 : 0; }
 
   private push(ev: DistributiveOmit<TelemetryEvent, 't'>) {
     if (!this.config) return; // only record within a started session
@@ -206,6 +275,11 @@ class Telemetry {
   }
   pin(cardType: string, artifactId?: string, error?: string) { this.push({ type: 'pin', cardType, artifactId, error }); }
   combineTray(count: number, kind: string, ok: boolean) { this.push({ type: 'combine_tray', count, kind, ok }); }
+  /** One call per combine tool call, success OR refusal — the only record that an artifact was (not)
+   *  made. `sources`/`kind` describe what landed; `error` is present only when nothing did. */
+  artifactCreated(kind: string, sources: number, via: string, error?: string) {
+    this.push({ type: 'artifact_created', kind, sources, via, error });
+  }
   /** One call per eval-deck card result — the durable half of an unjournaled deck run. Takes
    *  primitives rather than the deck's `CardResult` so this file keeps no dependency on src/eval. */
   evalCard(cardId: string, dimension: string, grade: 'done' | 'failed' | 'skipped', graded: 'observed' | 'self') {
@@ -308,8 +382,17 @@ class Telemetry {
     };
   }
 
+  /** The export. TWO DIFFERENT SCOPES IN ONE OBJECT, deliberately, and named here because the
+   *  mismatch would otherwise be a trap:
+   *    `metrics` — the CURRENT run only. That is the drawer's live per-session readout, and it is
+   *      what every metrics-invariance test in this repo asserts; widening it would silently change
+   *      the meaning of every recorded number ever compared against it.
+   *    `events`  — the WHOLE SITTING (see eventsSnapshot), because a grader that only saw the last
+   *      run would mis-measure every sitting that changed program, which is most of them.
+   *  `runs` is the bridge: it says how many `session_start` boundaries `events` contains, so nobody
+   *  has to guess whether `metrics` covers all of it. */
   snapshot() {
-    return { config: this.config, metrics: this.metrics(), events: this.events };
+    return { config: this.config, metrics: this.metrics(), runs: this.runCount(), events: this.eventsSnapshot() };
   }
 
   /** Download the session as JSON for offline analysis / A/B aggregation. */

@@ -48,6 +48,8 @@ const pin = (t: number, artifactId?: string, error?: string): TelemetryEvent =>
   ({ t, type: 'pin', cardType: 'answer', artifactId, error });
 const combine = (t: number, count: number, kind: string, ok: boolean): TelemetryEvent =>
   ({ t, type: 'combine_tray', count, kind, ok });
+const artifact = (t: number, kind: string, sources: number, error?: string): TelemetryEvent =>
+  ({ t, type: 'artifact_created', kind, sources, via: 'combine', error });
 
 const card = (id: string): EvalCard => {
   const c = EVAL_DECK.find((x) => x.id === id);
@@ -69,7 +71,12 @@ const PRE: TelemetryEvent[] = [
   correction(40, true),
   pin(45, 'art-pre'),
   combine(50, 2, 'doc', true),
+  artifact(55, 'doc', 2),
 ];
+/** A turn carrying a request that ALREADY appears in PRE — the "stale exchange" shape the fresh-turn
+ *  rule exists to reject (fix round 1, I3): a turn left open across the advance closes inside the new
+ *  card's window still carrying the previous card's words. */
+const staleTurn = (t: number) => turn(t, 'pre-1-reopened', 'change this to 9', 'tool_call', 40, 300);
 const observeWith = (id: string, tail: TelemetryEvent[]) =>
   card(id).observe([...PRE, ...tail], PRE.length);
 
@@ -188,6 +195,11 @@ describe('card 1 point-what-is-this — hover + a deictic question', () => {
       deixis(100, 'this', 'Cell B4'), turn(120, 't1', "what's this?", 'no_response', null, null),
     ])).toBe('failed');
   });
+  it('a LOST TRANSCRIPT is no trial, not a failed one — the same rule card 9 uses (C2: they disagreed)', () => {
+    const lost: TelemetryEvent[] = [deixis(100, 'this', 'Cell B4'), turn(120, 't1', '<lost>', 'transcription_lost', null, null)];
+    expect(observeWith('point-what-is-this', lost)).toBeNull();
+    expect(observeWith('latency-round-trip', [turn(120, 't9', '<lost>', 'transcription_lost', null, null)])).toBeNull();
+  });
 });
 
 describe('card 2 point-then-change — the point must come FIRST', () => {
@@ -224,6 +236,14 @@ describe('card 3 point-by-number — the pointer-free ordinal path', () => {
       deixis(100, 'this', 'Cell B4'), action(140, 'format_content', 'commit'),
     ])).toBeNull();
   });
+  it('near miss (I2): a CLICK on an element — the one gesture this card\'s copy forbids — stays null', () => {
+    // App's selectTargetByNumber records keyword 'click' for the click route and 'number' only for
+    // an ordinal the participant said or typed. Before that split, every element click recorded
+    // 'number' and this card graded itself on a click.
+    expect(observeWith('point-by-number', [
+      deixis(100, 'click', 'SUM function', 'direct'), action(140, 'format_content', 'commit'),
+    ])).toBeNull();
+  });
 });
 
 describe('card 4 honest-refusal — a refusal is the win', () => {
@@ -244,7 +264,15 @@ describe('card 4 honest-refusal — a refusal is the win', () => {
   });
 });
 
-describe('card 5 honest-ambiguity — a question back is right', () => {
+describe('card 5 honest-ambiguity — an ask the product actually gates (adjudicated: the card moved, not the grade)', () => {
+  it('is pointed at the heading ask, NOT at "make it pop" — whose ask branch is structurally unreachable', () => {
+    expect(card('honest-ambiguity').utteranceKey).toBe('ask-add-a-heading');
+    expect(utteranceFor('ask-add-a-heading')).toMatchObject({ expect: 'question' });
+    expect(card('honest-ambiguity').instruction).toMatch(/heading/i);
+    // "Make this pop" survives as a battery-only probe: no card cites it.
+    expect(EVAL_DECK.some((c) => c.utteranceKey === 'ambiguous-make-it-pop')).toBe(false);
+    expect(utteranceFor('ambiguous-make-it-pop')).toBeDefined();
+  });
   it('fires done when the gate asked', () => {
     expect(observeWith('honest-ambiguity', [ask(100, 'content', false)])).toBe('done');
   });
@@ -284,8 +312,18 @@ describe('card 6 robust-rephrase', () => {
 });
 
 describe('card 7 robust-own-words', () => {
-  it('fires done on a commit', () => {
-    expect(observeWith('robust-own-words', [action(100, 'edit_content', 'commit')])).toBe('done');
+  it('fires done on the participant\'s own new utterance plus a commit', () => {
+    expect(observeWith('robust-own-words', [
+      action(100, 'edit_content', 'commit'), turn(110, 't1', 'shove that up a bit', 'tool_call', 40, 200),
+    ])).toBe('done');
+  });
+  it('near miss (I3): a bare commit with NO new utterance stays null — a witness confirmed just after advancing is not this card', () => {
+    expect(observeWith('robust-own-words', [action(100, 'edit_content', 'commit')])).toBeNull();
+  });
+  it('near miss (I3): a STALE turn (the previous card\'s request, reopened) plus a commit stays null', () => {
+    expect(observeWith('robust-own-words', [
+      action(100, 'edit_content', 'commit'), staleTurn(110),
+    ])).toBeNull();
   });
   it('fires failed only when nothing came back at all', () => {
     expect(observeWith('robust-own-words', [turn(110, 't1', 'shove that up a bit', 'no_response', null, null)])).toBe('failed');
@@ -308,8 +346,11 @@ describe('card 8 robust-undo', () => {
 });
 
 describe('card 9 latency-round-trip', () => {
-  it('fires done on a turn that reported a first-response time', () => {
+  it('fires done on a NEW turn that reported a first-response time', () => {
     expect(observeWith('latency-round-trip', [turn(110, 't1', "what's in this document?", 'speech_only', 1400, null)])).toBe('done');
+  });
+  it('near miss (I3): a stale turn hands this card a latency the participant never generated — null', () => {
+    expect(observeWith('latency-round-trip', [staleTurn(110)])).toBeNull();
   });
   it('fires failed when nothing came back', () => {
     expect(observeWith('latency-round-trip', [turn(110, 't1', "what's in this document?", 'no_response', null, null)])).toBe('failed');
@@ -331,12 +372,20 @@ describe('card 10 material-pin', () => {
   });
 });
 
-describe('card 11 material-combine', () => {
-  it('fires done on a two-source combine', () => {
-    expect(observeWith('material-combine', [combine(100, 2, 'doc', true)])).toBe('done');
+describe('card 11 material-combine — grades the artifact, not the ask (I5)', () => {
+  it('fires done when an artifact was actually created', () => {
+    expect(observeWith('material-combine', [combine(100, 2, 'doc', true), artifact(140, 'doc', 2)])).toBe('done');
   });
-  it('fires failed on a one-source combine — "one out of THEM" needs two', () => {
-    expect(observeWith('material-combine', [combine(100, 1, 'doc', true)])).toBe('failed');
+  it('fires failed when the combine was refused — the validator\'s own words', () => {
+    expect(observeWith('material-combine', [
+      combine(100, 2, 'doc', true),
+      artifact(140, 'none', 0, 'combine needs at least 2 sources — for a single target use the ordinary editing/creation verbs instead.'),
+    ])).toBe('failed');
+  });
+  it('near miss (I5): the tray FIRED and nothing was made — null, not the "done" the hardcoded ok used to give', () => {
+    // combineTray's `ok` is hardcoded true at the dispatch site: it means a request left the
+    // building. On its own it is not evidence that anything was combined.
+    expect(observeWith('material-combine', [combine(100, 2, 'doc', true)])).toBeNull();
   });
   it('near miss: a refused ADD (tray management, not a combine) stays null', () => {
     expect(observeWith('material-combine', [combine(100, 6, 'add', false)])).toBeNull();
@@ -344,15 +393,28 @@ describe('card 11 material-combine', () => {
 });
 
 describe('card 12 either-input — the other route', () => {
-  it('fires done when this commit\'s modality differs from the last one before the card', () => {
+  const spoke = (t: number) => turn(t, 'e1', 'change that number to 42', 'tool_call', 40, 200);
+  it('fires done when this commit\'s route differs from the last one before the card', () => {
     // PRE's commit is 'typed', so a spoken commit is the other route.
-    expect(observeWith('either-input', [action(100, 'edit_content', 'commit', 'voice')])).toBe('done');
+    expect(observeWith('either-input', [action(100, 'edit_content', 'commit', 'voice'), spoke(110)])).toBe('done');
   });
   it('fires failed when the same route was used again', () => {
-    expect(observeWith('either-input', [action(100, 'edit_content', 'commit', 'typed')])).toBe('failed');
+    expect(observeWith('either-input', [action(100, 'edit_content', 'commit', 'typed'), spoke(110)])).toBe('failed');
+  });
+  it('near miss (I6): a DIRECT commit is not one of the two routes the card offers — null, not credit', () => {
+    expect(observeWith('either-input', [action(100, 'edit_content', 'commit', 'direct'), spoke(110)])).toBeNull();
+  });
+  it('near miss (I6): a DIRECT prior commit gives nothing to be "the other" of — null, not credit', () => {
+    const priorDirect = [sessionStart(0), action(10, 'edit_content', 'commit', 'direct')];
+    expect(card('either-input').observe(
+      [...priorDirect, action(100, 'edit_content', 'commit', 'voice'), spoke(110)], priorDirect.length,
+    )).toBeNull();
+  });
+  it('near miss (I3): a commit with no new utterance stays null — a confirmed witness is not the other route', () => {
+    expect(observeWith('either-input', [action(100, 'edit_content', 'commit', 'voice')])).toBeNull();
   });
   it('near miss: no earlier commit on record means there is no "other" route — null, not a guess', () => {
-    const onlyThis = [sessionStart(0), action(100, 'edit_content', 'commit', 'voice')];
+    const onlyThis = [sessionStart(0), action(100, 'edit_content', 'commit', 'voice'), spoke(110)];
     expect(card('either-input').observe(onlyThis, 1)).toBeNull();
   });
   it('near miss: nothing committed since the card was dealt stays null', () => {
@@ -382,7 +444,7 @@ describe('run-baselining (the missions discipline, ported to the event stream)',
     expect(wrong).not.toContain('point-what-is-this');
     expect(wrong).not.toContain('either-input');
   });
-  it('a negative or oversized baseline never reads from the end of the array', () => {
+  it('a baseline past the end of the stream grades nothing', () => {
     for (const c of EVAL_DECK) {
       expect(c.observe(PRE, PRE.length + 50), `card ${c.id} past the end`).toBeNull();
     }

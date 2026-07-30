@@ -6,6 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import { deriveAttempts } from './deriveAttempts';
 import { DEFAULT_DIALS } from '../register/registry';
+import { reversesAgent } from '../telemetry';
 import type { TelemetryEvent, Arm, SessionConfig } from '../telemetry';
 
 // ---- fixture builders: real TelemetryEvent shapes, nothing invented ----------------------
@@ -588,5 +589,98 @@ describe('ordering robustness', () => {
     const b = deriveAttempts(turnThenAction);
     expect(a).toEqual(b);
     expect(a[0].durationMs).toBe(40);
+  });
+});
+
+// ==========================================================================================
+// MULTI-RUN STREAMS (2026-07-30). Until the recorder archived instead of wiped, a stream could
+// only ever hold ONE `session_start` — every reconnect threw the previous run away. It now holds
+// one per run, so every consumer grades a whole SITTING. The boundary handling was already
+// written for this case (the `session_start` case calls closeAtBoundary when it has seen one
+// before); these tests pin it, because "already handled" and "tested" are different claims.
+// ==========================================================================================
+describe('multiple session_start events — one stream, several runs', () => {
+  it('a second session_start closes whatever was pending, and later attempts carry the NEW run\'s program and arm', () => {
+    const ARM2: Arm = { register: 'terminal', dials: DEFAULT_DIALS, shell: 'conversation' };
+    const events: TelemetryEvent[] = [
+      sessionStart(0, 'word', ARM),
+      // Run 1: an exchange left open at the switch — a tool_call turn with nothing decided.
+      turn(100, 'r1-t1', 'add a heading', 'tool_call', 40, 200),
+      // Run 2 (the program switch reconnected): fresh config, fresh clock.
+      sessionStart(0, 'excel', ARM2),
+      action(50, 'edit_content', 'commit'),
+      turn(60, 'r2-t1', 'change this to 42', 'tool_call', 30, 150),
+    ];
+    const attempts = deriveAttempts(events);
+    expect(attempts).toHaveLength(2);
+    // Run 1's open exchange was closed AT the boundary, honestly ungradeable — not silently
+    // merged into run 2's attempt, and not dropped.
+    expect(attempts[0]).toMatchObject({
+      id: 'r1-t1', program: 'word', outcome: 'ungradeable', ungradeableReason: 'tool-call-without-action',
+    });
+    expect(attempts[0].arm).toEqual(ARM);
+    // Run 2's attempt is attributed to run 2's program and arm, not run 1's.
+    expect(attempts[1]).toMatchObject({ id: 'r2-t1', program: 'excel', outcome: 'completed' });
+    expect(attempts[1].arm).toEqual(ARM2);
+  });
+
+  it('an undo window never reaches across a run boundary', () => {
+    const events: TelemetryEvent[] = [
+      sessionStart(0),
+      action(100, 'edit_content', 'commit'),
+      turn(110, 't1', 'set the heading', 'tool_call', 30, 90),
+      sessionStart(0),                        // reconnect
+      correction(50, true),                   // a reversal in the NEW run
+      turn(60, 't2', 'undo that', 'speech_only', 40, null),
+    ];
+    const attempts = deriveAttempts(events);
+    // The pre-boundary commit stays 'completed': the correction belongs to the new run, and
+    // blaming it on an attempt from a previous connection would be a guess.
+    expect(attempts[0]).toMatchObject({ id: 't1', outcome: 'completed' });
+    expect(attempts[0].undos).toBe(0);
+  });
+
+  it('three runs of one sitting produce every run\'s attempts, in order', () => {
+    const events: TelemetryEvent[] = [
+      sessionStart(0, 'word'), action(10, 'set_heading', 'commit'), turn(20, 'a', 'one', 'tool_call', 10, 20),
+      sessionStart(0, 'excel'), action(10, 'edit_content', 'commit'), turn(20, 'b', 'two', 'tool_call', 10, 20),
+      sessionStart(0, 'powerpoint'), action(10, 'insert_object', 'rejected'), turn(20, 'c', 'three', 'tool_call', 10, 20),
+    ];
+    const attempts = deriveAttempts(events);
+    expect(attempts.map((a) => [a.id, a.program, a.outcome])).toEqual([
+      ['a', 'word', 'completed'],
+      ['b', 'excel', 'completed'],
+      ['c', 'powerpoint', 'refused-honestly'],
+    ]);
+  });
+});
+
+
+// ==========================================================================================
+// Rule 2's PRODUCIBILITY (fix round 1, I1). Every rule-2 fixture in this file passes
+// `overAgent: true` — a shape production did not emit until this round: `correction.overAgent` came
+// only from RambleLive, and every desk undo called `telemetry.correction()` bare. So the rule was
+// green here and inert in the app. The producer is now `reversesAgent(memento.origin)` in
+// handleUndo; these two tests grade the exact streams the two origins produce, so the fixtures
+// above are anchored to something real rather than to an aspiration.
+// (Verified by driving, 2026-07-30: injected tool call -> commit -> ⌘Z produced
+// `{type:'correction', overAgent:true}` and deriveAttempts graded the attempt `wrong`, undos 1.
+// With the producer reverted to a bare call: `{type:'correction'}`, outcome `completed`, undos 0 —
+// and the whole suite still passed, which is why this comment exists.)
+// ==========================================================================================
+describe('rule 2 grades what handleUndo actually emits', () => {
+  const stream = (origin: 'agent' | 'user'): TelemetryEvent[] => [
+    sessionStart(0),
+    action(100, 'edit_content', 'commit'),
+    turn(110, 't1', 'put a heading on it', 'tool_call', 40, 200),
+    correction(200, reversesAgent(origin)),
+  ];
+  it("an AGENT-origin memento undone -> 'wrong' (the reversal is attributed)", () => {
+    const [a] = deriveAttempts(stream('agent'));
+    expect(a).toMatchObject({ outcome: 'wrong', undos: 1, corrections: 1 });
+  });
+  it("a USER-origin memento undone -> stays 'completed' (the user editing their own work blames nobody)", () => {
+    const [a] = deriveAttempts(stream('user'));
+    expect(a).toMatchObject({ outcome: 'completed', undos: 0, corrections: 1 });
   });
 });

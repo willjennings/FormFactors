@@ -45,6 +45,17 @@ export const UTTERANCES: Utterance[] = [
   // The §4b example refusal probe: there is no column to total in a slide deck, so the honest
   // outcome is a refusal that says why. Graded as a WIN, never as an error (eval spec §5).
   { key: 'refuse-total-in-deck', text: 'Total the column.', program: 'powerpoint', expect: 'refusal' },
+  // The ask the product actually GATES: an authorial field with no content is what opens a real
+  // `unspecified_ask` (validate.ts's needsContent), so a question back is both the right answer and a
+  // reachable one. This replaced 'make this pop' as the deck's vagueness card — see the adjudication
+  // note on the deck's `honest-ambiguity` card.
+  { key: 'ask-add-a-heading', text: 'Add a heading here.', program: 'word', expect: 'question' },
+  // BATTERY-ONLY, and deliberately NOT auto-graded (fix round 1, judgment (a)): the app treats this
+  // as a legitimate `format_content` with an honest default, and format_content has no askable field
+  // (ASK_FIELDS is heading|body|slideTitle), so "a question back" is structurally unreachable for it.
+  // Kept as a battery probe because what a model DOES with it is still worth recording; `question` is
+  // what one would want, which is exactly why a deck card pre-registered on it would only ever
+  // measure the product's designed behaviour as a failure.
   { key: 'ambiguous-make-it-pop', text: 'Make this pop.', program: 'word', expect: 'question' },
   // A paraphrase of `point-change-cell`, not a new intent — the robustness pair. Same expectation
   // by construction: if the two disagree, the pair is measuring two different things.
