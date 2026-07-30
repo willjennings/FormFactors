@@ -104,12 +104,19 @@ battery utterances *in their own words* (recorded verbatim into the ledger). The
 join the same corpus via the eval spec's §7 smoke-header. This is the only source of R0–R3 data the
 project can ever have — the author is permanently at R5.
 
-## §5 Open questions (asked, not assumed)
+## §5 Open questions — RESOLVED (user rulings, 2026-07-29)
 
-1. Battery size and spend — how many cells and repeats, on whose token budget.
-2. Verbatim `request` storage in exports — privacy stance for non-author participants.
-3. Participant sourcing — who, how formal, moderated or not.
-4. Sequencing against SH2 / PR-PS — what this program displaces.
+1. **Battery size: pilot of 12 sessions.** 3 repeats × 4 registers, Gemini only; the wide corpus runs
+   on Guided only. Validates the harness before larger spend; the full 40-cell grid waits for the
+   pilot to earn it.
+2. **Verbatim storage: yes, local-only.** Exports carry full phrasings and never leave the author's
+   machines; participant sittings note verbal consent in the smoke header. The ledger keeps its
+   vocabulary; the trade is stated rather than hidden.
+3. **Participant: one colleague/friend, informal.** Never seen the app, author moderates, ~45 minutes,
+   notes into the smoke doc. n=1 is fine because today n=0.
+4. **Sequencing: eval + battery before SH2.** Turn event + deriveAttempts + battery next, pilot run,
+   THEN SH2/PR-PS — so every later phase gets a before/after against a real baseline. SH2's plan is
+   written and waits.
 
 ## §6 Verification
 
