@@ -51,6 +51,14 @@ interface ManifestEntry {
 interface Manifest {
   mode: 'dry' | 'live';
   createdAt: string;
+  // N2 (task-9 review round 2, Important): optional so a round-1-shaped manifest (no abort fields
+  // at all) still parses — `aborted`/`abortReason`/`plannedSessions` are absent entirely on those,
+  // not `false`/`null`/undefined, and this reads that absence the same honest way (see `grade`'s
+  // own handling below: `manifest.aborted` un-set is treated as a normal completion, never guessed
+  // at as an abort).
+  aborted?: boolean;
+  abortReason?: string | null;
+  plannedSessions?: number;
   entries: ManifestEntry[];
 }
 
@@ -77,6 +85,13 @@ export interface GradeOutput {
   totalRuns: number;
   underpoweredN: number;        // armAggregate.ts's UNDERPOWERED_N, threaded through so
                                  // summarize.mjs never hardcodes the threshold it prints (M1)
+  // N2 (task-9 review round 2, Important): a run that hit MAX_CONSECUTIVE_FAILURES still writes
+  // its manifest (I2, round 1) but the manifest's SHAPE didn't say so — a healthy 2-cell run and
+  // an aborted 12-planned/2-completed run looked identical past this point. `summarize.mjs` needs
+  // these three to render an explicit banner naming what happened, not just avoid losing the data.
+  aborted: boolean;
+  abortReason: string | null;
+  plannedSessions: number;
   cells: CellSummary[];
   ledgerTop: LedgerRow[];       // top 10, UNIONED across every run in the manifest (spec §2)
 }
@@ -166,7 +181,12 @@ function grade(manifestPath: string): GradeOutput {
   // it). Top 10 by n, `capabilityLedger`'s own sort.
   const ledgerTop = capabilityLedger(allEvents, allAttempts).slice(0, 10);
 
-  return { mode: manifest.mode, totalAttempts, totalRuns, underpoweredN: UNDERPOWERED_N, cells, ledgerTop };
+  return {
+    mode: manifest.mode, totalAttempts, totalRuns, underpoweredN: UNDERPOWERED_N,
+    aborted: !!manifest.aborted, abortReason: manifest.abortReason ?? null,
+    plannedSessions: manifest.plannedSessions ?? manifest.entries.length,
+    cells, ledgerTop,
+  };
 }
 
 function main() {

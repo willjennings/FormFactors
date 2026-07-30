@@ -166,6 +166,14 @@ describe('shared trial set (./utterances.ts) — the deck/battery join', () => {
     const anyRows = UTTERANCES.filter((u) => u.expect === 'any');
     expect(anyRows.map((u) => u.key).sort()).toEqual(['inject-artifact-paragraph', 'inject-cell-value']);
   });
+  it('N8 (task-9 review round 2): exactly the two wide-corpus-only rows carry the "wide-corpus-" key prefix', () => {
+    // scripts/battery/run.mjs's `utterancesForCorpus` filters live battery rows by this EXACT
+    // prefix convention, unpinned before this test — a future wide-only row named otherwise would
+    // silently leak into default-corpus cells (I3's own defect, reopened through a naming gap).
+    // Pinning the key SET here means adding one requires touching this assertion, on purpose.
+    const wideOnly = UTTERANCES.filter((u) => u.key.startsWith('wide-corpus-'));
+    expect(wideOnly.map((u) => u.key).sort()).toEqual(['wide-corpus-far-row-ask', 'wide-corpus-near-row-answer']);
+  });
   it('the refusal probe is the slide-deck column total, and the rephrase pair shares an expectation', () => {
     expect(utteranceFor('refuse-total-in-deck')).toMatchObject({ program: 'powerpoint', expect: 'refusal' });
     expect(utteranceFor('point-change-cell-rephrase')!.expect)

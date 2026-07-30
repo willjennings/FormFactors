@@ -98,10 +98,20 @@ function main() {
       + 'boot, connect, type, export, grade — works end to end before Task 10 spends a single real '
       + 'token.\n'
     : '';
+  // N2 (task-9 review round 2, Important): I2 (round 1) made an aborted run's manifest survive;
+  // this is what makes the DOC say so. As prominent as the DRY RUN banner, deliberately — the
+  // plan's own words are "the aborted pilot's partial summary IS the deliverable", which only
+  // holds if a reader can tell it's partial without cross-referencing the console log.
+  const abortedBanner = graded.aborted
+    ? `\n> **ABORTED RUN.** ${graded.totalRuns} of ${graded.plannedSessions} planned session(s) `
+      + `completed before this run stopped early. Reason: ${graded.abortReason ?? '(not recorded)'}. `
+      + 'Everything below reflects ONLY the sessions that finished — read every count against '
+      + `\`${graded.plannedSessions}\` planned, not as a complete pilot.\n`
+    : '';
 
   const doc = `# Battery run — ${date}
-${dryBanner}
-Mode: **${graded.mode}**. ${graded.totalRuns} session(s) graded, ${graded.totalAttempts} total attempt(s) across ${graded.cells.length} cell(s).
+${dryBanner}${abortedBanner}
+Mode: **${graded.mode}**. ${graded.totalRuns} of ${graded.plannedSessions} planned session(s) graded, ${graded.totalAttempts} total attempt(s) across ${graded.cells.length} cell(s).
 
 ## Per-cell results
 
@@ -117,7 +127,14 @@ ${renderLatencyTable(graded.cells)}
 _"Warm" excludes each session's own row 1 (the connect-cost turn — mic pre-flight + socket open +
 queued-text flush, a joint-system number, not model latency); "Cold-start" is that excluded row 1,
 reported on its own rather than silently discarded. A cell whose sessions all failed before a
-timeable first turn landed shows \`n/a\` for both, honestly, rather than a manufactured zero._
+timeable first turn landed shows \`n/a\` for both, honestly, rather than a manufactured zero.
+**"Runs" (per-cell table above) and "Sessions" (this table) are NOT the same count** (N7, task-9
+review round 2): "Runs" counts EXPORT FILES — one per cell — but each export can hold several
+telemetry \`session_start\`s, because a mid-session program swap reconnects (App.tsx's
+\`activeProgram\` effect) and \`scopeToArm\` opens a fresh cold slot on every one. A live default
+cell drives ~15 program swaps, so "Sessions" can run an order of magnitude ahead of "Runs" — e.g.
+\`Runs=3, Sessions=48\` is one cell whose three exports together reconnected 48 times, not a
+typo. Expect most turns in a live cell to classify "cold-start" for exactly this reason._
 
 ## Probe verdicts (winsWhen, register/shell registries)
 

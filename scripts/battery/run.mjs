@@ -124,12 +124,18 @@ function resolveChromeHeadlessShell() {
   try { versions = readdirSync(base); } catch {
     throw new Error(`chrome-headless-shell not found under ${base} — set CHROME_HEADLESS_SHELL_PATH`);
   }
-  // M3 (task-9 review round 1): a bare lexicographic sort is wrong for version strings (a "99.x"
-  // directory would sort AFTER "138.x" and get picked as "newest" — deterministic, but not newest).
-  // Parses the dotted numeric run out of each directory name (`mac_arm-145.0.7632.77` -> `[145, 0,
-  // 7632, 77]`) and compares component-wise, longest/most-significant first; a name with no
-  // parseable numbers sorts last rather than throwing, so an oddly-named directory never crashes
-  // resolution outright — it is just never preferred over a real version string.
+  // M3 (task-9 review round 1) / N9 (round 2, comment scope): a bare lexicographic sort is wrong
+  // for version strings (a "99.x" directory would sort AFTER "138.x" and get picked as "newest" —
+  // deterministic, but not newest). Parses the dotted numeric run out of each directory name and
+  // compares component-wise, longest/most-significant first; a name with no parseable numbers
+  // sorts last rather than throwing, so an oddly-named directory never crashes resolution outright
+  // — it is just never preferred over a real version string. The exact tuple this produces is
+  // PLATFORM-DEPENDENT, not always a pure version: on macOS, `mac_arm-145.0.7632.77` -> `[145, 0,
+  // 7632, 77]`, a clean version tuple; on Linux, `linux64-138.0.7204.100` -> `[64, 138, 0, 7204,
+  // 100]` — `64` (from "linux64") is a PLATFORM digit, not a version component, leading the tuple.
+  // Harmless: that leading digit is constant across every entry on any one machine (there is only
+  // ever one platform's cache locally), so it never changes which comparison wins — but a reader
+  // should not assume the parsed tuple is always a clean version number.
   const versionKey = (name) => (name.match(/\d+/g) ?? []).map(Number);
   const compareVersions = (a, b) => {
     const ka = versionKey(a), kb = versionKey(b);
@@ -221,7 +227,16 @@ function isPortOccupied(port, timeoutMs = 1000) {
  *  existed here and it did not; `waitForHttp` happily succeeds against a pre-existing server, so
  *  `--live` silently drove whatever real-keyed dev session was already on :3000). The check below
  *  is the actual fix: a real TCP probe of :3000 BEFORE spawning anything, refusing loudly if
- *  something is already there rather than reusing it. */
+ *  something is already there rather than reusing it.
+ *
+ *  N6 (task-9 review round 2, disclosed rather than fixed): there is an inherent check-then-start
+ *  race between `isPortOccupied`'s probe and `npm run dev`'s own bind a few lines below — something
+ *  could start listening on :3000 in that window. Small in practice (the window is milliseconds),
+ *  and the failure direction is the SAFE one: if a real dev server wins that race and binds first,
+ *  this spawn's own `npm run dev` fails to bind (or `waitForHttp` below ends up talking to the
+ *  OTHER, pre-existing server instead of this script's own) — neither silently drives a session
+ *  this script didn't intend to start. Not eliminated (that would need an atomic
+ *  probe-and-reserve, which TCP does not offer without actually binding the port first). */
 async function startViteOrDry(mode, vitePort) {
   if (mode === 'dry') {
     const proc = spawn('npx', ['vite', '--port', String(vitePort), '--strictPort'], {
@@ -274,6 +289,44 @@ function makeRpc(ws, pending) {
     pending.set(id, { resolve, reject });
     ws.send(JSON.stringify({ id, method, params }));
   });
+}
+
+/** N5 (task-9 review round 2, Minor — the residual tail of C2): `Page.close` sent over a PAGE's own
+ *  CDP session still needs that page's session to answer. If it times out (round 1's bound was 5s,
+ *  kept here), round 1's fallback was just `ws.close()` — which discards the only HANDLE to the
+ *  page without actually closing it, so a genuinely wedged renderer (and, under --live, its live
+ *  provider socket) survives for the rest of the WHOLE run, not just this session. `Target.
+ *  closeTarget` on the BROWSER-level endpoint (a fresh, separate connection — `/json/version`'s own
+ *  `webSocketDebuggerUrl`, not the per-page one) does not depend on the wedged page/session
+ *  answering at all; it is the browser process itself tearing the target down. Best-effort: if even
+ *  this fails, the page is genuinely stuck until `killProc(browserProc)` ends the whole run — there
+ *  is no third tier short of that. */
+async function forceCloseTarget(cdpPort, targetId) {
+  try {
+    const verRes = await fetch(`http://127.0.0.1:${cdpPort}/json/version`);
+    const { webSocketDebuggerUrl } = await verRes.json();
+    const bws = new WebSocket(webSocketDebuggerUrl);
+    const pending = new Map();
+    await withTimeout(new Promise((resolve, reject) => {
+      bws.addEventListener('open', resolve);
+      bws.addEventListener('error', reject);
+    }), 5000, 'browser-level CDP connect (forceCloseTarget)');
+    bws.addEventListener('message', (ev) => {
+      const msg = JSON.parse(ev.data);
+      if (msg.id && pending.has(msg.id)) {
+        const { resolve, reject } = pending.get(msg.id);
+        pending.delete(msg.id);
+        if (msg.error) reject(new Error(JSON.stringify(msg.error)));
+        else resolve(msg.result);
+      }
+    });
+    const browserRpc = makeRpc(bws, pending);
+    await withTimeout(browserRpc('Target.closeTarget', { targetId }), 5000, 'Target.closeTarget (forceCloseTarget)');
+    bws.close();
+  } catch {
+    // Last resort exhausted — the whole-run browser kill at the end of `main()` is the final
+    // backstop; nothing more targeted can be done from here.
+  }
 }
 
 async function openPage(cdpPort) {
@@ -420,23 +473,30 @@ async function switchProgram(rpc, programId) {
   })()`);
 }
 
-/** I5 (task-9 review round 1): reads which program is ACTUALLY in front, via the taskbar's own
- *  "— in front" chip label (WindowChip.tsx) — the same DOM fact a person would look at, reverse-
- *  mapped through `PROGRAM_LABELS`. Exists so `driveSession` can ASSERT its boot-program
- *  expectation instead of assuming it: with C1's clean-boot fix a fresh session should always land
- *  on DEFAULT_PROGRAM ('word'), but "should always" is exactly the kind of claim a silent
- *  assumption turns into a silently mis-graded pilot the moment it stops being true (a journal
- *  restore bug, a future `?program=` boot param, anything). Returns `null` if no window is
- *  focused/found — a boot so broken nothing is in front at all is its own failure the caller
- *  should refuse to paper over. */
-async function readFrontProgram(rpc) {
-  // Substring match on "in front" alone (not the full "— in front" with WindowChip.tsx's literal
-  // em dash) — avoids depending on a non-ASCII character surviving two rounds of JS string
-  // escaping (this file's own template literal, then the browser's `Runtime.evaluate` parse) for
-  // no benefit: "in front" is already a stable, ASCII-only, non-colliding substring of the label.
+/** N1 (task-9 review round 2, Critical — replaces round 1's `readFrontProgram`, a category error):
+ *  the round-1 version asked "which window has FOCUS" (the taskbar's `"… — in front"` chip) and
+ *  treated that as "which PROGRAM is active" — true only on a desk with no artifact windows. A
+ *  `?corpus=wide` boot seeds six artifacts (`App.tsx`'s wide-corpus boot effect) whose windows
+ *  open and the LAST one takes focus, so the single "in front" chip belonged to an artifact
+ *  ("Program Status Board — in front"), `readFrontProgram` returned `null`, and the boot assertion
+ *  threw unconditionally for the one cell (`corpus:'wide'`) spec §3 exists to measure — every wide
+ *  session failed at boot, silently absent from the published doc (11/12 sessions "succeeded").
+ *
+ *  The FIX asks the right question instead: "which program is ACTIVE", independent of window
+ *  focus. `App.tsx`'s desk invariant (spec §10 exclusion, program-swap effect) guarantees there is
+ *  ALWAYS EXACTLY ONE program window on the desk (the outgoing one minimizes rather than closes on
+ *  a swap) — so exactly one taskbar chip's label ever starts with a `PROGRAM_LABELS` value,
+ *  regardless of whether an artifact window is currently focused on top of it. Matching on THAT
+ *  chip (any state — "in front", "bring to front", "put away…", it does not matter) answers the
+ *  actual question `driveSession` needs answered and is corpus-agnostic by construction. */
+async function readActiveProgram(rpc) {
   const label = await evalJs(rpc, `(function(){
+    var labels = ${JSON.stringify(Object.values(PROGRAM_LABELS))};
     var chips = Array.from(document.querySelectorAll('[aria-label]'));
-    var chip = chips.find(function(c){ return c.getAttribute('aria-label').indexOf('in front') !== -1; });
+    var chip = chips.find(function(c){
+      var a = c.getAttribute('aria-label');
+      return labels.some(function(l){ return a.indexOf(l) === 0; });
+    });
     return chip ? chip.getAttribute('aria-label') : null;
   })()`);
   if (!label) return null;
@@ -549,19 +609,36 @@ function safeReaddir(dir) {
  *  journal and landed on Excel, not Word), and worse, a `corpus:'wide'` cell whose session isn't
  *  actually the FIRST to touch that profile boots the RESTORED default corpus while `manifest.json`
  *  and the summary doc both still call it `wide` — a false claim about the one thing §3's wide-
- *  corpus cell exists to test. Fix: navigate to the bare origin (so `localStorage`/`sessionStorage`
- *  are actually addressable — they are origin-scoped, and `about:blank` has no access to this
- *  origin's storage) and clear both, BEFORE ever navigating to the real boot URL. Cheaper than a
+ *  corpus cell exists to test. Fix: navigate to the origin's root URL (so `localStorage`/
+ *  `sessionStorage` are actually addressable — they are origin-scoped, and `about:blank` has no
+ *  access to this origin's storage; see N4 below for what "navigate" actually loads there) and
+ *  clear both, BEFORE ever navigating to the real boot URL. Cheaper than a
  *  fresh `--user-data-dir` per session (the reviewer's other offered fix) and just as clean: a
  *  cleared origin has no journal to restore from, so the very next navigation boots exactly as
  *  fresh as a brand-new profile would. */
 async function clearOriginStorage(rpc, browserUrl) {
+  // N4 (task-9 review round 2): round 1's comment here claimed "bare origin load — no app bundle
+  // to wait on" — false. `Page.navigate` has no notion of "just the origin, no document"; this
+  // loads the FULL APP, including whatever the PREVIOUS session's journal restores into a live
+  // React tree, for the 600ms below. That matters because `App.tsx` installs a `pagehide` handler
+  // that flushes the journal on unload once a save timer has ever armed — so a mount effect during
+  // THIS throwaway boot (a viewport fit, an artifact reconcile, a future boot effect) could in
+  // principle re-write the journal AFTER the clear() below runs. Probed inert today (every mount
+  // effect at this fixed 1600x1000 viewport is value/identity-guarded and writes nothing on a
+  // fresh boot) — but latent, not impossible, and silently reintroducing C1 through a side door if
+  // it ever does fire is exactly the failure mode this whole exercise is about. The check after
+  // clear() below is the guard: it turns "latent" into "loud" rather than leaving it merely
+  // disclosed.
   await rpc('Page.navigate', { url: `${browserUrl}/` });
-  await sleep(600); // bare origin load — no app bundle to wait on, just enough for storage access
+  await sleep(600); // the throwaway boot's own mount settle — see above, NOT "no app bundle"
   await evalJs(rpc, `(function(){
     try { localStorage.clear(); sessionStorage.clear(); } catch (e) {}
     return true;
   })()`);
+  const resurrected = await evalJs(rpc, `(function(){ return localStorage.getItem('ff-journal') !== null; })()`);
+  if (resurrected) {
+    throw new Error("clearOriginStorage: 'ff-journal' reappeared immediately after clear() — a mount effect wrote during the throwaway boot (N4's latent risk actually fired; this session's journal is no longer clean)");
+  }
 }
 
 /** I1 (task-9 review round 1, Important): `recordSessionEnd` (App.tsx) — which flushes the last
@@ -575,9 +652,26 @@ async function clearOriginStorage(rpc, browserUrl) {
  *  (the same button `clickMicToggle` uses — it toggles either direction) is the ordinary,
  *  documented way a user ends a session, and is what makes the LAST utterance's turn and the LAST
  *  run's cost actually reach the export. */
+// N3 (task-9 review round 2, Important): `endSession` had no post-condition (and no pre-condition
+// either) — `clickMicToggle` only reports "a button was clicked", never "the session actually
+// ended". The connect path already checks BOTH directions (`clickMicToggle` + `pollUntil(isLiveNow)`
+// below, in `driveSession`); this mirrors it. Two real failure modes this closes: (1) if the
+// session was ALREADY down when this fires (a dropped socket, or a reconnect from the LAST
+// program swap still in flight — every default cell does 15 mid-session swaps, each a real close/
+// reconnect), clicking the toggle STARTS a session instead of ending one — the last turn is never
+// flushed (I1's defect, reintroduced silently) and, under --live, a real billed connection opens
+// and runs until the page closes; (2) if the click lands but the app never actually tears down
+// (a wedged reconnect effect), the export would still be attempted against a live-but-unflushed
+// stream. Both now fail LOUDLY here instead of silently truncating the export.
 async function endSession(rpc) {
+  const wasLive = await isLiveNow(rpc);
+  if (!wasLive) {
+    throw new Error('endSession: the session was already down before the end-toggle — clicking now would START a new one rather than end the current one');
+  }
   const clicked = await clickMicToggle(rpc);
   if (!clicked) throw new Error('mic toggle button not found when ending the session — the final turn/session_complete would be lost');
+  const ended = await pollUntil(async () => !(await isLiveNow(rpc)), { timeoutMs: CONNECT_TIMEOUT_MS, intervalMs: 300 });
+  if (!ended) throw new Error(`session did not actually end within ${CONNECT_TIMEOUT_MS}ms after the toggle — export would have been taken against a still-live stream`);
   await sleep(500); // let recordSessionEnd's synchronous work (already done by click time) settle into a render
 }
 
@@ -623,18 +717,21 @@ async function driveSession(browserUrl, cdpPort, cell, mode, outDir) {
       return !!b;
     })()`);
 
-    // I5 (task-9 review round 1): with C1's clean boot, the desk should always land on
-    // DEFAULT_PROGRAM ('word' — scenarios.ts; there is no `?program=` boot param) — but "should"
+    // I5 (task-9 review round 1) / N1 (round 2): with C1's clean boot, the desk should always land
+    // on DEFAULT_PROGRAM ('word' — scenarios.ts; there is no `?program=` boot param) — but "should"
     // is exactly the word that was silently wrong before C1 existed (a journal restore put Excel
-    // in front). ASSERT the real front program via CDP rather than assume it: an excel/powerpoint/
-    // photo utterance sent while the wrong program is in front is meaningless (`expect` is a
-    // property of (text, program), not text alone — utterances.ts's own header), and a silent
-    // mismatch here is exactly how a pilot's cell labels end up lying.
-    const front = await readFrontProgram(rpc);
-    if (front !== 'word') {
-      throw new Error(`boot assertion failed: expected front program 'word' (DEFAULT_PROGRAM) after a clean boot, got '${front ?? 'none detected'}' — journal not actually clean, or the desk failed to mount`);
+    // in front). ASSERT the real active program via CDP rather than assume it: an excel/
+    // powerpoint/photo utterance sent while the wrong program is active is meaningless (`expect` is
+    // a property of (text, program), not text alone — utterances.ts's own header), and a silent
+    // mismatch here is exactly how a pilot's cell labels end up lying. `readActiveProgram` (not
+    // round 1's `readFrontProgram` — see its own doc for the category error that named fixed)
+    // works under `corpus:'wide'` too, where a seeded artifact window, not the program window, has
+    // visual focus.
+    const active = await readActiveProgram(rpc);
+    if (active !== 'word') {
+      throw new Error(`boot assertion failed: expected active program 'word' (DEFAULT_PROGRAM) after a clean boot, got '${active ?? 'none detected'}' — journal not actually clean, or the desk failed to mount`);
     }
-    let currentProgram = front;
+    let currentProgram = active;
     if (cell.utterances.length && cell.utterances[0].program !== currentProgram) {
       const switched = await switchProgram(rpc, cell.utterances[0].program);
       if (!switched) throw new Error(`program launcher/chip not found for "${cell.utterances[0].program}"`);
@@ -701,9 +798,15 @@ async function driveSession(browserUrl, cdpPort, cell, mode, outDir) {
     // to hang the CLEANUP too (a `Page.close` CDP round-trip still needs the target to answer;
     // `ws.close()` alone is purely client-side and can never hang, so it always runs regardless of
     // whether the bounded `Page.close` attempt above it succeeded, timed out, or errored).
-    try { await withTimeout(rpc('Page.close'), 5000, 'Page.close during cleanup'); } catch { /* best effort — ws.close() below still runs regardless */ }
+    try {
+      await withTimeout(rpc('Page.close'), 5000, 'Page.close during cleanup');
+    } catch {
+      // N5: `Page.close` itself timed out/errored — fall back to a browser-level close, which does
+      // not depend on this (possibly wedged) page's own session answering (see forceCloseTarget's
+      // own doc). Best effort: `ws.close()` below still runs regardless of how this goes.
+      await forceCloseTarget(cdpPort, target.id);
+    }
     try { ws.close(); } catch { /* already gone */ }
-    void target;
   }
 }
 
@@ -725,10 +828,21 @@ function buildPlan(mode, utterances) {
     // utterance slice keeps the dry gate fast — zero-spend means there is nothing to lose by
     // sending fewer rows, and the gate only requires >=2 gradeable exports with a nonzero attempt
     // count, not full corpus coverage (that is what a full --live pilot run is for).
-    const slice = utterancesForCorpus(utterances.slice(0, 6), 'default');
+    const defaultSlice = utterancesForCorpus(utterances.slice(0, 6), 'default');
+    // N1 (task-9 review round 2, Critical): the dry plan used to be default-corpus-only, so the
+    // gate could not have caught the round-1 boot assertion breaking every `corpus:'wide'` session
+    // (discovered only by the reviewer's own probe, after the round-1 fix would have burned ~50
+    // minutes of real spend on session 9 of a live run before failing). A third cell here — real
+    // `?corpus=wide` boot, real wide-only utterance rows via `utterancesForCorpus` — closes that
+    // structural gap: this class of defect fails THE GATE from now on, at zero cost.
+    const wideSlice = utterancesForCorpus(
+      [...utterances.slice(0, 3), ...utterances.filter((u) => u.key.startsWith('wide-corpus-'))],
+      'wide',
+    );
     return [
-      { register: 'guided', shell: 'familiar', backend: 'gemini', corpus: 'default', utterances: slice },
-      { register: 'terminal', shell: 'familiar', backend: 'gemini', corpus: 'default', utterances: slice },
+      { register: 'guided', shell: 'familiar', backend: 'gemini', corpus: 'default', utterances: defaultSlice },
+      { register: 'terminal', shell: 'familiar', backend: 'gemini', corpus: 'default', utterances: defaultSlice },
+      { register: 'guided', shell: 'familiar', backend: 'gemini', corpus: 'wide', utterances: wideSlice },
     ];
   }
   // --live: the pilot spec (§5, rulings 2026-07-29) — "3 repeats x 4 registers, Gemini only; the
@@ -808,7 +922,18 @@ async function main() {
     killProc(browserProc);
   }
 
-  const manifest = { mode, createdAt: new Date().toISOString(), entries: manifestEntries };
+  // N2 (task-9 review round 2, Important): I2 (round 1) made the manifest survive an abort but
+  // stopped there — an aborted run's manifest was indistinguishable in SHAPE from a healthy short
+  // run's, so the rendered doc read exactly like a complete pilot with fewer cells, not like a run
+  // that stopped early. `aborted`/`abortReason`/`plannedSessions` are the fields
+  // `ts-bridge.ts`/`summarize.mjs` need to render an explicit banner naming what happened — the
+  // plan's own words: "the aborted pilot's partial summary IS the deliverable" — it must SAY it
+  // was aborted, not just avoid losing the data.
+  const manifest = {
+    mode, createdAt: new Date().toISOString(),
+    aborted: !!abortError, abortReason: abortError ? abortError.message : null,
+    plannedSessions: plan.length, entries: manifestEntries,
+  };
   const manifestPath = path.join(outDir, 'manifest.json');
   writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
   console.log(`[battery] manifest: ${path.relative(ROOT, manifestPath)}`);
