@@ -89,6 +89,7 @@ import { deskReduce, initialDeskState, programWindowId, artifactWindowId } from 
 import type { DeskEvent, DeskState, DeskWindow } from './shell/desk/types';
 import { barItems, deskSummary, reconcileArtifacts, visibleWindows, fitWindows } from './shell/desk/selectors';
 import { resolveSkin } from './shell/skins/registry';
+import { projectDesk } from './shell/skins/projectDesk';
 import type { SkinKey } from './shell/skins/types';
 import { docStatusLabel } from './widgets/surfaceModels';
 import type { TeachingEvent, TeachingState } from './teaching/types';
@@ -1235,9 +1236,9 @@ export default function App() {
     // more dangerous one — a window can be saved entirely below the fold) unprotected, and a
     // clamp applied here would be invisible to replay. `{ ...DEFAULT_DESK_RECT }` is a defensive
     // copy so THIS desk never aliases the shared constant. The replay path still does —
-    // journal/registry.ts:78 hands the same object to initialDeskState raw — which is safe only
-    // because no rect is ever mutated in place: deskStore.ts:53 replaces the rect object
-    // wholesale and ProgramWindow.tsx:59 builds a fresh one per drag frame.
+    // journal/registry.ts:112 hands the same object to initialDeskState raw — which is safe only
+    // because no rect is ever mutated in place: deskStore.ts:55 replaces the rect object
+    // wholesale and ProgramWindow.tsx:72 builds a fresh one per drag frame.
     ?? initialDeskState(bootProgram, { ...DEFAULT_DESK_RECT }));
   // The desk mirrored into a ref, written SYNCHRONOUSLY by every dispatch below. This file's
   // signature failure is clearing state and forgetting the ref (the pendingAction round), so the
@@ -1329,6 +1330,20 @@ export default function App() {
     width: mainContainerRef.current?.clientWidth ?? window.innerWidth,
     height: mainContainerRef.current?.clientHeight ?? window.innerHeight,
   });
+  // The rect the ACTIVE SKIN projects a window to (skins/projectDesk.ts) — what the skin means to
+  // draw, as opposed to the authored rect the desk journals. Returns null when there is no window
+  // by that id or the skin key does not resolve; callers fall back to the authored rect.
+  //
+  // Computed on demand rather than memoized, and deliberately so: both of its inputs are outside
+  // the render — `deskRef.current` (never the captured `desk`, per the ref contract above) and a
+  // DOM measurement of the plane. Its only caller today is a pointerdown handler, where "on
+  // demand" is exactly right. Task 4 of this plan, which makes the WINDOWS render from the
+  // projection, is what needs a memo, and it needs a render-time plane size to build one honestly.
+  const projectedRect = (id: string): WindowRect | null => {
+    const skin = resolveSkin(deskRef.current.skin);
+    if (!skin) return null;
+    return projectDesk(skin, deskRef.current, planeSize()).find((p) => p.id === id)?.rect ?? null;
+  };
   // Where a program window opens when the desk has never held one. Clamped, and that clamped
   // rect travels INSIDE the journaled window.open event, so replay lands on the same geometry.
   const programRect = (): WindowRect => clampWindow(DEFAULT_DESK_RECT, planeSize());
@@ -5595,10 +5610,19 @@ export default function App() {
               zIndex={windowZ[programWin.id] ?? 10}
               chrome={windowChrome}
               origin={programWin.origin}
+              dragOrigin={() => projectedRect(programWin.id)}
               onRectChange={(r, settled) => {
-                const ev: DeskEvent = { type: 'window.move', id: programWin.id, rect: r };
                 // Only the settled rect is journaled; the frames in between are state-only.
-                if (settled) deskDispatchJ(ev); else deskDispatchLive(ev);
+                //
+                // And only the settled rect carries `byUser` — touch promotes (design spec §3).
+                // `byUser` is the flag that flips `placed` (deskStore.ts:55, sticky), and once
+                // placed this window is drawn exactly where it was dropped in EVERY skin, never
+                // projected again. This is the ONLY byUser dispatch in the app: the boot-fit
+                // (`fitWindows` effect) and the artifact reconcile effect stay byUser-free on
+                // purpose — a desk the app positioned is not a desk you placed, and marking one
+                // placed at boot would kill projection permanently.
+                if (settled) deskDispatchJ({ type: 'window.move', id: programWin.id, rect: r, byUser: true });
+                else deskDispatchLive({ type: 'window.move', id: programWin.id, rect: r });
               }}
               onMinimize={() => deskDispatchJ({ type: 'window.minimize', id: programWin.id })}
               onFocus={() => focusWindow(programWin.id)}

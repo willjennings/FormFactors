@@ -5,12 +5,14 @@
 // A second store could only disagree with that one, and disagree invisibly, since replay cannot
 // see sessionStorage.
 //
-// `clampWindow` is the one geometry rule, and it has exactly four callers: App's program-open
-// (App.tsx:1042) and artifact-reconcile (App.tsx:1137) paths, `fitWindows`
-// (shell/desk/selectors.ts:111), and ProgramWindow's drag (shell/ProgramWindow.tsx:59). The
-// first three put the clamped rect straight inside a journaled event. The drag is the one
-// exception worth naming: its intermediate frames are state-only (deskDispatchLive), and only
-// the settled rect — the same clamped rect, at rest — is journaled.
+// `clampWindow` is the one geometry rule, and it has exactly five callers: App's program-open
+// (App.tsx:1349) and artifact-reconcile (App.tsx:1444) paths, `fitWindows`
+// (shell/desk/selectors.ts:111), ProgramWindow's drag (shell/ProgramWindow.tsx:72), and
+// `projectDesk` (shell/skins/projectDesk.ts:118). The first three put the clamped rect straight
+// inside a journaled event. The drag is the one exception worth naming: its intermediate frames
+// are state-only (deskDispatchLive), and only the settled rect — the same clamped rect, at rest —
+// is journaled. The fifth journals nothing at all: a projection is drawn, never stored, so its
+// clamp keeps a rect on the plane for one paint and the authored rect it came from is untouched.
 export type WindowRect = { x: number; y: number; w: number; h: number };
 
 export const MIN_W = 320;
