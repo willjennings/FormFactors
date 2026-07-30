@@ -104,6 +104,53 @@ battery utterances *in their own words* (recorded verbatim into the ledger). The
 join the same corpus via the eval spec's §7 smoke-header. This is the only source of R0–R3 data the
 project can ever have — the author is permanently at R5.
 
+## §4b The eval deck — evaluation must be stupid simple (user ruling, 2026-07-29)
+
+Running an evaluation cannot require reading this spec. The whole flow is: **open the app → open the
+Eval deck → follow the cards → read the scorecard.** No terminal, no scripts, no knowledge of arms.
+
+**The deck.** A MenuBar entry (beside Missions) opens an ordered deck of trial cards. Each card is
+one thing to try, in imperative plain language, with a badge naming the dimension it exercises:
+
+> **Card 4 of 12 · POINTING**
+> Point at any cell in the spreadsheet and say *"what's this?"*
+> — or click it and type the question.
+
+> **Card 7 of 12 · HONESTY**
+> Ask it to total the column in the *slide deck*. (It should refuse and say why —
+> a refusal here is the system working.)
+
+> **Card 9 of 12 · ROBUSTNESS**
+> Ask for the same edit you did on card 3, but phrase it your own way.
+
+- Cards auto-complete by **observing committed state and telemetry**, the mission subsystem's
+  established discipline (run-baselined predicates, never model self-report). A card that can't
+  observe its outcome says so and offers a two-tap self-grade (worked / didn't) — recorded as
+  human-graded, never silently merged with observed grades.
+- Every card is drawn from the battery's utterance set, so a human deck run and an automated battery
+  run are the **same trials** and land in the same corpus, comparable by construction.
+- A skip is a recorded outcome, not an absence.
+- The deck is also the participant script: §4's outside participant just follows the cards, which is
+  what makes an informal 45-minute sitting produce structured data with zero moderation overhead.
+
+**The scorecard.** Completing (or abandoning) the deck renders one card-grammar summary — the human
+face of `ArmAggregate`, computed by the same derivation, no parallel math:
+
+> **This session — Guided register, Familiar shell, Gemini · 12 trials**
+> **Good at:** pointing (5/5 correct) · honest refusals (2/2, said why both times)
+> **Shaky:** rephrased asks (1 of 2 needed a correction)
+> **Latency:** first response median 1.4s · slowest 4.9s (the column total)
+> **Cost:** 63 frames, 19 hints sent
+> **Watch:** "make it pop" produced no action and no refusal — it just talked. *(→ capability ledger)*
+
+Rules carried over from the eval spec, restated because a summary card is where flattery creeps in:
+every number carries its n; refusals render under **Good at**, never as failures; `speech_only`
+no-ops render under **Watch**, never dropped; below the `underpowered` threshold the card says
+*"not enough trials to compare arms"* in those words.
+
+The scorecard is exportable with the session file, and the drawer's eval panel (eval-logging spec §6)
+becomes a live miniature of it rather than a separate design.
+
 ## §5 Open questions — RESOLVED (user rulings, 2026-07-29)
 
 1. **Battery size: pilot of 12 sessions.** 3 repeats × 4 registers, Gemini only; the wide corpus runs
@@ -126,6 +173,10 @@ project can ever have — the author is permanently at R5.
 - A direction test: a session with two `speech_only` turns must *lower* completion rate versus the
   same session without them — the denominator fix, pinned.
 - First live battery run is itself the acceptance test of §2; its summary doc is the deliverable.
+- Deck cards' completion predicates: pure TDD, mission-style (observed state, run-baselined); a
+  self-graded card is stored distinguishably from an observed one, pinned by test.
+- The scorecard renderer is a pure function of `ArmAggregate` + ledger rows with its own tests — the
+  flattery test applies verbatim: an all-refusals session renders those under Good at.
 
 ## §7 Out of scope
 
