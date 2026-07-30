@@ -254,12 +254,17 @@ describe('rule 5 — {error} refusal (action decision: rejected)', () => {
     expect(attempts[1]).toMatchObject({ id: 't2', request: 'add a heading saying Q1 Results', verb: 'set_heading', outcome: 'asked-and-answered' });
   });
 
-  it('C1 defence-in-depth — same window (no intervening turn), a commit for an UNRELATED verb does not supersede the rejection either', () => {
-    // No `turn` event at all between the rejection and the unrelated commit: the same-verb-match
-    // guard on the `action` case is what has to catch this one (the turn-event guard above never
-    // fires, because no second turn ever arrives to trigger it). There is no boundary here to
-    // honestly split the single verbatim request into two attempts, so the unrelated commit's
-    // effects are simply not credited — the rejection stands.
+  // ========================================================================================
+  // C2 (fix round 3, reviewer-flagged) — the vanished success. Round 2's fix for C1's
+  // defence-in-depth case (a same-window commit for an unrelated verb, no intervening `turn`)
+  // stopped the verb-mismatched commit from overwriting the rejection — but did so with a bare
+  // `break`, discarding the commit's own outcome entirely: neither its own attempt, nor
+  // `ungradeable`. The mirror image of C1 (a success vanishes instead of a refusal). Fixed by
+  // SPLITTING the window into two records once it settles: the rejection keeps the window's real,
+  // turn-reported identity; the unrelated commit's own outcome gets a synthetic id and an EMPTY
+  // request (never the rejected request's verbatim — that would reopen C1's misattribution).
+  // ========================================================================================
+  it('C2 — same window (no intervening turn), a commit for an UNRELATED verb SPLITS into two attempts: the rejection (real identity) + the commit\'s own outcome (synthetic id, no verbatim)', () => {
     const events = [
       sessionStart(0, 'powerpoint'),
       action(100, 'insert_object', 'rejected'),
@@ -267,9 +272,29 @@ describe('rule 5 — {error} refusal (action decision: rejected)', () => {
       turn(115, 't1', 'insert a chart', 'tool_call', 50, 20),
     ];
     const attempts = deriveAttempts(events);
+    expect(attempts).toHaveLength(2);
+    expect(attempts[0]).toMatchObject({
+      id: 't1', request: 'insert a chart', verb: 'insert_object', outcome: 'refused-honestly',
+    });
+    expect(attempts[1]).toMatchObject({
+      id: 't1-split', request: '', verb: 'set_heading', outcome: 'completed',
+    });
+    // The unrelated commit's own record must NOT carry the rejected request's verbatim text —
+    // the exact misattribution C1 fixed, reopened through a different door.
+    expect(attempts[1].request).not.toBe('insert a chart');
+  });
+
+  it('C2 control — the SAME commit shape with NO prior rejection produces one ordinary completed attempt (proves the vanishing/splitting is specific to the rejected-window branch)', () => {
+    const events = [
+      sessionStart(0, 'powerpoint'),
+      action(110, 'set_heading', 'commit'), // same verb/timing as the C2 case, but no rejection first
+      turn(115, 't1', 'add a heading', 'tool_call', 50, 20),
+    ];
+    const attempts = deriveAttempts(events);
     expect(attempts).toHaveLength(1);
-    expect(attempts[0].outcome).toBe('refused-honestly');
-    expect(attempts[0].verb).toBe('insert_object'); // not 'set_heading' — the unrelated commit never wins
+    expect(attempts[0]).toMatchObject({
+      id: 't1', request: 'add a heading', verb: 'set_heading', outcome: 'completed',
+    });
   });
 });
 

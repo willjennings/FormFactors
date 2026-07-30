@@ -78,6 +78,15 @@ interface Pending {
                                    // was actually refused, so the commit branch below can tell a
                                    // genuine retry from an unrelated success landing in the same
                                    // still-open window.
+  splitRejectedVerb: string | null; // C2 fix (fix round 3, reviewer-flagged "vanished success"):
+                                   // set the moment a same-window, no-intervening-turn commit for
+                                   // an UNRELATED verb is seen (see the 'action' case) — remembers
+                                   // that this window must produce TWO attempts when it settles,
+                                   // not one. Kept separate from `rejectedVerb` (which is cleared/
+                                   // superseded the instant a commit lands, matched or not) so
+                                   // `settle()` still knows, once the window resolves, that a real
+                                   // rejection happened here even though `p.decided` now reflects
+                                   // the unrelated commit's own outcome.
   sawAction: boolean;             // any action/ask ever touched this window — the
                                    // tool-call-without-action guard
   decided: AttemptOutcome | null; // set by a commit (rules 2-4/6) or a dropped ask (rule 6); once
@@ -113,7 +122,7 @@ export function deriveAttempts(events: TelemetryEvent[]): Attempt[] {
     id: null, askedAt: null, request: null, program: currentProgram, arm: currentArm,
     verb: null, turns: 0, corrections: 0, undos: 0, witnessed: false, committed: false,
     correctedBeforeCommit: false, askAnswered: false, rejectedPending: false, rejectedVerb: null,
-    sawAction: false, decided: null, lastT: 0, settledMs: null,
+    splitRejectedVerb: null, sawAction: false, decided: null, lastT: 0, settledMs: null,
   });
   const ensurePending = (): Pending => { if (!pending) pending = blank(); return pending; };
 
@@ -152,28 +161,53 @@ export function deriveAttempts(events: TelemetryEvent[]): Attempt[] {
   const SPEECH_NOTHING = { outcome: 'abandoned' as const, reason: null }; // rule 7, the survivorship fix
 
   const settle = (p: Pending, outcome: AttemptOutcome, reason: string | null): void => {
+    // Defensive fallback for a malformed/truncated stream where a `turn` event never arrived to
+    // supply identity (never exercised by a well-formed stream — every exchange this module
+    // grades produces exactly one `turn` event, per src/eval/turns.ts): still a well-formed
+    // record rather than a dropped one.
+    const baseId = p.id ?? `unidentified-${attempts.length}`;
+    // Shared across every record `settle()` can produce for this window (one or two — see below):
+    // identity/program/arm/witness state don't differ between the split halves of a same-window
+    // rejection+unrelated-commit, only outcome/verb/turns/duration/request do.
+    const shared = { askedAt: p.askedAt ?? p.lastT, program: p.program, arm: p.arm, witnessed: p.witnessed };
+    if (p.splitRejectedVerb !== null) {
+      // C2 fix (fix round 3, reviewer-flagged "vanished success"): a same-window commit for a verb
+      // UNRELATED to the one that was rejected, with no intervening `turn` event to give it its own
+      // identity (see the `turn` case's guard 1 above, which handles the cross-turn version of this
+      // same situation) — pushed here as TWO records instead of the one `outcome` normally produces.
+      // Round 2's fix silently discarded this commit's effect (a bare `break`); that traded one
+      // failure mode for its mirror — a real success credited nowhere, violating spec §2 exactly as
+      // much as guessing does. The REJECTION keeps this window's real, turn-reported identity — it
+      // is chronologically the first thing that happened, and the turn's verbatim genuinely
+      // describes it. The unrelated commit's OWN record gets a synthetic id (`-split` suffix, never
+      // colliding with a real turn id) and an EMPTY request: the schema exports no independent
+      // verbatim for a second, nested tool call sharing one exchange with a rejection, and copying
+      // the rejected request's text onto it would reopen C1's exact misattribution through this
+      // second door. `turns`/`durationMs` are left at 0/null for the same reason — neither is
+      // independently knowable for a call that never settled its own turn.
+      attempts.push({
+        ...shared, id: baseId, request: p.request ?? '', verb: p.splitRejectedVerb,
+        outcome: 'refused-honestly', turns: p.turns, corrections: p.corrections, undos: p.undos,
+        durationMs: p.settledMs, ungradeableReason: null,
+      });
+      attempts.push({
+        ...shared, id: `${baseId}-split`, request: '', verb: p.verb, outcome,
+        turns: 0, corrections: 0, undos: 0, durationMs: null, ungradeableReason: reason,
+      });
+      // The split (commit) record is the one actually eligible for a later undo — it is the one
+      // that touched the document; the rejection never did.
+      if (p.committed) undoWindow = attempts.length - 1;
+      return;
+    }
     attempts.push({
-      // Defensive fallback for a malformed/truncated stream where a `turn` event never arrived to
-      // supply identity (never exercised by a well-formed stream — every exchange this module
-      // grades produces exactly one `turn` event, per src/eval/turns.ts): still a well-formed
-      // record rather than a dropped one.
-      id: p.id ?? `unidentified-${attempts.length}`,
-      askedAt: p.askedAt ?? p.lastT,
-      request: p.request ?? '',
-      program: p.program,
-      verb: p.verb,
-      outcome,
-      turns: p.turns,
-      corrections: p.corrections,
-      undos: p.undos,
-      witnessed: p.witnessed,
+      ...shared, id: baseId, request: p.request ?? '', verb: p.verb, outcome,
+      turns: p.turns, corrections: p.corrections, undos: p.undos,
       // C1 fix: NOT `lastT - askedAt` (both are settle-adjacent exported timestamps, so that
       // subtraction collapsed to ~0 for nearly every ordinary attempt). `turn.settledMs` is
       // computed inside turns.ts from the true open time and survives export correctly; when no
       // turn ever settled this window (transcription_lost/speech_only/no_response, or a boundary
       // close with no turn event at all), it stays honestly null rather than fabricated.
       durationMs: p.settledMs,
-      arm: p.arm,
       ungradeableReason: reason,
     });
     if (p.committed) undoWindow = attempts.length - 1; // only a real commit can later be undone
@@ -225,6 +259,16 @@ export function deriveAttempts(events: TelemetryEvent[]): Attempt[] {
         // introduces. Before this fix, a later unrelated ask+commit silently inherited the
         // rejected request's identity — the "vanishing refusal" — because `p.id === null` never
         // re-fired once the first turn had already claimed it.
+        //
+        // EXPLICIT (per round-1 re-review): this guard fires BEFORE the `ev.outcome` branches
+        // below, so it applies uniformly regardless of what kind of turn just arrived — tool_call,
+        // speech_only, no_response, or transcription_lost are all, equally, "a new utterance
+        // started" (the schema affords no finer signal). And it wins unconditionally over the
+        // verb-matched retry carve-out in the `action` case below: ONCE a second turn event has
+        // intervened, even a SAME-verb commit that follows is no longer treated as a retry of the
+        // sealed rejection — it opens its own fresh attempt on the new pending created here. Seal
+        // beats verb-match; verb-match only ever applies to same-window commits (see the `action`
+        // case), never across a turn boundary.
         if (p.id !== null && p.rejectedPending && !p.decided) {
           const { outcome, reason } = resolve(p, TOOL_CALL_NOTHING); // sawAction is true (the
             // rejection itself), so this always resolves via the `rejectedPending` branch, not
@@ -290,20 +334,26 @@ export function deriveAttempts(events: TelemetryEvent[]): Attempt[] {
           // unrelated success arriving later in the SAME still-open window (spec §2: "nested tool
           // calls belong to the open attempt" — a second, unrelated tool call within one exchange)
           // could also silently erase a real refusal, one step later than the turn-event case.
+          //
+          // C2 fix (fix round 3, reviewer-flagged "vanished success"): round 2's version of this
+          // branch stopped at "a same-window commit for a different verb is not a retry" and threw
+          // the commit away with a bare `break` — correct that it wasn't a retry, wrong that it was
+          // therefore nothing. It is a real commit, and dropping its effect on the floor is the
+          // MIRROR of C1 (a real outcome credited nowhere instead of a real refusal erased) — spec
+          // §2's "mark ungradeable rather than guessing" forbids guessing AND forbids silence; this
+          // branch was doing neither loudly, which is its own kind of wrong. Fix: don't discard —
+          // remember the rejected verb (`splitRejectedVerb`) and let THIS commit decide `p.decided`
+          // normally below, same as any other commit. `settle()` (see its own comment) is what
+          // turns a window with `splitRejectedVerb` set into TWO attempts once it resolves: the
+          // rejection, and this commit's own outcome. Unlike guard 1's cross-turn seal, this does
+          // NOT eagerly push a record here — there is no second `turn` event yet to supply this
+          // commit its own identity, so both halves stay pending together until one arrives.
           if (p.rejectedPending && ev.verb !== p.rejectedVerb) {
-            // A same-window commit for a DIFFERENT verb than the one that was rejected. This is
-            // not a retry of it, and there is no `turn` boundary here to honestly split the single
-            // verbatim request into two attempts (unlike the cross-turn case above). Rather than
-            // guess which of the two outcomes the one request "belongs" to, this commit's effects
-            // are NOT recorded as this window's decision — the rejection stands, uncredited by an
-            // unrelated success, exactly as spec §5.1 requires ("a refusal is never a failure",
-            // read the other way: a refusal is never silently overwritten by an unrelated success
-            // either). `p.verb` is restored to the rejected verb so the eventual `refused-honestly`
-            // record reports what was actually refused, not whatever unrelated tool fired last.
-            p.verb = p.rejectedVerb;
-            break;
+            p.splitRejectedVerb = p.rejectedVerb;
           }
-          p.rejectedPending = false; // a successful same-verb retry supersedes the rejection
+          p.rejectedPending = false; // either a genuine same-verb retry, or (see above) a
+                                      // same-window unrelated commit that `settle()` will split —
+                                      // either way this window is no longer "awaiting a retry"
           p.committed = true;
           // Rule 2 (`wrong`, the single most important rule in the file) can never be decided
           // here: a reversing correction always arrives chronologically AFTER its commit (the user
