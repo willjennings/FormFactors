@@ -12,6 +12,12 @@ const fake = () => {
   };
 };
 
+const stubStorageWith = (payload: unknown) => {
+  const s = fake();
+  s.setItem(JOURNAL_KEY, JSON.stringify(payload));
+  return s;
+};
+
 const fakeWithOps = () => {
   const m = new Map<string, string>();
   const ops: Array<{ op: 'setItem' | 'removeItem'; key: string }> = [];
@@ -63,7 +69,16 @@ describe('journal persistence', () => {
     s.setItem(JOURNAL_KEY, JSON.stringify({ v: 1, entries: [] }));
     const r = loadJournal(s);
     expect('failed' in r && r.failed).toBe('unsupported version 1');
-    expect(JOURNAL_VERSION).toBe(2);
+    expect(JOURNAL_VERSION).toBe(3);
+  });
+
+  it('JOURNAL_VERSION is 3 — placed changed a persisted shape', () => {
+    expect(JOURNAL_VERSION).toBe(3);
+  });
+
+  it('a v2 payload is REJECTED, not half-restored', () => {
+    const r = loadJournal(stubStorageWith({ v: 2, entries: [] }));
+    expect('failed' in r && r.failed).toBe('unsupported version 2');
   });
   it('a shape violation is a failed load, not a crash', () => {
     const s = fake();

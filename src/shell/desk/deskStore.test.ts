@@ -93,4 +93,28 @@ describe('deskStore', () => {
     const other = initialDeskState('excel', R);
     expect(deskReduce(s, { type: 'desk.restore', state: other })).toBe(other);
   });
+
+  it('a newly opened window is not placed — the desk positioned it', () => {
+    const s = initialDeskState('word', R);
+    expect(s.windows[0].placed).toBe(false);
+  });
+
+  it('a USER move marks the window placed; a boot-fit move does not', () => {
+    let s = initialDeskState('word', R);
+    const id = programWindowId('word');
+    const moved = { x: 100, y: 100, w: 700, h: 500 };
+    s = deskReduce(s, { type: 'window.move', id, rect: moved });            // boot-fit: no byUser
+    expect(s.windows[0].placed).toBe(false);
+    expect(s.windows[0].rect).toEqual(moved);
+    s = deskReduce(s, { type: 'window.move', id, rect: moved, byUser: true });
+    expect(s.windows[0].placed).toBe(true);
+  });
+
+  it('placed is sticky — a later boot-fit cannot un-place a user-placed window', () => {
+    let s = initialDeskState('word', R);
+    const id = programWindowId('word');
+    s = deskReduce(s, { type: 'window.move', id, rect: R, byUser: true });
+    s = deskReduce(s, { type: 'window.move', id, rect: { x: 0, y: 0, w: 400, h: 300 } });
+    expect(s.windows[0].placed).toBe(true);
+  });
 });

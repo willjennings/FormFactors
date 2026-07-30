@@ -9,7 +9,7 @@ export function initialDeskState(activeProgram: string, rect: WindowRect): DeskS
   // earned; a returning desk restores whatever the journal says was open.
   const w: DeskWindow = {
     id: programWindowId(activeProgram), kind: 'program', refId: activeProgram,
-    rect, z: 1, minimized: false, origin: 'you', openedAt: 0,
+    rect, z: 1, minimized: false, origin: 'you', openedAt: 0, placed: false,
   };
   return { windows: [w], focusedId: w.id, nextZ: 2, skin: 'familiar' };
 }
@@ -30,7 +30,7 @@ export function deskReduce(s: DeskState, e: DeskEvent): DeskState {
         const windows = s.windows.map(w => w.id === e.id ? { ...w, minimized: false, z: s.nextZ } : w);
         return { ...s, windows, focusedId: e.id, nextZ: s.nextZ + 1 };
       }
-      const w: DeskWindow = { id: e.id, kind: e.kind, refId: e.refId, rect: e.rect, z: s.nextZ, minimized: false, origin: e.origin, openedAt: e.at };
+      const w: DeskWindow = { id: e.id, kind: e.kind, refId: e.refId, rect: e.rect, z: s.nextZ, minimized: false, origin: e.origin, openedAt: e.at, placed: false };
       return { ...s, windows: [...s.windows, w], focusedId: e.id, nextZ: s.nextZ + 1 };
     }
     case 'window.close': {
@@ -50,7 +50,9 @@ export function deskReduce(s: DeskState, e: DeskEvent): DeskState {
     }
     case 'window.move': {
       if (!s.windows.some(w => w.id === e.id)) return s;
-      return { ...s, windows: s.windows.map(w => w.id === e.id ? { ...w, rect: e.rect as WindowRect } : w) };
+      // placed is sticky: once a user drags a window, no later boot-fit can un-place it —
+      // otherwise a skin's projection would re-walk a window the user already positioned.
+      return { ...s, windows: s.windows.map(w => w.id === e.id ? { ...w, rect: e.rect as WindowRect, placed: e.byUser === true ? true : w.placed } : w) };
     }
     case 'desk.skin':
       // Skins change furniture, never geometry: windows array is passed through by IDENTITY —

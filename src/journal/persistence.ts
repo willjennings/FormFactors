@@ -9,7 +9,10 @@ export const QUARANTINE_KEY = 'ff-journal-quarantine';
 // v2: desk store added (Task 4). A v1 journal has no desk store, and replaying it against the
 // v2 registry would half-restore a desk (windows/skin at initial() while everything else is
 // restored) — so v1 payloads must be REJECTED as unsupported, not partially applied.
-export const JOURNAL_VERSION = 2;
+// v3: DeskWindow gained `placed` (projected-geometry Task 1). A v2 journal has no `placed`, and
+// guessing it either way is wrong — true freezes every restored desk out of projection, false
+// lets a skin move something the user placed — so v2 payloads are REJECTED the same way.
+export const JOURNAL_VERSION = 3;
 export const JOURNAL_CAP = 500;                    // compaction threshold (spec §7)
 
 export interface StorageLike {

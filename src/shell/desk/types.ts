@@ -16,6 +16,8 @@ export interface DeskWindow {
   minimized: boolean;
   origin: WindowOrigin;  // stamped at open, never changes (skin C's title tag)
   openedAt: number;      // stable bar-order key — never rewritten, even by reopen
+  placed: boolean;       // the desk positioned it (false), or you did (true) — sticky once true,
+                          // so a skin's projection can never re-walk a window the user dragged
 }
 
 export interface DeskState {
@@ -30,6 +32,6 @@ export type DeskEvent =
   | { type: 'window.close'; id: string }
   | { type: 'window.focus'; id: string }
   | { type: 'window.minimize'; id: string }
-  | { type: 'window.move'; id: string; rect: WindowRect }
+  | { type: 'window.move'; id: string; rect: WindowRect; byUser?: boolean }
   | { type: 'desk.skin'; skin: SkinKey }
   | { type: 'desk.restore'; state: DeskState };
