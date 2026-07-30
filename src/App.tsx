@@ -1404,22 +1404,28 @@ export default function App() {
   // compaction, as the spec says.
   //
   // The one thing NOT taken verbatim is the rect (fix round 1, I2): ARTIFACT_BASE_RECT is fixed
-  // pixels — x 560, w 380 — where the index cascade it replaced was viewport-relative, so the
-  // first window needs a 940-wide plane and each cascade step another 16. Past that the control
+  // pixels — x 600, w 344 — where the index cascade it replaced was viewport-relative, so the
+  // first window needs a 944-wide plane and each cascade step another 16. Past that the control
   // cluster is off-plane, and an artifact window has no drag handle to recover with. It is
   // clamped BEFORE dispatch, so the fitted rect travels inside the journaled event and replay
   // stays exact.
   //
   // Where that actually bites, measured rather than assumed. On the ORDINARY path it does not:
-  // `isWideEnough` (search that name, App.tsx:1853 today) turns the whole desk away below
-  // `innerWidth >= 1024`, and MAX_ARTIFACTS = 6 cascades reach a right edge of only 1020. It
-  // bites on the path this project exists for — the "Continue anyway — testbed mode" button
-  // (App.tsx:4435) sets `bypassDeviceGate`, which is that same effect's dependency, so the desk
-  // renders at any width. Driven at 900 with the clamp reverted, both demo artifacts had their
-  // close buttons past the edge (right edges 927 and 943 against a 900 plane); with it they sit
-  // at 887. Note this is NOT the `minDimension < 600` rule (App.tsx:1555) — that one is the
-  // mobile overlay, a different control. And if a later skin ever gives windows a region
-  // narrower than the full plane, the same case arrives through the front door.
+  // `isWideEnough` (search that name) turns the whole desk away below `innerWidth >= 1024`, and
+  // MAX_ARTIFACTS = 6 cascades reach a right edge of exactly 1024 — both facts are pinned by
+  // selectors.test.ts's `default rects` block, which is also where the no-overlap-with-the-
+  // program-window property lives. It bites on the path this project exists for — the
+  // "Continue anyway — testbed mode" button sets `bypassDeviceGate`, which is that same effect's
+  // dependency, so the desk renders at any width. Driven at 900 with the clamp reverted — against
+  // the then-current x 560 / w 380 base — both demo artifacts had their close buttons past the
+  // edge (right edges 927 and 943 against a 900 plane); with it they sat at 887. The base has
+  // since moved to 600/344 for the no-overlap property above, whose un-clamped right edges at 900
+  // are further out still, so that measurement understates the clamp rather than overstating it.
+  // Note this is NOT the `minDimension < 600` rule (search `setShowMobileOverlay`) — that one is
+  // the mobile overlay, a different control. A skin now DOES give windows a region narrower than
+  // the full plane (`freeArea`, shell/skins/furniture.ts), but that region is projection-only:
+  // `projectDesk` clamps its own output and never writes back, so the authored rects dispatched
+  // here are unaffected by it.
   //
   // It also makes StrictMode's double mount safe: pass 1 dispatches and writes deskRef
   // synchronously, so pass 2 reconciles against a desk that is already in sync and returns
@@ -1507,6 +1513,21 @@ export default function App() {
   // Narrower: which windows are MOUNTED. The observer effect re-attaches on this rather than on
   // the geometry signature, so a drag doesn't tear down and rebuild a ResizeObserver per frame.
   const deskMountSignature = desk.windows.filter((w) => !w.minimized).map((w) => w.id).join('|');
+  // `draggingId` is normally cleared by the settled `onRectChange(_, true)`, which comes from
+  // ProgramWindow's `end()` — pointerup and pointercancel both reach it, and there is no Esc path
+  // to miss. The hole is the window going away UNDER the pointer: an agent-driven program swap or
+  // a tool-driven minimize while the button is down unmounts the window without `end()` ever
+  // firing, and the id would then stick forever. Harmless while the window is absent — but on
+  // restore it would render its live authored rect in every skin, which is silent projection
+  // death for exactly one window and looks like nothing at all went wrong.
+  //
+  // The mount signature is the right seam: it is already the app's answer to "which windows are
+  // on the plane", it does not change during a drag (a move touches rects, not the mounted set),
+  // and it changes on precisely the unmounts that can strand this. A drag whose window is gone is
+  // over whatever the pointer does next.
+  useEffect(() => {
+    setDraggingId((id) => (id !== null && !deskRef.current.windows.some((w) => w.id === id && !w.minimized) ? null : id));
+  }, [deskMountSignature]);
 
   // ── What the skins' bars are fed (Task 7) ────────────────────────────────────────────────
   // Titles resolve HERE, never in the store: a window carries refId only, so a retitled artifact
@@ -1987,9 +2008,10 @@ export default function App() {
   // in-place mutation of the same object — the reducer always returns a new artifact), so a
   // signature of `id:rev` pairs changes exactly when content changes and is stable otherwise —
   // narrower than depending on `artifactState` itself, which would also fire on
-  // rejectedAtCap/rejectedStale counter bumps that touch no DOM. `updateLayout` only calls
-  // `setEntities`/`setLayoutBounds`/`setMainSize`, none of which feed back into this signature,
-  // so this cannot retrigger itself.
+  // rejectedAtCap/rejectedStale counter bumps that touch no DOM. `updateLayout` calls
+  // `setEntities`/`setLayoutBounds`/`setMainSize`/`setPlaneState`, none of which feed back into
+  // this signature — it reads artifact ids and revs, which only an artifact event can move — so
+  // this cannot retrigger itself.
   const artifactRevSignature = artifactState.artifacts.map((a) => `${a.id}:${a.rev}`).join(',');
   // Rail cards are entities, so the scene must be re-measured whenever the rail changes —
   // otherwise the registry keeps describing cards that `rail.set` has already replaced. Same
@@ -2019,9 +2041,9 @@ export default function App() {
   // transition, so this signature didn't move, no re-measure fired, and the entity kept the
   // too-short bbox. Same defect class as the why/flip case above (third instance): a state
   // fingerprint of the PROJECTED rail's own cards folds it in. First letters are enough to
-  // distinguish 'pending'/'active'/'done'/'failed'. This cannot loop: updateLayout only writes
-  // entities/layoutBounds/mainSize, none of which feed railState or teachingSnapshot, so nothing
-  // this signature reads can change as a result of the effect it drives.
+  // distinguish 'pending'/'active'/'done'/'failed'. This cannot loop: updateLayout writes
+  // entities/layoutBounds/mainSize/planeState, none of which feed railState or teachingSnapshot,
+  // so nothing this signature reads can change as a result of the effect it drives.
   const projectedForSignature = projectedRailState(railState, teachingRail);
   const railSignature = projectedForSignature?.rail
     ? `${projectedForSignature.rail.seq}:${projectedForSignature.rail.cards.length}:${projectedForSignature.rail.activeIndex ?? -1}:${projectedForSignature.openWhy ?? -1}:${projectedForSignature.flipped.join(',')}:${projectedForSignature.rail.cards.map((c) => c.state[0]).join('')}`
@@ -2040,10 +2062,20 @@ export default function App() {
   // which is the full plane and doesn't reflow around absolutely-positioned children. Nothing else
   // caught this: `artifactRevSignature` only bumps on a revise/revert (a new artifact.rev), and a
   // feed resolving is neither — it's `statuses` state internal to ArtifactWindow, so the desk
-  // never learns the window's measured bbox went stale. This cannot loop: updateLayout only reads
-  // the DOM (getBoundingClientRect) and writes entities/layoutBounds/mainSize/the layout hint —
-  // none of which resize an artifact window, whose rect comes from the desk's `win.rect`, so the
-  // observed box can't change as a result of the callback it triggers.
+  // never learns the window's measured bbox went stale.
+  //
+  // This cannot loop — but NOT for the reason this note used to give. It claimed updateLayout
+  // wrote nothing that could resize an artifact window "whose rect comes from the desk's
+  // `win.rect`", and both halves are now false: updateLayout writes `planeState`, and an artifact
+  // window's rect comes from the PROJECTION, which is a function of `planeState`. So the observed
+  // box genuinely can change as a result of the callback that observed it. What makes it
+  // terminate is that the plane is a fixed point after one pass: `<main>` is `h-full w-full
+  // relative` inside `overflow-hidden`, it has no scrollable box of its own, and every window is
+  // `position: absolute` — so its `clientWidth`/`clientHeight`, which is what `planeState` is
+  // measured from, are invariant to anything the projection does to its children. Re-measuring
+  // after a projection therefore finds the SAME plane, and `setPlaneState`'s value comparison
+  // makes that second measurement write no state at all. Feedback exists; it is a one-step
+  // settle, not a cycle.
   useEffect(() => {
     const observer = new ResizeObserver(updateLayout);
     if (mainContainerRef.current) observer.observe(mainContainerRef.current);

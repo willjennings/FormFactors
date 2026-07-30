@@ -11,6 +11,9 @@ import { Timeline } from './parts/Timeline';
 import { SourceRail } from './parts/SourceRail';
 import { DeskIcons } from './parts/DeskIcons';
 import { WindowChip, type ShellBarItem } from './parts/WindowChip';
+// The furniture's own measurements live in one pure module, shared with `projectDesk` — see its
+// header for why they are not declared here any more.
+import { BOTTOM_INSET, COLUMN_W, TOP_BAR_H } from './furniture';
 
 type Slots = ShellSkin['slots'];
 
@@ -25,18 +28,6 @@ const FALLBACK_SLOTS: Slots = {
   windowChrome: 'full', surfaces: 'float', restoreVia: 'bottomBar',
 };
 
-/** How much room each bottom bar takes, in px, including the gap the omnibox wants above it.
- *  App applies this as the bottom edge of the surfaces region so the omnibox and the response
- *  rail sit ABOVE the bar rather than under it — the omnibox exists in every skin and only its
- *  position may change (spec §5). */
-export const BOTTOM_INSET: Record<Slots['bottomBar'], number> = {
-  taskbar: 52, shelf: 76, timeline: 140, none: 8,
-};
-
-// Shared with `projectDesk` (Conversation pushes windows out from this same column), so the
-// width the furniture draws and the width the projection reasons about can never drift apart.
-export const COLUMN_W = 680;
-
 /** The box the existing omnibox and response-rail components are positioned inside (the activity
  *  ticker uses `planeBox` below instead — see its note). It REPOSITIONS them: they are not forked
  *  and take no new props. App wraps them in one absolutely-positioned div carrying this style,
@@ -49,7 +40,7 @@ export const COLUMN_W = 680;
 export function surfaceBox(skin: ShellSkin | null): React.CSSProperties {
   const slots = skin?.slots ?? FALLBACK_SLOTS;
   return slots.surfaces === 'column'
-    ? { top: 48, bottom: BOTTOM_INSET[slots.bottomBar], left: `calc(50% - ${COLUMN_W / 2}px)`, width: COLUMN_W }
+    ? { top: TOP_BAR_H, bottom: BOTTOM_INSET[slots.bottomBar], left: `calc(50% - ${COLUMN_W / 2}px)`, width: COLUMN_W }
     : planeBox(skin);
 }
 

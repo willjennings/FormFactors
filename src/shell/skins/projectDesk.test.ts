@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { projectDesk } from './projectDesk';
 import { resolveSkin } from './registry';
 import { deskReduce, initialDeskState, artifactWindowId, programWindowId } from '../desk/deskStore';
+import { MIN_W, MIN_H } from '../windowState';
+import { BOTTOM_INSET, OMNIBOX_H, SOURCE_RAIL_W, TOP_BAR_H } from './furniture';
 
 const PLANE = { width: 1600, height: 1000 };
 const skin = (k: string) => resolveSkin(k)!;
@@ -75,6 +77,79 @@ describe('projectDesk', () => {
         expect(p.rect.y + p.rect.h).toBeLessThanOrEqual(tight.height);
       }
     }
+  });
+
+  // I4 (Task 4 review). Material's probe is "what you have made is the desk" — and below a
+  // ~1455px plane the old 0.22 fraction put the dock under MIN_W, which returned the program
+  // window to its authored rect: on a 1200×800 laptop Word was once again the largest object on
+  // screen, which is the sentence this whole phase exists to falsify. 1200×800 is the floor the
+  // arithmetic is now chosen against.
+  it('material holds its probe at a 1200x800 laptop plane — the dock stays docked and the piece is bigger', () => {
+    const floor = { width: 1200, height: 800 };
+    const d = withArtifact();
+    const p = projectDesk(skin('material'), d, floor);
+    const prog = p.find(x => x.id === programWindowId('word'))!.rect;
+    const art = p.find(x => x.id === artifactWindowId('a1'))!.rect;
+    // Projected, not fallen back: the authored program rect is DEFAULT_DESK_RECT-shaped, the
+    // docked one is neither that nor anything MIN_W would have had to stretch.
+    expect(prog).not.toEqual(d.windows.find(w => w.id === programWindowId('word'))!.rect);
+    expect(prog.w).toBeGreaterThanOrEqual(MIN_W);
+    expect(prog.h).toBeGreaterThanOrEqual(MIN_H);
+    expect(art.w * art.h).toBeGreaterThan(prog.w * prog.h);
+    // Docked against the source rail, clear of it — the rail is 56px of z-30 furniture and the
+    // old fixed x: 24 put ~30px of the window underneath it.
+    expect(prog.x).toBeGreaterThanOrEqual(SOURCE_RAIL_W);
+    // And clear of the furniture above and below: a row drawn under a data-shell bar cannot be
+    // pointed at, so drawing one there is a false claim that it is on the desk.
+    for (const r of [prog, art]) {
+      expect(r.y).toBeGreaterThanOrEqual(TOP_BAR_H);
+      expect(r.y + r.h).toBeLessThanOrEqual(floor.height - (BOTTOM_INSET.shelf + OMNIBOX_H));
+    }
+  });
+
+  // I2 (Task 4 review). The single-column band put a slot under MIN_H at four artifacts on a
+  // 1600×1000 plane, and the per-window MIN fallback then returned EVERY artifact to its
+  // authored rect — the cascaded default stack, silently, with no surface saying Material had
+  // stopped projecting. The band may get denser; it may not disappear.
+  it('material keeps every artifact in a legible slot at n=4 — the band gets denser, it never reverts', () => {
+    let d = withTwoArtifacts();
+    for (const id of ['a3', 'a4']) {
+      d = deskReduce(d, { type: 'window.open', id: artifactWindowId(id), kind: 'artifact', refId: id,
+        rect: { x: 600, y: 80, w: 344, h: 300 }, origin: 'agent', at: 30 });
+    }
+    const p = projectDesk(skin('material'), d, PLANE);
+    const rects = ['a1', 'a2', 'a3', 'a4'].map(id => p.find(x => x.id === artifactWindowId(id))!.rect);
+    for (const r of rects) {
+      expect(r.w).toBeGreaterThanOrEqual(MIN_W);
+      expect(r.h).toBeGreaterThanOrEqual(MIN_H);
+      // Not the authored rect — the whole point of the finding is that four of them silently were.
+      expect(r).not.toEqual({ x: 600, y: 80, w: 344, h: 300 });
+    }
+    // Four distinct slots, none on top of another: at this count the grid takes a second column.
+    for (let i = 0; i < rects.length; i++) {
+      for (let j = i + 1; j < rects.length; j++) expect(overlaps(rects[i], rects[j])).toBe(false);
+    }
+  });
+
+  // I3 (Task 4 review). Minimize is one click, with a button in every artifact window's title
+  // bar, and the window it puts away is not drawn at all — so a slot held for it is a visible
+  // hole AND a step toward the density ceiling above.
+  it('a minimized artifact gives its slot back — the rest re-slot as if it were not there', () => {
+    let d = withTwoArtifacts();
+    d = deskReduce(d, { type: 'window.open', id: artifactWindowId('a3'), kind: 'artifact', refId: 'a3',
+      rect: { x: 616, y: 104, w: 344, h: 300 }, origin: 'agent', at: 30 });
+    const withThree = projectDesk(skin('material'), d, PLANE);
+    const minimized = deskReduce(d, { type: 'window.minimize', id: artifactWindowId('a3') });
+    const withA3Away = projectDesk(skin('material'), minimized, PLANE);
+    // a1 and a2 lay out exactly as they would on a desk that only ever held the two of them.
+    const twoOnly = projectDesk(skin('material'), withTwoArtifacts(), PLANE);
+    for (const id of ['a1', 'a2']) {
+      const away = withA3Away.find(x => x.id === artifactWindowId(id))!.rect;
+      expect(away).toEqual(twoOnly.find(x => x.id === artifactWindowId(id))!.rect);
+      expect(away).not.toEqual(withThree.find(x => x.id === artifactWindowId(id))!.rect);
+    }
+    // And the put-away window itself is projected to nothing at all — it comes back where it was.
+    expect(withA3Away.find(x => x.id === artifactWindowId('a3'))!.rect).toEqual({ x: 616, y: 104, w: 344, h: 300 });
   });
 
   it('projection is stable — projecting a projection changes nothing', () => {

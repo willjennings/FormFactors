@@ -6,9 +6,9 @@
 // see sessionStorage.
 //
 // `clampWindow` is the one geometry rule, and it has exactly five callers: App's program-open
-// (App.tsx:1349) and artifact-reconcile (App.tsx:1444) paths, `fitWindows`
-// (shell/desk/selectors.ts:111), ProgramWindow's drag (shell/ProgramWindow.tsx:72), and
-// `projectDesk` (shell/skins/projectDesk.ts:118). The first three put the clamped rect straight
+// (`programRect`) and artifact-reconcile (the `[artifactState.artifacts]` effect) paths,
+// `fitWindows` (shell/desk/selectors.ts), ProgramWindow's drag (shell/ProgramWindow.tsx's
+// `move`), and `projectDesk` (shell/skins/projectDesk.ts). The first three put the clamped rect straight
 // inside a journaled event. The drag is the one exception worth naming: its intermediate frames
 // are state-only (deskDispatchLive), and only the settled rect — the same clamped rect, at rest —
 // is journaled. The fifth journals nothing at all: a projection is drawn, never stored, so its
