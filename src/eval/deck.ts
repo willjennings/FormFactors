@@ -525,17 +525,40 @@ export function currentCard(s: DeckState): EvalCard | null {
 export const isDeckComplete = (s: DeckState): boolean =>
   s.startedAt !== null && s.index >= EVAL_DECK.length;
 
+/** I4 (fix round 1, spec §4b, reviewer-ruled): "Completing (or abandoning) the deck renders one
+ *  card-grammar summary." A deck that was started and then closed before reaching the last card is
+ *  an abandonment — the scorecard belongs over whatever WAS recorded, not over nothing. A deck
+ *  that was never started has no attempt to score (`startedAt === null`), and a deck that already
+ *  finished goes through the completion path (App.tsx's `advanceEvalCard`) instead of this one, so
+ *  this predicate is true for exactly the "closed mid-run" case. Pure and exported so the abandon
+ *  DECISION is testable on its own, without driving telemetry, React, or a browser (spec's own
+ *  preference for pinning at the layer the decision actually lives). */
+export const isAbandoned = (s: DeckState): boolean => s.startedAt !== null && !isDeckComplete(s);
+
 /** Counts for the completion line and the Task 8 scorecard seam. Every number carries its own n by
  *  construction (they are counts, not rates) — the eval spec's §5 rule, which is why this returns
  *  no percentages at all. `observed`/`self` are reported separately for the same reason. */
-export function deckTally(s: DeckState): {
+function tallyOf(results: CardResult[]): {
   total: number; done: number; failed: number; skipped: number; observed: number; self: number;
 } {
-  const g = (grade: CardGrade) => s.results.filter((r) => r.grade === grade).length;
+  const g = (grade: CardGrade) => results.filter((r) => r.grade === grade).length;
   return {
-    total: s.results.length,
+    total: results.length,
     done: g('done'), failed: g('failed'), skipped: g('skipped'),
-    observed: s.results.filter((r) => r.graded === 'observed').length,
-    self: s.results.filter((r) => r.graded === 'self').length,
+    observed: results.filter((r) => r.graded === 'observed').length,
+    self: results.filter((r) => r.graded === 'self').length,
   };
+}
+
+export function deckTally(s: DeckState) {
+  return tallyOf(s.results);
+}
+
+/** Same tally, for callers that only ever have a `CardResult[]` and no real `DeckState` (fix round
+ *  1, M7). scorecard.ts used to synthesise a fake `DeckState` (`{ index: 0, results: deck,
+ *  startedAt: deck.length ? 0 : null }`) purely to satisfy `deckTally`'s signature — harmless while
+ *  `deckTally` reads only `results`, silently wrong the day it reads `index`/`startedAt` too. This
+ *  overload removes the fiction: it takes the results it actually has. */
+export function deckTallyOf(results: CardResult[]) {
+  return tallyOf(results);
 }

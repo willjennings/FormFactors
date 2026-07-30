@@ -10,7 +10,7 @@ function mkAgg(n: number, opts: Partial<{
   completion: number; corrected: number; wrong: number; refusal: number; ask: number;
   abandoned: number; ungradeable: number; medianTurns: number | null; medianDurationMs: number | null;
 }> = {}): ArmAggregate {
-  const rate = (v = 0) => ({ value: v, n });
+  const rate = (v = 0) => ({ value: v, n, count: Math.round(v * n) });
   return {
     n,
     completion: rate(opts.completion),

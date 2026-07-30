@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { RotateCcw } from 'lucide-react';
 import type { ProviderKind } from '../voice/types';
 import type { Autonomy } from '../scenarios';
@@ -58,7 +58,15 @@ export function DebugDrawer(props: DrawerProps) {
   // `snapshot()` (not `metrics()`) is the one call that carries the whole-sitting `scorecard` —
   // computed by the SAME derivation the completion card uses (src/eval/scorecard.ts), never a
   // second readout invented for the drawer. `null` until a session has started.
-  const scorecardModel = telemetry.snapshot().scorecard;
+  //
+  // M7 (fix round 1, reviewer-ruled): `snapshot()` runs `deriveAttempts` + `capabilityLedger` +
+  // `armAggregate` + `scorecard` over an unbounded, whole-sitting event copy — and this component
+  // re-renders every second (the `tick` interval above). Recomputing that whole chain once a
+  // second whether or not anything changed is needless work; `telemetry.eventCount()` is a cheap
+  // read that only actually changes when new events land, so memoising on it turns "every second"
+  // into "only when the sitting actually grew".
+  const eventCount = telemetry.eventCount();
+  const scorecardModel = useMemo(() => telemetry.snapshot().scorecard, [eventCount]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -159,7 +167,16 @@ export function DebugDrawer(props: DrawerProps) {
       </div>
 
       {/* 6b. Scorecard — live compact version (design spec §4b's own closing line: "the drawer's
-          eval panel becomes a live miniature of it rather than a separate design"). */}
+          eval panel becomes a live miniature of it rather than a separate design").
+          M5 (fix round 1, disclosed, NOT fixed this round): this mini and the completion card
+          (App.tsx's showEvalScorecard) read the deck from two different sources — this one from
+          `telemetry.snapshot()`'s reconstruction off `eval_card` EVENTS (no `unrecorded`, since
+          telemetry has no access to that UI-only counter), the completion card from the deck's
+          live `DeckState.results` PLUS `unrecorded`. Both still call the same `scorecard()`, so no
+          math forks — but the drawer's Watch can omit the partial-recording marker exactly when it
+          applies. Unifying them would mean threading `evalUnrecorded` (App-local React state) into
+          the telemetry singleton, which is out of scope for this fix round; left as a known,
+          disclosed gap rather than silently accepted. */}
       {scorecardModel && (
         <div className="w-full px-4 py-3 rounded-2xl border bg-[var(--inner-box-bg)] border-[var(--card-border)]">
           <ScorecardMini model={scorecardModel} />

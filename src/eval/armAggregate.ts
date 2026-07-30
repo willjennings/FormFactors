@@ -50,7 +50,13 @@ import type { Attempt } from './types';
  *  than restating the number, so the threshold can only ever be changed in one place. */
 export const UNDERPOWERED_N = 8;
 
-export interface Rate { value: number; n: number }
+// `count` (fix round 1, M2, reviewer-ruled): the integer numerator alongside `value`/`n`. Before
+// this field existed, the one caller that needed a whole number back (scorecard.ts's `withN`
+// lines) reconstructed it as `Math.round(value * n)` — a float round-trip through a number this
+// module already had as an integer before it ever divided. Numerically safe at any realistic n,
+// but it was the one place the card could disagree with the aggregate it claims to be the face of.
+// Carrying the integer directly removes the round-trip permanently.
+export interface Rate { value: number; n: number; count: number }
 
 export interface ArmAggregate {
   n: number;               // total attempts this aggregate was computed over
@@ -85,14 +91,18 @@ export interface ArmAggregate {
  *  sorted array of length L, the lower-median index is `floor((L - 1) / 2)` for BOTH odd and even
  *  L — e.g. L=5 -> index 2 (the true middle); L=4 -> index 1 (the smaller of the two middle
  *  values, [1,2,3,4] -> 2, not the conventional averaged 2.5). Returns `null` for an empty input,
- *  never 0 — an empty population has no median, and 0 would misreport it as one that does. */
-function lowerMedian(values: number[]): number | null {
+ *  never 0 — an empty population has no median, and 0 would misreport it as one that does.
+ *  Exported (fix round 1, M7): scorecard.ts needs the identical rule for its own cold/warm-turn
+ *  medians, which armAggregate.ts's `ArmAggregate` has no field for. It used to duplicate this
+ *  four-line function rather than import it — both copies lived in `src/eval/` with no
+ *  import-direction problem, so duplicating bought nothing but a second place to keep in sync. */
+export function lowerMedian(values: number[]): number | null {
   if (values.length === 0) return null;
   const sorted = [...values].sort((a, b) => a - b);
   return sorted[Math.floor((sorted.length - 1) / 2)];
 }
 
-const rate = (count: number, n: number): Rate => ({ value: n ? count / n : 0, n });
+const rate = (count: number, n: number): Rate => ({ value: n ? count / n : 0, n, count });
 
 export function armAggregate(attempts: Attempt[]): ArmAggregate {
   const n = attempts.length;

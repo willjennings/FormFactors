@@ -55,8 +55,8 @@ describe('armAggregate — n and rate shape', () => {
   it('an empty attempt list produces n === 0 and every rate value 0, not NaN', () => {
     const agg = armAggregate([]);
     expect(agg.n).toBe(0);
-    expect(agg.completion).toEqual({ value: 0, n: 0 });
-    expect(agg.wrong).toEqual({ value: 0, n: 0 });
+    expect(agg.completion).toEqual({ value: 0, n: 0, count: 0 });
+    expect(agg.wrong).toEqual({ value: 0, n: 0, count: 0 });
     expect(agg.medianTurns).toEqual({ value: null, n: 0 });
     expect(agg.medianDurationMs).toEqual({ value: null, n: 0 });
   });
@@ -76,13 +76,13 @@ describe('anti-flattery — refusals score 0% failure, not 100%', () => {
     const agg = armAggregate(attempts);
     expect(agg).toEqual({
       n: 3,
-      completion: { value: 0, n: 3 },
-      corrected: { value: 0, n: 3 },
-      wrong: { value: 0, n: 3 },
-      refusal: { value: 1, n: 3 },
-      ask: { value: 0, n: 3 },
-      abandoned: { value: 0, n: 3 },
-      ungradeable: { value: 0, n: 3 },
+      completion: { value: 0, n: 3, count: 0 },
+      corrected: { value: 0, n: 3, count: 0 },
+      wrong: { value: 0, n: 3, count: 0 },
+      refusal: { value: 1, n: 3, count: 3 },
+      ask: { value: 0, n: 3, count: 0 },
+      abandoned: { value: 0, n: 3, count: 0 },
+      ungradeable: { value: 0, n: 3, count: 0 },
       medianTurns: { value: 1, n: 3 },
       medianDurationMs: { value: 100, n: 3 },
     });
@@ -116,13 +116,13 @@ describe('direction — abandonment lowers completion rate', () => {
   it('adding two abandoned attempts to a fixed set of completions lowers the completion rate, exact numbers', () => {
     const base = [outcomeAttempt('completed'), outcomeAttempt('completed')];
     const before = armAggregate(base);
-    expect(before.completion).toEqual({ value: 1, n: 2 }); // 2/2 = 100%
+    expect(before.completion).toEqual({ value: 1, n: 2, count: 2 }); // 2/2 = 100%
 
     const withAbandoned = [...base, outcomeAttempt('abandoned'), outcomeAttempt('abandoned')];
     const after = armAggregate(withAbandoned);
-    expect(after.completion).toEqual({ value: 0.5, n: 4 }); // 2/4 = 50%, strictly lower than 1
+    expect(after.completion).toEqual({ value: 0.5, n: 4, count: 2 }); // 2/4 = 50%, strictly lower than 1
     expect(after.completion.value).toBeLessThan(before.completion.value);
-    expect(after.abandoned).toEqual({ value: 0.5, n: 4 });
+    expect(after.abandoned).toEqual({ value: 0.5, n: 4, count: 2 });
   });
 });
 
@@ -135,9 +135,9 @@ describe('wrong — the undo-makes-it-wrong rule rolls up correctly', () => {
       outcomeAttempt('wrong'),
     ];
     const agg = armAggregate(attempts);
-    expect(agg.completion).toEqual({ value: 0.25, n: 4 });
-    expect(agg.corrected).toEqual({ value: 0.25, n: 4 });
-    expect(agg.wrong).toEqual({ value: 0.5, n: 4 });
+    expect(agg.completion).toEqual({ value: 0.25, n: 4, count: 1 });
+    expect(agg.corrected).toEqual({ value: 0.25, n: 4, count: 1 });
+    expect(agg.wrong).toEqual({ value: 0.5, n: 4, count: 2 });
   });
 });
 
@@ -157,8 +157,8 @@ describe('ungradeable — visible as its own rate, not an inferred remainder', (
     ];
     const agg = armAggregate(attempts);
     expect(agg.n).toBe(4);
-    expect(agg.ungradeable).toEqual({ value: 0.5, n: 4 });
-    expect(agg.completion).toEqual({ value: 0.5, n: 4 });
+    expect(agg.ungradeable).toEqual({ value: 0.5, n: 4, count: 2 });
+    expect(agg.completion).toEqual({ value: 0.5, n: 4, count: 2 });
   });
 
   it('all seven named rates sum to 1 for any non-empty attempt list — the partition is exact, not a remainder', () => {

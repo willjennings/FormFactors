@@ -5,7 +5,7 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  EVAL_DECK, deckReduce, initialDeckState, currentCard, isDeckComplete, deckTally,
+  EVAL_DECK, deckReduce, initialDeckState, currentCard, isDeckComplete, isAbandoned, deckTally, deckTallyOf,
   type DeckState, type EvalCard,
 } from './deck';
 import { UTTERANCES, utteranceFor } from './utterances';
@@ -537,5 +537,34 @@ describe('deckReduce', () => {
     s = deckReduce(s, { type: 'selfGrade', cardId: 'honest-refusal', grade: 'done', at: 3 });
     s = deckReduce(s, { type: 'skip', cardId: 'material-pin', at: 4 });
     expect(deckTally(s)).toEqual({ total: 4, done: 2, failed: 1, skipped: 1, observed: 2, self: 2 });
+  });
+
+  it('deckTallyOf matches deckTally(s) for the same results — the DeckState wrapper is fiction deckTally never needed', () => {
+    let s = started();
+    s = deckReduce(s, { type: 'observe', cardId: 'point-what-is-this', grade: 'done', at: 1 });
+    s = deckReduce(s, { type: 'skip', cardId: 'material-pin', at: 2 });
+    expect(deckTallyOf(s.results)).toEqual(deckTally(s));
+  });
+});
+
+// ==========================================================================================
+// I4 (fix round 1): "Completing (or abandoning) the deck renders one card-grammar summary."
+// `isAbandoned` is the pure decision behind that — pinned on its own, without driving App.tsx's
+// (impure) close handler.
+// ==========================================================================================
+describe('isAbandoned — the pure abandon decision (spec §4b)', () => {
+  it('a deck never started is not abandoned — there is no attempt to score', () => {
+    expect(isAbandoned(initialDeckState())).toBe(false);
+  });
+  it('a started, in-progress deck IS abandoned if closed now', () => {
+    let s = started();
+    s = deckReduce(s, { type: 'observe', cardId: 'point-what-is-this', grade: 'done', at: 1 });
+    expect(isAbandoned(s)).toBe(true);
+  });
+  it('a fully complete deck is NOT abandoned — that is the completion path, not this one', () => {
+    let s = started();
+    for (let i = 0; i < EVAL_DECK.length; i++) s = deckReduce(s, { type: 'advance' });
+    expect(isDeckComplete(s)).toBe(true);
+    expect(isAbandoned(s)).toBe(false);
   });
 });

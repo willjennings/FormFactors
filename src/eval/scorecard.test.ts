@@ -4,12 +4,13 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { scorecard, type ScorecardOpts } from './scorecard';
-import { UNDERPOWERED_N, type ArmAggregate } from './armAggregate';
+import { scorecard, attemptsForArm, type ScorecardOpts } from './scorecard';
+import { UNDERPOWERED_N, armAggregate, type ArmAggregate } from './armAggregate';
 import { EVAL_DECK, type CardResult } from './deck';
 import { DEFAULT_DIALS } from '../register/registry';
 import type { Arm, TelemetryEvent, SessionConfig } from '../telemetry';
 import type { LedgerRow } from './capabilityLedger';
+import type { Attempt } from './types';
 
 // ---- fixture builders -----------------------------------------------------------------------
 
@@ -19,7 +20,7 @@ function mkAgg(n: number, opts: Partial<{
   completion: number; corrected: number; wrong: number; refusal: number; ask: number;
   abandoned: number; ungradeable: number; medianTurns: number | null; medianDurationMs: number | null;
 }> = {}): ArmAggregate {
-  const rate = (v = 0) => ({ value: v, n });
+  const rate = (v = 0) => ({ value: v, n, count: Math.round(v * n) });
   return {
     n,
     completion: rate(opts.completion),
@@ -58,6 +59,18 @@ const opts = (events: TelemetryEvent[], extra: Partial<ScorecardOpts> = {}): Sco
 const cardResult = (cardId: string, grade: CardResult['grade'], graded: CardResult['graded'] = 'observed'): CardResult =>
   ({ cardId, grade, graded, at: 0 });
 
+let attemptSeq = 0;
+const mkAttempt = (overrides: Partial<Attempt> = {}): Attempt => {
+  attemptSeq += 1;
+  return {
+    id: `a${attemptSeq}`, askedAt: attemptSeq * 1000, request: `request ${attemptSeq}`,
+    program: 'word', verb: 'set_heading', outcome: 'completed', turns: 1,
+    corrections: 0, undos: 0, witnessed: false, durationMs: 100,
+    arm: ARM, ungradeableReason: null,
+    ...overrides,
+  };
+};
+
 // ==========================================================================================
 // Binding test 1: refusals render under Good at, never as a failure.
 // ==========================================================================================
@@ -86,6 +99,53 @@ describe('speech_only no-ops render under Watch and never vanish', () => {
     const ledger = [noOpRow(50, 'do something vague')];
     const model = scorecard(agg, ledger, [], ARM, opts([]));
     expect(model.watch.some((l) => l.includes('do something vague') && l.includes('(50/100)'))).toBe(true);
+  });
+});
+
+// ==========================================================================================
+// I2 (fix round 1, reviewer-ruled): the card used to drop every ledger row that was not
+// 'no-op-turn' — `asked-and-dropped`, `deixis-miss` and `grounding-disagree` never surfaced
+// anywhere on the card, so a wrong-referent row could sit in the ledger in the same sitting the
+// deck's own dimension line claimed "pointing (2/2)" under Good at. All three now render under
+// Watch, each with its own n and verbatim example, same discipline as no-op-turn. 'refusal' rows
+// are deliberately still excluded — they are already Good at, via `agg.refusal`.
+// ==========================================================================================
+describe('I2 — every non-refusal ledger kind surfaces under Watch, not just no-op-turn', () => {
+  it('a deixis-miss row is rendered under Watch, with its own n and the wrong-referent text', () => {
+    const agg = mkAgg(UNDERPOWERED_N, { completion: 1 });
+    const ledger: LedgerRow[] = [
+      { kind: 'deixis-miss', key: 'that/word', n: 3, examples: ['"that" -> resolved "B2" (wanted "C4")'] },
+    ];
+    const model = scorecard(agg, ledger, [], ARM, opts([]));
+    expect(model.watch.some((l) => l.includes('wrong referent') && l.includes('B2') && l.includes('(3/8)'))).toBe(true);
+  });
+
+  it('an asked-and-dropped row is rendered under Watch', () => {
+    const agg = mkAgg(UNDERPOWERED_N, { completion: 1 });
+    const ledger: LedgerRow[] = [
+      { kind: 'ask', key: 'ask/word', n: 2, examples: ['what should the heading say?'] },
+    ];
+    const model = scorecard(agg, ledger, [], ARM, opts([]));
+    expect(model.watch.some((l) => l.includes('what should the heading say?') && l.includes('never answered'))).toBe(true);
+  });
+
+  it('a grounding-disagree row is rendered under Watch', () => {
+    const agg = mkAgg(UNDERPOWERED_N, { completion: 1 });
+    const ledger: LedgerRow[] = [
+      { kind: 'grounding-disagree', key: 'B2/word', n: 1, examples: ['app said "B2", model said "C4"'] },
+    ];
+    const model = scorecard(agg, ledger, [], ARM, opts([]));
+    expect(model.watch.some((l) => l.includes('app/model disagreed') && l.includes('B2'))).toBe(true);
+  });
+
+  it('a refusal ledger row is NOT duplicated under Watch — it is already Good at', () => {
+    const agg = mkAgg(UNDERPOWERED_N, { refusal: 0.25 });
+    const ledger: LedgerRow[] = [
+      { kind: 'refusal', key: 'insert_object/word', n: 2, examples: ['add a chart'] },
+    ];
+    const model = scorecard(agg, ledger, [], ARM, opts([]));
+    expect(model.watch.some((l) => l.includes('add a chart'))).toBe(false);
+    expect(model.goodAt.some((l) => l.includes('honest refusals'))).toBe(true);
   });
 });
 
@@ -152,10 +212,76 @@ describe('carry-in — a not-met verdict always surfaces its because text', () =
     expect(model.comparison).toContain('ArmAggregate has no field for "what people make"');
   });
 
-  it('REVERT CHECK: a bare-enum formatter would fail this test', () => {
-    // Documents the exact failure this test pins: rendering only the verdict word.
-    const bareEnum = 'not-met';
-    expect(bareEnum).not.toContain('ArmAggregate has no field for "what people make"');
+  // M1 (fix round 1, reviewer-ruled): the test that used to sit here ("REVERT CHECK: a bare-enum
+  // formatter would fail this test") asserted `expect('not-met').not.toContain(...)` — a check on
+  // a LOCAL STRING LITERAL, never on `model` at all. It could not fail under any implementation,
+  // including the bare-enum regression it claimed to guard (verified: it passed under all five
+  // mutations run against this file in the fix-round-1 review, the bare-enum one included). The
+  // real guard is the test immediately above, which asserts on `model.comparison` — this comment
+  // replaces the vacuous test rather than leaving a test in the suite that can never fail.
+});
+
+// ==========================================================================================
+// C1 direction test (fix round 1, reviewer-ruled, the Critical finding): `armAggregate(attempts)`
+// used to be called UNSCOPED at both production call sites — every attempt in the whole sitting,
+// regardless of which arm it belonged to. The reviewer reproduced this with a Guided×2 +
+// Terminal×1 stream and got a headline of `Terminal · Material · Gemini · 3 trials` (attributing
+// Guided's own two attempts to Terminal) and a `winsWhen` comparison whose `control` was a SUBSET
+// of the arm under test rather than disjoint from it. `attemptsForArm` (scorecard.ts) is the fix:
+// callers scope BEFORE calling `armAggregate`. These tests pin `attemptsForArm` itself, then
+// reproduce the reviewer's exact scenario to show it no longer happens.
+// ==========================================================================================
+describe('C1 — attemptsForArm partitions a mixed-arm stream disjointly', () => {
+  const guidedArm: Arm = { register: 'guided', dials: DEFAULT_DIALS, shell: 'familiar' };
+  const terminalArm: Arm = { register: 'terminal', dials: DEFAULT_DIALS, shell: 'familiar' };
+
+  it('reproduces the reviewer\'s exact probe (Guided×2, Terminal×1): n\'s no longer merge, headline names the counted arm', () => {
+    const attempts: Attempt[] = [
+      mkAttempt({ arm: guidedArm }),
+      mkAttempt({ arm: guidedArm }),
+      mkAttempt({ arm: terminalArm }),
+    ];
+    const guidedAttempts = attemptsForArm(attempts, guidedArm);
+    const terminalAttempts = attemptsForArm(attempts, terminalArm);
+
+    // Disjoint, and the n's sum to the total — no attempt is double-counted or dropped.
+    expect(guidedAttempts.length).toBe(2);
+    expect(terminalAttempts.length).toBe(1);
+    expect(guidedAttempts.length + terminalAttempts.length).toBe(attempts.length);
+    expect(guidedAttempts.some((a) => terminalAttempts.includes(a))).toBe(false);
+
+    const agg = armAggregate(terminalAttempts);
+    const control = armAggregate(guidedAttempts);
+    expect(agg.n).toBe(1);       // NOT 3 — the reviewer's bug merged all three into this number
+    expect(control.n).toBe(2);   // NOT 3, and not 0 either
+
+    const model = scorecard(agg, [], [], terminalArm, opts([], { control }));
+    // Headline names the arm the card actually counted (Terminal, n=1), not the sitting's total.
+    expect(model.headline).toBe('Terminal · Familiar · 1 trial');
+  });
+
+  it('an attempt with arm === undefined (no session_start) is excluded, never guessed onto the current arm', () => {
+    const attempts: Attempt[] = [
+      mkAttempt({ arm: guidedArm }),
+      mkAttempt({ arm: undefined }),
+    ];
+    expect(attemptsForArm(attempts, guidedArm).length).toBe(1);
+  });
+
+  it('at n=8/8, winsWhen receives genuinely disjoint aggregates — the comparison names both n\'s, neither inflated by the other arm\'s trials', () => {
+    const guidedAttempts = Array.from({ length: 8 }, () => mkAttempt({ arm: guidedArm, durationMs: 500 }));
+    const terminalAttempts = Array.from({ length: 8 }, () => mkAttempt({ arm: terminalArm, durationMs: 100 }));
+    const attempts = [...guidedAttempts, ...terminalAttempts];
+
+    const agg = armAggregate(attemptsForArm(attempts, terminalArm));
+    const control = armAggregate(attemptsForArm(attempts, guidedArm));
+    expect(agg.n).toBe(8);
+    expect(control.n).toBe(8);
+
+    const model = scorecard(agg, [], [], terminalArm, opts([], { control }));
+    // Terminal's own winsWhen names both n's — pinned to 8 vs 8, never 16 vs 16 (which is what a
+    // caller merging both arms into one aggregate before calling scorecard() would have produced).
+    expect(model.comparison).toContain('n=8 vs 8');
   });
 });
 
@@ -211,6 +337,37 @@ describe('latency.worst names the slowest WARM turn with its request text', () =
     const agg = mkAgg(3, { completion: 1 });
     const model = scorecard(agg, [], [], ARM, opts(events));
     expect(model.latency.worst).toEqual({ ms: 4900, label: 'sum this column' });
+  });
+});
+
+// ==========================================================================================
+// I3 (fix round 1, reviewer-ruled): latency's medians used to render with no n at all, and the
+// block silently spanned every session in the stream while implying "this session". `warmN`/
+// `coldStartN`/`sessionCount` now travel alongside the figures they describe.
+// ==========================================================================================
+describe('I3 — latency and cost carry their own sample sizes and session scope', () => {
+  it('warmN counts the warm-turn population behind medianMs/worst; coldStartN counts sessions with a timeable cold turn', () => {
+    const events: TelemetryEvent[] = [
+      sessionStart(0),
+      turn(10, 't1', 'cold opener', 'tool_call', 2000),
+      turn(20, 't2', 'warm one', 'tool_call', 300),
+      turn(30, 't3', 'warm two', 'tool_call', 320),
+      sessionStart(40, ARM),
+      turn(50, 't4', 'second cold opener', 'tool_call', 1800),
+    ];
+    const agg = mkAgg(4, { completion: 1 });
+    const model = scorecard(agg, [], [], ARM, opts(events));
+    expect(model.latency.warmN).toBe(2);       // t2, t3 — the two non-cold, timeable turns
+    expect(model.latency.coldStartN).toBe(2);  // one cold row-1 per session, two sessions
+    expect(model.latency.sessionCount).toBe(2);
+  });
+
+  it('a single-session stream reports sessionCount 1 on both latency and cost', () => {
+    const events: TelemetryEvent[] = [sessionStart(0), turn(10, 't1', 'only turn', 'tool_call', 300)];
+    const agg = mkAgg(1, { completion: 1 });
+    const model = scorecard(agg, [], [], ARM, opts(events));
+    expect(model.latency.sessionCount).toBe(1);
+    expect(model.cost.sessionCount).toBe(1);
   });
 });
 
@@ -294,7 +451,7 @@ describe('cost sums framesSent/hintsSent across every session_complete in the st
     ];
     const agg = mkAgg(5, { completion: 1 });
     const model = scorecard(agg, [], [], ARM, opts(events));
-    expect(model.cost).toEqual({ frames: 63, hints: 19 });
+    expect(model.cost).toEqual({ frames: 63, hints: 19, sessionCount: 2 });
   });
 });
 

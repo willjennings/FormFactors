@@ -11,10 +11,15 @@
 //
 // FILE NAME: the task-8 brief names this `src/eval/Scorecard.tsx` (matching `./scorecard.ts`'s
 // casing exactly, as `EvalDeck.tsx`/`deck.ts` do). macOS's case-insensitive-but-case-preserving
-// filesystem makes that pair genuinely ambiguous to the TypeScript compiler here (TS2724/TS1149:
-// a program cannot contain `scorecard.ts` and `Scorecard.tsx` at once — "differs ... only in
-// casing" — even though the two extensions differ), so this file is `ScorecardView.tsx` instead.
-// Exported names are unchanged (`Scorecard`, `ScorecardMini`); only the file on disk is renamed.
+// filesystem makes that pair genuinely ambiguous here — NOT because the program can't tolerate
+// both files existing (it can; `git status` shows both, `ls` shows both) but because of the way
+// TypeScript resolves an IMPORT SPECIFIER against that filesystem (fix round 1, M6, corrected):
+// `from './Scorecard'` resolves case-insensitively to `scorecard.ts` first, and the compiler then
+// reports TS2724 ("has no exported member named 'Scorecard'. Did you mean 'scorecard'?") plus
+// TS1149 ("File name '.../Scorecard.ts' differs from ... 'scorecard.ts' only in casing") the
+// moment any file actually imports from the differently-cased path. So this file is
+// `ScorecardView.tsx` instead. Exported names are unchanged (`Scorecard`, `ScorecardMini`); only
+// the file on disk is renamed.
 
 import React from 'react';
 import type { ScorecardModel } from './scorecard';
@@ -47,19 +52,33 @@ export function Scorecard({ model }: { model: ScorecardModel }) {
       <div className="flex flex-col gap-0.5">
         <span className="text-[10px] font-mono uppercase tracking-widest text-[var(--text-secondary)]">Latency</span>
         <p className="text-[12px] text-[var(--text-primary)]">
-          first response median {fmtMs(model.latency.medianMs)}
+          {/* I3 (fix round 1): a median with no n misreports itself as the same kind of number
+              whether it came from 2 samples or 200 (armAggregate.ts's own doctrine, applied here
+              to this module's own medians for the first time). */}
+          first response median {fmtMs(model.latency.medianMs)}{model.latency.warmN > 0 && ` (n=${model.latency.warmN})`}
           {model.latency.worst && ` · slowest ${fmtMs(model.latency.worst.ms)} (${model.latency.worst.label})`}
         </p>
         {model.latency.coldStartMs !== null && (
           // Cold-start figure, reported separately — spec §1: never averaged into the line above,
-          // never dropped either.
-          <p className="text-[11px] text-[var(--text-secondary)]">cold start (session connect): {fmtMs(model.latency.coldStartMs)}, excluded from the median above</p>
+          // never dropped either. Named explicitly as a MEDIAN OF SESSIONS (I3): it is not one
+          // connect's time, it is the lower median across `coldStartN` sessions' own row-1.
+          <p className="text-[11px] text-[var(--text-secondary)]">
+            cold start (session connect): {fmtMs(model.latency.coldStartMs)}, median of {model.latency.coldStartN} session{model.latency.coldStartN === 1 ? '' : 's'}' first turns — excluded from the median above
+          </p>
+        )}
+        {model.latency.sessionCount > 1 && (
+          // I3: latency reads the WHOLE sitting, not "this session" — say so when it actually spans
+          // more than one, rather than leaving the scope to be assumed.
+          <p className="text-[11px] text-[var(--text-secondary)]">across {model.latency.sessionCount} sessions this sitting</p>
         )}
       </div>
 
       <div className="flex flex-col gap-0.5">
         <span className="text-[10px] font-mono uppercase tracking-widest text-[var(--text-secondary)]">Cost</span>
-        <p className="text-[12px] text-[var(--text-primary)]">{model.cost.frames} frames, {model.cost.hints} hints sent</p>
+        <p className="text-[12px] text-[var(--text-primary)]">
+          {model.cost.frames} frames, {model.cost.hints} hints sent
+          {model.cost.sessionCount > 1 && ` — across ${model.cost.sessionCount} sessions this sitting`}
+        </p>
       </div>
 
       <Bucket label="Watch" lines={model.watch} />
@@ -83,7 +102,13 @@ export function ScorecardMini({ model }: { model: ScorecardModel }) {
       <span className="text-[10px] font-mono uppercase tracking-wide text-[var(--text-secondary)]">Scorecard</span>
       <p className="text-[11px] text-[var(--text-primary)]">{model.headline}</p>
       {model.watch.length > 0 && (
-        <p className="text-[11px] text-[var(--text-primary)] truncate" title={model.watch[0]}>watch: {model.watch[0]}</p>
+        // M3 (fix round 1, reviewer-ruled): Watch is the ONE bucket the spec says must never be
+        // dropped — a live miniature that silently truncated rows 2..n to fit three lines would be
+        // a small version of the exact rule this bucket exists to enforce. "+N more" keeps the
+        // truncation (this is still a miniature), but never hides that there IS more.
+        <p className="text-[11px] text-[var(--text-primary)] truncate" title={model.watch.join(' · ')}>
+          watch: {model.watch[0]}{model.watch.length > 1 && ` (+${model.watch.length - 1} more)`}
+        </p>
       )}
       <p className="text-[11px] text-[var(--text-secondary)]">{model.comparison}</p>
     </div>

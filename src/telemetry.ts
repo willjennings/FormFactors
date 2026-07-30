@@ -21,11 +21,20 @@ import type { SkinKey } from './shell/skins/types';
 // capabilityLedger -> scorecard), not re-implemented here. Safe against import cycles: every
 // `src/eval/*` module this file now imports takes `TelemetryEvent`/`Arm` only as `import type`
 // (erased at compile time), so there is no runtime cycle back into this module — confirmed by
-// grep across src/eval, src/register, src/shell/skins before adding these.
+// grep across src/eval, src/register, src/shell/skins before adding these. M6 (fix round 1,
+// reviewer-ruled, corrected): the claim above is true for `src/eval/*` itself, but is not the
+// WHOLE closure this file now pulls in at runtime — `eval/scorecard` VALUE-imports
+// `register/registry` and `shell/skins/registry` (for the register/shell labels and `winsWhen`),
+// which in turn pull in `eval/deck` and `eval/utterances`. Eight modules are reachable this way
+// (`eval/armAggregate`, `eval/capabilityLedger`, `eval/deck`, `eval/deriveAttempts`,
+// `eval/scorecard`, `eval/utterances`, `register/registry`, `shell/skins/registry`), and this
+// file is imported nearly everywhere — so the invariant future edits must not break is: nothing
+// in THAT closure may ever value-import `telemetry.ts` back. Verified with 0 cycles today; there
+// is no automated guard against a future one.
 import { deriveAttempts } from './eval/deriveAttempts';
 import { capabilityLedger } from './eval/capabilityLedger';
 import { armAggregate } from './eval/armAggregate';
-import { scorecard, guidedControlFromSitting } from './eval/scorecard';
+import { scorecard, guidedControlFromSitting, attemptsForArm } from './eval/scorecard';
 import type { CardResult } from './eval/deck';
 
 export type FormFactor = 'mobile' | 'tablet' | 'desktop';
@@ -414,7 +423,11 @@ class Telemetry {
     const arm = this.config?.arm;
     let scorecardModel = null;
     if (arm) {
-      const agg = armAggregate(attempts);
+      // C1 (fix round 1, reviewer-ruled): `attempts` spans the WHOLE sitting (every
+      // register/shell this stream visited — Task 6's register-switch feature), so it must be
+      // scoped to `arm` BEFORE `armAggregate` sees it, or the export's own scorecard would count
+      // an earlier arm's trials as this one's — see scorecard.ts's `attemptsForArm` header.
+      const agg = armAggregate(attemptsForArm(attempts, arm));
       const control = guidedControlFromSitting(attempts, arm.register);
       // Reconstructed from the SAME `eval_card` events the export itself carries (telemetry holds
       // no DeckState of its own — the deck's React state is deliberately unjournaled, deck.ts's
