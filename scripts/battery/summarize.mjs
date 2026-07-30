@@ -55,6 +55,22 @@ function renderCellTable(cells) {
   return [header, sep, ...rows].join('\n');
 }
 
+// C3 (task-9 review round 1): spec §1's cold-start rule, verbatim — "exclude the first turn of
+// each session from the arm's latency aggregate and report it separately as a cold-start figure —
+// never average the two, and never silently drop it." Its own table, not a couple of extra columns
+// folded into the outcomes table above, so "warm" and "cold" can never be misread as the same kind
+// of number at a glance.
+function renderLatencyTable(cells) {
+  const header = '| Register | Shell | Corpus | Warm median | Warm worst | Warm n | Cold-start median | Cold-start n | Sessions |';
+  const sep = '|---|---|---|---|---|---|---|---|---|';
+  const rows = cells.map((c) => {
+    const l = c.latency;
+    const worst = l.worst ? `${l.worst.ms}ms ("${l.worst.label}")` : 'n/a';
+    return `| ${c.register} | ${c.shell} | ${c.corpus} | ${fmtDuration(l.medianMs)} | ${worst} | ${l.warmN} | ${fmtDuration(l.coldStartMs)} | ${l.coldStartN} | ${l.sessionCount} |`;
+  });
+  return [header, sep, ...rows].join('\n');
+}
+
 function renderProbeVerdicts(cells) {
   return cells.map((c) => `- **${c.register} · ${c.shell} · ${c.corpus}** (n=${c.agg.n}): ${c.comparison}`).join('\n');
 }
@@ -91,8 +107,17 @@ Mode: **${graded.mode}**. ${graded.totalRuns} session(s) graded, ${graded.totalA
 
 ${renderCellTable(graded.cells)}
 
-_Rates always carry their n (spec §5.8) — a rate at n < ${8} is \`underpowered\` per the register/
-shell probes below, never read as "no effect" on its own._
+_Rates always carry their n (spec §5.8) — a rate at n < ${graded.underpoweredN} is \`underpowered\`
+per the register/shell probes below, never read as "no effect" on its own._
+
+## Latency (spec §1 — cold first turn excluded, never averaged in, never dropped)
+
+${renderLatencyTable(graded.cells)}
+
+_"Warm" excludes each session's own row 1 (the connect-cost turn — mic pre-flight + socket open +
+queued-text flush, a joint-system number, not model latency); "Cold-start" is that excluded row 1,
+reported on its own rather than silently discarded. A cell whose sessions all failed before a
+timeable first turn landed shows \`n/a\` for both, honestly, rather than a manufactured zero._
 
 ## Probe verdicts (winsWhen, register/shell registries)
 
@@ -101,6 +126,15 @@ ${renderProbeVerdicts(graded.cells)}
 ## Capability ledger — top ${Math.min(10, graded.ledgerTop.length)} (unioned across every run)
 
 ${renderLedger(graded.ledgerTop)}
+
+## Known limitations
+
+- **Recorded requests are not always byte-identical to the utterance sent** (M7, task-9 review
+  round 1, pre-existing app behavior — not introduced by this harness). \`App.tsx\`'s transcript
+  ASCII filter strips non-ASCII punctuation from what it records, so e.g. \`point-by-number\`'s em
+  dash is gone from the exported \`request\` text ("Number three — make that one bold." exports as
+  "Number three make that one bold."). The corpus's "verbatim" claim (design spec, decision 2) holds
+  for what the MODEL received; it is weaker for what this doc's ledger examples show.
 `;
 
   mkdirSync(EVALS_DIR, { recursive: true });

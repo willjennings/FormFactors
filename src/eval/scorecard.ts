@@ -162,8 +162,14 @@ function formatVerdict(label: string, v: ProbeVerdict): string {
 /** Everything the arm-scoped `latency`/`cost` blocks need, produced by ONE pass over the
  *  whole-sitting stream (`scopeToArm` below). Three of the four fields could not be computed
  *  correctly from the scoped event list alone, which is why this is a scope object rather than a
- *  filtered array — see the docblock below for each. */
-interface ArmScope {
+ *  filtered array — see the docblock below for each.
+ *
+ *  EXPORTED (task-9 review round 1, C3): `scripts/battery/ts-bridge.ts` needs spec §1's cold-
+ *  first-turn split (exclude row 1 of every session from the latency median, report it
+ *  separately, never average, never drop) for the battery's per-cell summary. This module already
+ *  implements that rule correctly — duplicating it in a script that exists specifically to avoid
+ *  parallel math would be the exact sin the task-9 brief's decision 3 was written to forbid. */
+export interface ArmScope {
   /** The events that happened while `arm` was active — the population `cost` reduces over. */
   events: TelemetryEvent[];
   /** In-scope, timeable SESSION-first turns (carry-in #2's cold figure). */
@@ -209,7 +215,7 @@ interface ArmScope {
  *  puts that cold figure on MATERIAL's card — the arm that was actually on screen while it was
  *  measured — and leaves Familiar with `coldStartMs: null`, rather than dropping it from every
  *  card or crediting it to an arm that was not running. */
-function scopeToArm(events: TelemetryEvent[], arm: Arm): ArmScope {
+export function scopeToArm(events: TelemetryEvent[], arm: Arm): ArmScope {
   const out: TelemetryEvent[] = [];
   const cold: number[] = [];
   const warm: { ms: number; label: string }[] = [];
@@ -237,7 +243,7 @@ function scopeToArm(events: TelemetryEvent[], arm: Arm): ArmScope {
   return { events: out, cold, warm, sessionCount: sessions.size };
 }
 
-function buildLatency(scope: ArmScope): ScorecardModel['latency'] {
+export function buildLatency(scope: ArmScope): ScorecardModel['latency'] {
   const { cold, warm } = scope;
   const medianMs = lowerMedian(warm.map((w) => w.ms));
   const worst = warm.length
@@ -257,7 +263,14 @@ function buildCost(scope: ArmScope): ScorecardModel['cost'] {
   return { frames, hints, sessionCount: scope.sessionCount };
 }
 
-function buildComparison(agg: ArmAggregate, arm: Arm, control: ArmAggregate | null | undefined): string {
+/** EXPORTED (task-9 review round 1, I4): `scripts/battery/ts-bridge.ts` had its own ~15-line
+ *  reimplementation of this exact function, and it had already drifted — it dropped the
+ *  `agg.n < UNDERPOWERED_N` early return below, so the battery doc's per-cell comparison sentence
+ *  disagreed with the app's own Scorecard view for every underpowered cell (which, at n=5 vs the
+ *  n=8 threshold, was every cell in the committed dry-run doc). Exporting the real function and
+ *  importing it there is the actual fix for the "no parallel math" rule this whole exercise is
+ *  named after — a comment PROMISING identical sentences is not the same thing as one function. */
+export function buildComparison(agg: ArmAggregate, arm: Arm, control: ArmAggregate | null | undefined): string {
   if (agg.n < UNDERPOWERED_N) return 'not enough trials to compare arms'; // binding, verbatim
   if (!control) {
     // M7 (fix round 1, reviewer-ruled): Guided has no control to compare against for a structural

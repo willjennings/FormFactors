@@ -26,14 +26,20 @@
 import { readFileSync } from 'node:fs';
 import { UTTERANCES } from '../../src/eval/utterances';
 import { deriveAttempts } from '../../src/eval/deriveAttempts';
-import { armAggregate } from '../../src/eval/armAggregate';
+import { armAggregate, UNDERPOWERED_N } from '../../src/eval/armAggregate';
 import type { ArmAggregate } from '../../src/eval/armAggregate';
 import { capabilityLedger } from '../../src/eval/capabilityLedger';
 import type { LedgerRow } from '../../src/eval/capabilityLedger';
 import type { Attempt } from '../../src/eval/types';
-import { REGISTERS } from '../../src/register/registry';
-import { SHELL_SKINS } from '../../src/shell/skins/registry';
-import type { TelemetryEvent } from '../../src/telemetry';
+// C3/I4 (task-9 review round 1): both imported from scorecard.ts, not reimplemented — see each
+// function's own EXPORTED comment there for exactly why duplicating them here was the drift the
+// review caught. `buildComparison` needs a full `Arm` (register/shell/dials), so `DEFAULT_DIALS`
+// comes along too — `dials` is never actually READ by `buildComparison` (only `.register`/`.shell`
+// are), so this is a type-shape placeholder, not a claim about what dials this cell ran under.
+import { buildComparison, scopeToArm, buildLatency } from '../../src/eval/scorecard';
+import { DEFAULT_DIALS } from '../../src/register/registry';
+import type { Arm, TelemetryEvent } from '../../src/telemetry';
+import type { SkinKey } from '../../src/shell/skins/types';
 
 interface ManifestEntry {
   file: string;                 // absolute or manifest-relative path to one export JSON
@@ -48,6 +54,12 @@ interface Manifest {
   entries: ManifestEntry[];
 }
 
+// C3 (task-9 review round 1): spec §1, binding — "exclude the first turn of each session from the
+// arm's latency aggregate and report it separately as a cold-start figure — never average the two,
+// and never silently drop it." `scopeToArm`/`buildLatency` (imported above) already implement this
+// exactly; `Latency` below is that shared shape, not a battery-specific reinvention.
+type Latency = ReturnType<typeof buildLatency>;
+
 interface CellSummary {
   register: string;
   shell: string;
@@ -55,17 +67,16 @@ interface CellSummary {
   corpus: 'default' | 'wide';
   runs: number;                 // how many export files fed this cell
   agg: ArmAggregate;
-  comparison: string;           // same shape as scorecard.ts's buildComparison, computed here
-                                 // rather than imported: that function is not exported (it is
-                                 // scorecard.ts's own internal helper, deliberately private —
-                                 // duplicating its ~15 lines here is smaller and safer than
-                                 // widening that module's public surface for a one-off script).
+  comparison: string;           // scorecard.ts's real `buildComparison` — imported, not reimplemented
+  latency: Latency;             // scorecard.ts's real `scopeToArm` + `buildLatency` — cold turns split out
 }
 
 export interface GradeOutput {
   mode: 'dry' | 'live';
   totalAttempts: number;
   totalRuns: number;
+  underpoweredN: number;        // armAggregate.ts's UNDERPOWERED_N, threaded through so
+                                 // summarize.mjs never hardcodes the threshold it prints (M1)
   cells: CellSummary[];
   ledgerTop: LedgerRow[];       // top 10, UNIONED across every run in the manifest (spec §2)
 }
@@ -74,37 +85,13 @@ function cellKey(e: { register: string; shell: string; backend: string; corpus: 
   return `${e.register}|${e.shell}|${e.backend}|${e.corpus}`;
 }
 
-/** Mirrors scorecard.ts's private `buildComparison` (not exported — see `CellSummary.comparison`'s
- *  own comment): runs the register's and/or shell's pre-registered `winsWhen` against `control`,
- *  joining `label — verdict: because` pieces exactly like the app's own scorecard does, so a human
- *  reading this doc and the app's Scorecard view see the identical sentence shape for the identical
- *  arm. `winsWhen`'s own signature is `(ArmAggregate, ArmAggregate) => ProbeVerdict` — no `Arm`
- *  object is needed, just the register/shell KEYS to look up which def's predicate to run, so this
- *  takes those two strings directly rather than fabricating a full `Arm` (which would need a
- *  `dials: DialValues` this script has no honest value for). Guided is the fixed control and
- *  carries no `winsWhen` (register/registry.ts's own header); a cell with no control cell in THIS
- *  manifest reports that honestly rather than guessing one. */
-function buildComparison(agg: ArmAggregate, register: string, shell: string, control: ArmAggregate | undefined): string {
-  if (agg.n === 0) return 'no attempts graded for this cell';
-  if (!control) {
-    if (register === 'guided') {
-      return `Guided is the control arm — there is no non-tautological comparison to run against itself (n=${agg.n})`;
-    }
-    return `no control-arm (Guided) aggregate available in this manifest to compare against (n=${agg.n})`;
-  }
-  const pieces: string[] = [];
-  const regDef = REGISTERS.find((r) => r.key === register);
-  if (regDef?.winsWhen) {
-    const v = regDef.winsWhen(agg, control);
-    pieces.push(`${regDef.label} — ${v.verdict}: ${v.because}`);
-  }
-  const skinDef = shell ? SHELL_SKINS.find((s) => s.key === shell) : undefined;
-  if (skinDef?.winsWhen) {
-    const v = skinDef.winsWhen(agg, control);
-    pieces.push(`${skinDef.label} — ${v.verdict}: ${v.because}`);
-  }
-  if (!pieces.length) return `no pre-registered probe for this arm (register=${register}${shell ? `, shell=${shell}` : ''})`;
-  return pieces.join(' | ');
+/** The `Arm` `buildComparison`/`scopeToArm` need — register/shell only ever get READ by either
+ *  function (confirmed by reading both in scorecard.ts); `dials` is structurally required by the
+ *  `Arm` interface but never inspected, so `DEFAULT_DIALS` here is a type-shape placeholder, not a
+ *  claim about what dials this cell actually ran under (the real per-session dials ARE in every
+ *  export's own `config.arm.dials` — this function just never needs to read them). */
+function armFor(register: string, shell: string): Arm {
+  return { register, shell: shell as SkinKey, dials: DEFAULT_DIALS };
 }
 
 function grade(manifestPath: string): GradeOutput {
@@ -159,9 +146,16 @@ function grade(manifestPath: string): GradeOutput {
     const controlKey = cellKey({ register: 'guided', shell: first.shell, backend: first.backend, corpus: first.corpus });
     const controlAttempts = controlKey === key ? undefined : perCellAttempts.get(controlKey);
     const control = controlAttempts ? armAggregate(controlAttempts) : undefined;
+    const arm = armFor(first.register, first.shell);
+    // C3: every session in `events` was booted under THIS cell's own fixed register/shell (no
+    // shell switches happen in a battery-driven session), so scoping the cell's own event pool to
+    // its own arm is no-op filtering in practice — but running it through the SHARED function
+    // rather than skipping the scope step is what keeps this identical to the app's own path if a
+    // future battery ever DOES vary shell mid-session.
+    const latency = buildLatency(scopeToArm(events, arm));
     cells.push({
       register: first.register, shell: first.shell, backend: first.backend, corpus: first.corpus,
-      runs: entries.length, agg, comparison: buildComparison(agg, first.register, first.shell, control),
+      runs: entries.length, agg, comparison: buildComparison(agg, arm, control), latency,
     });
   }
   cells.sort((a, b) => (a.register + a.shell + a.corpus).localeCompare(b.register + b.shell + b.corpus));
@@ -172,7 +166,7 @@ function grade(manifestPath: string): GradeOutput {
   // it). Top 10 by n, `capabilityLedger`'s own sort.
   const ledgerTop = capabilityLedger(allEvents, allAttempts).slice(0, 10);
 
-  return { mode: manifest.mode, totalAttempts, totalRuns, cells, ledgerTop };
+  return { mode: manifest.mode, totalAttempts, totalRuns, underpoweredN: UNDERPOWERED_N, cells, ledgerTop };
 }
 
 function main() {

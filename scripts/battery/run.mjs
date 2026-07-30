@@ -10,12 +10,17 @@
 // the debug drawer — telemetry.ts's `exportJSON()`). `summarize.mjs` grades the exports afterward.
 //
 // TWO MODES:
-//   --dry   Zero spend. Own vite server, inline STUB env (never reads/writes .env), and every
-//           socket to Gemini's live endpoint is faked in-browser (see STUB_SOCKET_SCRIPT below) —
-//           the app runs its real gate, real telemetry, real turn machinery; nothing leaves this
-//           machine. The model never replies, so every turn eventually settles `no_response`/
-//           `speech_only` and every attempt grades `abandoned` — a real, honest measurement of the
-//           harness itself, not a fabricated pass. This is what THE GATE (task-9 brief) runs.
+//   --dry   Zero spend. Own vite server, inline STUB env (never reads/writes .env). Both live
+//           channels to Gemini's real API host are faked in-browser (see STUB_SOCKET_SCRIPT below):
+//           the WebSocket live-connect path (used by every typed utterance this harness sends) AND
+//           the REST path (`GoogleGenAI(...).models.generateContent`, App.tsx's `speakFeedback` —
+//           unreachable from a stub socket that never lets a real commit happen, since nothing
+//           calls it without one, but faked anyway rather than merely disclosed as unreachable —
+//           M5, task-9 review round 1). The app runs its real gate, real telemetry, real turn
+//           machinery; nothing leaves this machine on EITHER channel. The model never replies, so
+//           every turn eventually settles `no_response`/`speech_only` and every attempt grades
+//           `abandoned` — a real, honest measurement of the harness itself, not a fabricated pass.
+//           This is what THE GATE (task-9 brief) runs.
 //   --live  Real spend. Starts `npm run dev` (which reads `.env` itself — this script never does)
 //           and drives real utterances against the real model. NOT run by this task — Task 10's
 //           job, under its own protocol. See the KNOWN LIMITATION comment on `startViteOrDev`
@@ -45,7 +50,12 @@ const MAX_SESSIONS = 12;
 const SESSION_TIMEOUT_MS = 360_000;
 const MAX_CONSECUTIVE_FAILURES = 2;
 
-// ---- Ports the brief explicitly forbids this script from ever touching: real keys live there ----
+// M2 (task-9 review round 1): NOT a brief requirement — the brief names no ports. These are
+// carried over from this project's own operational history: 3002 is documented in this repo's
+// smoke docs as a real-keyed dev server; 3000 is `server.ts`'s hardcoded `--live` port (see
+// `startViteOrDry`). `getFreePort()` (used for `--dry`'s vite port and the CDP port, in EITHER
+// mode) must never land on either by accident — stated here as this script's own operational
+// discipline, not as something the brief mandated.
 const FORBIDDEN_PORTS = new Set([3000, 3002]);
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -114,7 +124,22 @@ function resolveChromeHeadlessShell() {
   try { versions = readdirSync(base); } catch {
     throw new Error(`chrome-headless-shell not found under ${base} — set CHROME_HEADLESS_SHELL_PATH`);
   }
-  versions.sort().reverse(); // newest version string last-modified-ish; good enough, deterministic
+  // M3 (task-9 review round 1): a bare lexicographic sort is wrong for version strings (a "99.x"
+  // directory would sort AFTER "138.x" and get picked as "newest" — deterministic, but not newest).
+  // Parses the dotted numeric run out of each directory name (`mac_arm-145.0.7632.77` -> `[145, 0,
+  // 7632, 77]`) and compares component-wise, longest/most-significant first; a name with no
+  // parseable numbers sorts last rather than throwing, so an oddly-named directory never crashes
+  // resolution outright — it is just never preferred over a real version string.
+  const versionKey = (name) => (name.match(/\d+/g) ?? []).map(Number);
+  const compareVersions = (a, b) => {
+    const ka = versionKey(a), kb = versionKey(b);
+    for (let i = 0; i < Math.max(ka.length, kb.length); i++) {
+      const diff = (kb[i] ?? -1) - (ka[i] ?? -1); // descending — newest first
+      if (diff !== 0) return diff;
+    }
+    return 0;
+  };
+  versions.sort(compareVersions);
   for (const v of versions) {
     const dir = path.join(base, v);
     let entries;
@@ -171,14 +196,32 @@ function spawnBrowser(cdpPort, userDataDir) {
   return proc;
 }
 
+/** A real TCP probe, not a guess: tries to CONNECT to `127.0.0.1:port`. Something answering the
+ *  connect means something is listening — refusing on that alone (rather than trying an HTTP
+ *  request first) is deliberately conservative: a listener that never speaks HTTP is still a
+ *  listener this script has no business colliding with. */
+function isPortOccupied(port, timeoutMs = 1000) {
+  return new Promise((resolve) => {
+    const socket = net.connect({ host: '127.0.0.1', port, timeout: timeoutMs });
+    const done = (occupied) => { socket.destroy(); resolve(occupied); };
+    socket.once('connect', () => done(true));
+    socket.once('timeout', () => done(false));
+    socket.once('error', () => done(false));
+  });
+}
+
 /** KNOWN LIMITATION (documented rather than silently worked around — see the file header):
  *  `server.ts` (the `npm run dev` entry --live uses) hardcodes `PORT = 3000` with no env override,
- *  so --live cannot actually honor "a dedicated port" the way --dry's raw `vite` invocation can.
- *  This function still refuses to run if 3000 looks occupied (a real dev session almost certainly
- *  IS running there per this repo's own history — see the smoke docs) rather than silently
- *  colliding with a server carrying real keys; it does not attempt to patch `server.ts`, which
- *  would be a source change outside this task's authorized scope (App.tsx's `?register=` param is
- *  the only one). Task 10 needs to resolve this before a live run can safely proceed unattended. */
+ *  so --live cannot actually honor "a dedicated port" the way --dry's raw `vite` invocation can. It
+ *  does not attempt to patch `server.ts`, which would be a source change outside this task's
+ *  authorized scope (App.tsx's `?register=` param is the only one) — Task 10 needs to resolve this
+ *  before a live run can safely proceed unattended.
+ *
+ *  C4 (task-9 review round 1, reviewer-ruled — this docstring PREVIOUSLY claimed a real refusal
+ *  existed here and it did not; `waitForHttp` happily succeeds against a pre-existing server, so
+ *  `--live` silently drove whatever real-keyed dev session was already on :3000). The check below
+ *  is the actual fix: a real TCP probe of :3000 BEFORE spawning anything, refusing loudly if
+ *  something is already there rather than reusing it. */
 async function startViteOrDry(mode, vitePort) {
   if (mode === 'dry') {
     const proc = spawn('npx', ['vite', '--port', String(vitePort), '--strictPort'], {
@@ -202,6 +245,13 @@ async function startViteOrDry(mode, vitePort) {
   // --live
   if (vitePort !== 3000) {
     console.warn(`[battery] --live ignores the picked free port (${vitePort}) — server.ts hardcodes 3000 (see KNOWN LIMITATION above).`);
+  }
+  if (await isPortOccupied(3000)) {
+    throw new Error(
+      'refusing to start --live: something is already listening on :3000. `server.ts` hardcodes ' +
+      'that port and bakes in real keys from .env — this script will not silently drive (and ' +
+      'possibly clobber the desk state of) a pre-existing session. Stop whatever is on :3000 first.',
+    );
   }
   const proc = spawn('npm', ['run', 'dev'], { cwd: ROOT, stdio: 'ignore', env: process.env });
   await waitForHttp('http://localhost:3000/', 20000, 'live dev server');
@@ -265,12 +315,18 @@ async function evalJs(rpc, expression, awaitPromise = false) {
   return r.result.value;
 }
 
-// ---- the silent-mic stub socket (--dry only) ----
-// Fakes ONLY sockets to Gemini's live endpoint (generativelanguage.googleapis.com — confirmed by
-// reading node_modules/@google/genai's BrowserWebSocket, which calls the bare global `WebSocket`
-// the bundler leaves pointing at `window.WebSocket`). Every other socket — Vite's HMR client in
-// particular — passes through to the real constructor untouched, exactly like the prior drive's
-// documented "only sockets to stub.invalid are faked" rule.
+// ---- the silent-mic stub socket + REST stub (--dry only) ----
+// Fakes BOTH of Gemini's real-API channels (generativelanguage.googleapis.com — confirmed by
+// reading node_modules/@google/genai's BrowserWebSocket AND its REST client, which both resolve to
+// the bare global `WebSocket`/`fetch` the bundler leaves pointing at `window.*`): the live-connect
+// WebSocket (used by every typed utterance this harness sends) and the REST
+// `models.generateContent` TTS path (`App.tsx`'s `speakFeedback` — unreachable from a stub socket
+// that never lets a real commit happen, since nothing calls it without one, but faked anyway rather
+// than merely disclosed as unreachable — M5, task-9 review round 1). Every OTHER socket/fetch —
+// Vite's HMR client and asset requests in particular — passes through to the real implementation
+// untouched, exactly like the prior drive's documented "only sockets to stub.invalid are faked"
+// rule, just matched by hostname instead of by a redirect target since nothing here needs a real
+// network hop at all.
 //
 // The SDK's own `onopen` callback fires on the RAW socket's open event (read from
 // dist/web/index.mjs's `live.connect`: `conn.connect()` sets `ws.onopen = callbacks.onopen`
@@ -283,6 +339,7 @@ const STUB_SOCKET_SCRIPT = `(function(){
   if (window.__ffStubInstalled) return;
   window.__ffStubInstalled = true;
   window.__ffBatterySent = [];
+  var GEMINI_HOST = 'generativelanguage.googleapis.com';
   var RealWS = window.WebSocket;
   function StubSocket(url) {
     this.url = url;
@@ -303,7 +360,7 @@ const STUB_SOCKET_SCRIPT = `(function(){
   };
   StubSocket.CONNECTING = 0; StubSocket.OPEN = 1; StubSocket.CLOSING = 2; StubSocket.CLOSED = 3;
   function FakeWebSocket(url, protocols) {
-    if (typeof url === 'string' && url.indexOf('generativelanguage.googleapis.com') !== -1) {
+    if (typeof url === 'string' && url.indexOf(GEMINI_HOST) !== -1) {
       return new StubSocket(url);
     }
     return new RealWS(url, protocols);
@@ -311,6 +368,20 @@ const STUB_SOCKET_SCRIPT = `(function(){
   FakeWebSocket.prototype = RealWS.prototype;
   FakeWebSocket.CONNECTING = 0; FakeWebSocket.OPEN = 1; FakeWebSocket.CLOSING = 2; FakeWebSocket.CLOSED = 3;
   window.WebSocket = FakeWebSocket;
+
+  // M5: the REST channel (App.tsx's speakFeedback -> GoogleGenAI(...).models.generateContent).
+  // Never reached in practice (it only fires after a real tool-call commit, which the WS stub
+  // above never lets happen), but faked for real rather than left as a merely-disclosed gap.
+  var RealFetch = window.fetch ? window.fetch.bind(window) : null;
+  if (RealFetch) {
+    window.fetch = function (input, init) {
+      var url = typeof input === 'string' ? input : (input && input.url) || '';
+      if (url.indexOf(GEMINI_HOST) !== -1) {
+        return Promise.reject(new Error('battery --dry: REST calls to the live model host are stubbed — zero spend, not a network failure'));
+      }
+      return RealFetch(input, init);
+    };
+  }
 })();`;
 
 function bootUrl(baseUrl, cell) {
@@ -347,6 +418,32 @@ async function switchProgram(rpc, programId) {
     if (launcher) { launcher.click(); return true; }
     return false;
   })()`);
+}
+
+/** I5 (task-9 review round 1): reads which program is ACTUALLY in front, via the taskbar's own
+ *  "— in front" chip label (WindowChip.tsx) — the same DOM fact a person would look at, reverse-
+ *  mapped through `PROGRAM_LABELS`. Exists so `driveSession` can ASSERT its boot-program
+ *  expectation instead of assuming it: with C1's clean-boot fix a fresh session should always land
+ *  on DEFAULT_PROGRAM ('word'), but "should always" is exactly the kind of claim a silent
+ *  assumption turns into a silently mis-graded pilot the moment it stops being true (a journal
+ *  restore bug, a future `?program=` boot param, anything). Returns `null` if no window is
+ *  focused/found — a boot so broken nothing is in front at all is its own failure the caller
+ *  should refuse to paper over. */
+async function readFrontProgram(rpc) {
+  // Substring match on "in front" alone (not the full "— in front" with WindowChip.tsx's literal
+  // em dash) — avoids depending on a non-ASCII character surviving two rounds of JS string
+  // escaping (this file's own template literal, then the browser's `Runtime.evaluate` parse) for
+  // no benefit: "in front" is already a stable, ASCII-only, non-colliding substring of the label.
+  const label = await evalJs(rpc, `(function(){
+    var chips = Array.from(document.querySelectorAll('[aria-label]'));
+    var chip = chips.find(function(c){ return c.getAttribute('aria-label').indexOf('in front') !== -1; });
+    return chip ? chip.getAttribute('aria-label') : null;
+  })()`);
+  if (!label) return null;
+  for (const [id, progLabel] of Object.entries(PROGRAM_LABELS)) {
+    if (label.indexOf(progLabel) === 0) return id;
+  }
+  return null;
 }
 
 /** Types `text` into the omnibox using the native-setter trick (React tracks its own value
@@ -444,21 +541,73 @@ function safeReaddir(dir) {
   try { return readdirSync(dir); } catch { return []; }
 }
 
-/** Drives one session end to end: boot -> connect -> type every utterance in `cell.utterances` ->
- *  export -> return the export's saved path. SETTLE-WAIT SCOPE NOTE: this uses a fixed sleep
- *  between submits (`SETTLE_MS`), not a real "wait for the model to finish responding" poll. That
- *  is an honest simplification for THIS task's scope (the dry gate never gets a response to wait
- *  for at all — see the file header), not an oversight for --live: a real settle-detector (poll
- *  the omnibox's `aria-label="Assistant is working"` busy pulse, or grow-watch the telemetry
- *  stream) is real, additional work Task 10 should do before spending real tokens on a long
- *  session, and is flagged in this task's final report rather than half-built here. */
+/** C1 (task-9 review round 1, Critical): the app journals to `localStorage['ff-journal']` and
+ *  restores desk/workspace/corpus/artifacts/dials from it at boot (`src/journal/registry.ts`,
+ *  `src/App.tsx`'s various `bootStates?.` initializers) — ONE browser profile driving several
+ *  sessions in a row therefore does NOT get a clean boot per session: session 2 restores session
+ *  1's desk (probe-confirmed live: a second boot on the same profile restored 1407 bytes of
+ *  journal and landed on Excel, not Word), and worse, a `corpus:'wide'` cell whose session isn't
+ *  actually the FIRST to touch that profile boots the RESTORED default corpus while `manifest.json`
+ *  and the summary doc both still call it `wide` — a false claim about the one thing §3's wide-
+ *  corpus cell exists to test. Fix: navigate to the bare origin (so `localStorage`/`sessionStorage`
+ *  are actually addressable — they are origin-scoped, and `about:blank` has no access to this
+ *  origin's storage) and clear both, BEFORE ever navigating to the real boot URL. Cheaper than a
+ *  fresh `--user-data-dir` per session (the reviewer's other offered fix) and just as clean: a
+ *  cleared origin has no journal to restore from, so the very next navigation boots exactly as
+ *  fresh as a brand-new profile would. */
+async function clearOriginStorage(rpc, browserUrl) {
+  await rpc('Page.navigate', { url: `${browserUrl}/` });
+  await sleep(600); // bare origin load — no app bundle to wait on, just enough for storage access
+  await evalJs(rpc, `(function(){
+    try { localStorage.clear(); sessionStorage.clear(); } catch (e) {}
+    return true;
+  })()`);
+}
+
+/** I1 (task-9 review round 1, Important): `recordSessionEnd` (App.tsx) — which flushes the last
+ *  OPEN turn (`flushOpenTurn`, closing it `speech_only`/`no_response` exactly like a superseding
+ *  turn would) and pushes `session_complete` (the run's `framesSent`/`hintsSent`, spec §1's cost
+ *  requirement) — only fires from `closeLiveSession`, which only fires from an explicit end (mic
+ *  toggle off, "End session", the idle guard, or a reconnect effect). Nothing in the utterance loop
+ *  below ever calls it, so the LAST utterance of every run was exported still pending (never
+ *  graded) and the LAST run's cost never reached the export at all — measured before this fix: 6
+ *  typed -> 5 `turn` events, `session_complete` present for 2 of 3 runs. Toggling the mic off here
+ *  (the same button `clickMicToggle` uses — it toggles either direction) is the ordinary,
+ *  documented way a user ends a session, and is what makes the LAST utterance's turn and the LAST
+ *  run's cost actually reach the export. */
+async function endSession(rpc) {
+  const clicked = await clickMicToggle(rpc);
+  if (!clicked) throw new Error('mic toggle button not found when ending the session — the final turn/session_complete would be lost');
+  await sleep(500); // let recordSessionEnd's synchronous work (already done by click time) settle into a render
+}
+
+/** Drives one session end to end: clean boot -> connect -> type every utterance in
+ *  `cell.utterances` -> end the session -> export -> return the export's saved path. SETTLE-WAIT
+ *  SCOPE NOTE: this uses a fixed sleep between submits (`SETTLE_MS`), not a real "wait for the
+ *  model to finish responding" poll. That is an honest simplification for THIS task's scope (the
+ *  dry gate never gets a response to wait for at all — see the file header), not an oversight for
+ *  --live: a real settle-detector (poll the omnibox's `aria-label="Assistant is working"` busy
+ *  pulse, or grow-watch the telemetry stream) is real, additional work Task 10 should do before
+ *  spending real tokens on a long session, and is flagged in this task's final report rather than
+ *  half-built here.
+ *
+ *  C2 (task-9 review round 1, Critical): the actual work below runs inside `withTimeout`, INSIDE
+ *  this function's own try/finally — not, as before, wrapped from the OUTSIDE by the caller. That
+ *  distinction is the whole fix: wrapping from outside let `SESSION_TIMEOUT_MS` bound how long
+ *  `main()` waited without ever touching the page/socket the abandoned call left running — a
+ *  wedged renderer kept a live page, a live provider socket, and (under --live) live spend, while
+ *  the NEXT session started on the same browser. Timing out in here still runs the `finally` below,
+ *  which tears the page and its CDP socket down for real before `driveSession` returns/rejects. */
 async function driveSession(browserUrl, cdpPort, cell, mode, outDir) {
-  const { rpc, ws, target } = await openPage(cdpPort);
-  try {
+  const { rpc, ws, target, consoleLines } = await openPage(cdpPort);
+  const work = async () => {
     if (mode === 'dry') await rpc('Page.addScriptToEvaluateOnNewDocument', { source: STUB_SOCKET_SCRIPT });
     const downloadDir = path.join(outDir, 'downloads', `${cell.register}-${cell.shell}-${cell.corpus}-${Date.now()}`);
     mkdirSync(downloadDir, { recursive: true });
     await rpc('Page.setDownloadBehavior', { behavior: 'allow', downloadPath: downloadDir });
+
+    // C1: clean boot BEFORE the real navigate — see clearOriginStorage's own doc.
+    await clearOriginStorage(rpc, browserUrl);
 
     const url = bootUrl(browserUrl, cell);
     await rpc('Page.navigate', { url });
@@ -474,14 +623,18 @@ async function driveSession(browserUrl, cdpPort, cell, mode, outDir) {
       return !!b;
     })()`);
 
-    // The desk always boots on DEFAULT_PROGRAM ('word' — scenarios.ts; there is no `?program=`
-    // boot param). An excel/powerpoint/photo utterance sent while Word is the front window is
-    // meaningless — `expect` is a property of (text, program), not text alone (utterances.ts's own
-    // header: "Sum this column" means something different, and honestly resolves differently, on
-    // excel vs powerpoint). Land on the FIRST utterance's program BEFORE ever connecting, so the
-    // session's first `session_start` already carries the right program's tools/prompt instead of
-    // reconnecting a beat after connecting.
-    let currentProgram = 'word';
+    // I5 (task-9 review round 1): with C1's clean boot, the desk should always land on
+    // DEFAULT_PROGRAM ('word' — scenarios.ts; there is no `?program=` boot param) — but "should"
+    // is exactly the word that was silently wrong before C1 existed (a journal restore put Excel
+    // in front). ASSERT the real front program via CDP rather than assume it: an excel/powerpoint/
+    // photo utterance sent while the wrong program is in front is meaningless (`expect` is a
+    // property of (text, program), not text alone — utterances.ts's own header), and a silent
+    // mismatch here is exactly how a pilot's cell labels end up lying.
+    const front = await readFrontProgram(rpc);
+    if (front !== 'word') {
+      throw new Error(`boot assertion failed: expected front program 'word' (DEFAULT_PROGRAM) after a clean boot, got '${front ?? 'none detected'}' — journal not actually clean, or the desk failed to mount`);
+    }
+    let currentProgram = front;
     if (cell.utterances.length && cell.utterances[0].program !== currentProgram) {
       const switched = await switchProgram(rpc, cell.utterances[0].program);
       if (!switched) throw new Error(`program launcher/chip not found for "${cell.utterances[0].program}"`);
@@ -515,9 +668,12 @@ async function driveSession(browserUrl, cdpPort, cell, mode, outDir) {
       if (!ok) throw new Error(`omnibox not found when submitting utterance "${u.key}"`);
       await sleep(SETTLE_MS[mode]);
     }
-    // One more beat so the LAST utterance's turn actually supersedes/settles before export — the
-    // next event to touch the stream is the export click itself, which opens no turn of its own.
-    await sleep(SETTLE_MS[mode]);
+
+    // I1: end the session for real BEFORE exporting — this is what flushes the LAST utterance's
+    // still-open turn and pushes `session_complete` (cost data) into the stream `exportJSON()`
+    // reads. A trailing sleep alone (the pre-fix code) supersedes nothing; only a genuine close
+    // does (see `endSession`'s own doc).
+    await endSession(rpc);
 
     const savedPath = await exportSession(rpc, downloadDir);
     const destName = `${cell.register}-${cell.shell}-${cell.backend}-${cell.corpus}-${Date.now()}.json`;
@@ -525,14 +681,43 @@ async function driveSession(browserUrl, cdpPort, cell, mode, outDir) {
     mkdirSync(path.dirname(destPath), { recursive: true });
     copyFileSync(savedPath, destPath);
     return destPath;
+  };
+
+  try {
+    return await withTimeout(work(), SESSION_TIMEOUT_MS, `session (${cell.register}/${cell.shell}/${cell.corpus})`);
+  } catch (err) {
+    // M4 (task-9 review round 1): `consoleLines` was being collected and never read — a failed
+    // session printed no page console output despite the harness having captured it the whole
+    // time. Surfaced only on failure (a passing session's console is noise; a failing one's is
+    // often the fastest way to see WHY, e.g. a React error boundary or an uncaught exception in
+    // the injected stub script).
+    if (consoleLines.length) {
+      console.error(`[battery]   page console (last ${Math.min(10, consoleLines.length)} of ${consoleLines.length} lines):`);
+      for (const line of consoleLines.slice(-10)) console.error(`[battery]     ${line}`);
+    }
+    throw err;
   } finally {
-    try { await rpc('Page.close'); } catch { /* best effort */ }
-    try { ws.close(); } catch { /* best effort */ }
+    // C2: unconditional, and each step individually bounded — a wedged renderer must not be able
+    // to hang the CLEANUP too (a `Page.close` CDP round-trip still needs the target to answer;
+    // `ws.close()` alone is purely client-side and can never hang, so it always runs regardless of
+    // whether the bounded `Page.close` attempt above it succeeded, timed out, or errored).
+    try { await withTimeout(rpc('Page.close'), 5000, 'Page.close during cleanup'); } catch { /* best effort — ws.close() below still runs regardless */ }
+    try { ws.close(); } catch { /* already gone */ }
     void target;
   }
 }
 
 // ---- session plan ----
+
+// I3 (task-9 review round 1): `wide-corpus-far-row-ask`/`wide-corpus-near-row-answer`
+// (src/eval/utterances.ts) are explicit, by their OWN comments, about running "ONLY under
+// `?corpus=wide`" — against the default ~4-element Meridian corpus there is no row 30 (or row 3 in
+// the sense the row means) to ask about at all, so sending them into a `corpus:'default'` cell
+// isn't a harder trial, it's a meaningless one. Filtered here, once, so every plan (dry or live)
+// gets it right rather than relying on the dry slice happening to exclude them by position.
+function utterancesForCorpus(utterances, corpus) {
+  return utterances.filter((u) => !u.key.startsWith('wide-corpus-') || corpus === 'wide');
+}
 
 function buildPlan(mode, utterances) {
   if (mode === 'dry') {
@@ -540,7 +725,7 @@ function buildPlan(mode, utterances) {
     // utterance slice keeps the dry gate fast — zero-spend means there is nothing to lose by
     // sending fewer rows, and the gate only requires >=2 gradeable exports with a nonzero attempt
     // count, not full corpus coverage (that is what a full --live pilot run is for).
-    const slice = utterances.slice(0, 6);
+    const slice = utterancesForCorpus(utterances.slice(0, 6), 'default');
     return [
       { register: 'guided', shell: 'familiar', backend: 'gemini', corpus: 'default', utterances: slice },
       { register: 'terminal', shell: 'familiar', backend: 'gemini', corpus: 'default', utterances: slice },
@@ -557,7 +742,7 @@ function buildPlan(mode, utterances) {
   for (const register of registers) {
     for (let i = 0; i < 3; i++) {
       const corpus = register === 'guided' && i === 2 ? 'wide' : 'default';
-      plan.push({ register, shell: 'familiar', backend: 'gemini', corpus, utterances });
+      plan.push({ register, shell: 'familiar', backend: 'gemini', corpus, utterances: utterancesForCorpus(utterances, corpus) });
     }
   }
   return plan;
@@ -585,15 +770,24 @@ async function main() {
 
   const manifestEntries = [];
   let consecutiveFailures = 0;
+  // I2 (task-9 review round 1, Important): captured rather than left to propagate straight past
+  // the manifest write below. Before this fix, hitting `MAX_CONSECUTIVE_FAILURES` threw out of the
+  // loop and `main()` never reached the `writeFileSync` two blocks down — every already-PAID-FOR
+  // successful export in `manifestEntries` was stranded with no manifest to graded it by. The
+  // manifest (and therefore `summarize.mjs`'s ability to grade whatever succeeded) is now written
+  // UNCONDITIONALLY; `abortError`, if set, is re-thrown only after that write, so the exit code
+  // still honestly reflects an aborted run.
+  let abortError = null;
   try {
     for (const cell of plan) {
       console.log(`[battery] session: register=${cell.register} shell=${cell.shell} corpus=${cell.corpus}`);
       try {
-        const exportPath = await withTimeout(
-          driveSession(url, cdpPort, cell, mode, outDir),
-          SESSION_TIMEOUT_MS,
-          `session (${cell.register}/${cell.shell}/${cell.corpus})`,
-        );
+        // C2: `driveSession` now bounds AND tears down internally (see its own docstring) — no
+        // outer `withTimeout` here any more. The old outer wrap was the C2 bug itself: it bounded
+        // how long THIS LOOP waited without ever reaching into `driveSession` to close the page/
+        // socket a timeout abandoned, so a wedged session kept running (and, under --live, kept
+        // spending) while the next one started on the same browser.
+        const exportPath = await driveSession(url, cdpPort, cell, mode, outDir);
         manifestEntries.push({
           file: exportPath, register: cell.register, shell: cell.shell,
           backend: cell.backend, corpus: cell.corpus,
@@ -604,7 +798,8 @@ async function main() {
         consecutiveFailures += 1;
         console.error(`[battery]   FAILED (${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}): ${err.message}`);
         if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-          throw new Error(`aborting: ${MAX_CONSECUTIVE_FAILURES} consecutive session failures`);
+          abortError = new Error(`aborting: ${MAX_CONSECUTIVE_FAILURES} consecutive session failures`);
+          break;
         }
       }
     }
@@ -618,12 +813,15 @@ async function main() {
   writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
   console.log(`[battery] manifest: ${path.relative(ROOT, manifestPath)}`);
   console.log(`[battery] ${manifestEntries.length}/${plan.length} sessions produced a gradeable export`);
+  // Print the manifest path last, alone (before any throw below), so a caller (summarize.mjs's own
+  // docs, or a human) can grab it off the final line without parsing the log — including on an
+  // aborted run, where it is the whole point of writing the manifest at all (I2).
+  console.log(manifestPath);
+
+  if (abortError) throw abortError;
   if (manifestEntries.length === 0) {
     throw new Error('no session produced a gradeable export — nothing for summarize.mjs to grade');
   }
-  // Print the manifest path last, alone, so a caller (summarize.mjs's own docs, or a human) can
-  // grab it off the final line without parsing the log.
-  console.log(manifestPath);
 }
 
 main().catch((err) => {

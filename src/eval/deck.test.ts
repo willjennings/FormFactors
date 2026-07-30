@@ -150,6 +150,11 @@ describe('shared trial set (./utterances.ts) — the deck/battery join', () => {
   });
   it('has at least twelve entries and an expectation on each (Task 9 extends toward ~30)', () => {
     expect(UTTERANCES.length).toBeGreaterThanOrEqual(12);
+    // M6 (task-9 review round 1): `toBeGreaterThanOrEqual(12)` alone would stay green even if
+    // Task 9's own extension regressed from 30 back down to 13 — nothing pinned the actual target
+    // count. This is the pin; the >=12 check above stays too (it is the pre-Task-9 floor and
+    // reads as a different claim: "the deck's own join-key set was never broken").
+    expect(UTTERANCES.length).toBe(30);
     // 'any' added by Task 9 for the two content-borne injection probes ONLY (utterances.ts's own
     // `UtteranceExpectation` doc comment) — asserted as its own row below, not folded silently
     // into this generic loop, so a stray 'any' anywhere else in the list is still caught.
